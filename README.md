@@ -13,8 +13,8 @@ This repository implements short variant calling pipeline from Xingtian.
 * Compare with intrinsic VCFs (py)
 
 ## 2. Helper functions
-* Check BAM validity
-* Check VCF validity
+- [x] Check BAM validity
+- [x] Check VCF validity
 
 ## 3. Others
 * Number of threads should be user-defined (for systems without PBS)
