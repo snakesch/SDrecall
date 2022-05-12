@@ -2,8 +2,9 @@
 
 # Prerequisites:
 # - GATK
-# - SAMTools
+# - SAMtools
 # - HTSlib
+# - BCFtools
 
 source ./errorHandling.sh
 source ./miscellaneous.sh
@@ -121,12 +122,18 @@ else if [[ ${TYPE,,} == "vcf" ]]; then
         echo -e "$(timestamp) INFO: GZIP file detected."
     
         # Check index file metadata
-        if [[ $FILE -nt ${FILE}.tbi ]]; then tabix -f -p vcf $FILE; fi
+        if [[ $FILE -nt ${FILE}.tbi ]]; then 
+        tabix -f -p vcf $FILE || { echo -e >&2 "$(timestamp) ERROR: Input VCF may not be sorted by chr pos. Try bcftools sort."; exit 6; }
+        fi
         echo -e "$(timestamp) INFO: Index file not up-to-date. A new index file has been created."
+
+        # Check if the file is empty (i.e. no subject)
+        if [[ $(bcftools query -l $FILE | wc -l) -eq 0 ]]; then
+            echo -e >&2 "$(timestamp) ERROR: No subjects found in input VCF!"; exit 129;
+        fi
 
         # GATK validation
         gatk -R $REF_GENOME -V $FILE --validation-type-to-exclude ALL --verbosity DEBUG || { echo -e >&2 "$(timestamp) ERROR: Input file $FILE failed GATK validation." && exit 129; }
-
 
     else if [[ "$FILE" =~ \.[bgz,gz] ]]; then 
         echo -e >&2 "$(timestamp) ERROR: Input file has corrupted."
@@ -137,11 +144,13 @@ else if [[ ${TYPE,,} == "vcf" ]]; then
             echo -e >&2 "$(timestamp) ERROR: Input is NULL or corrupted (bgzf)."
             exit 4;
         else
-            # TODO: Plain VCF
+            # Check if the file is empty (i.e. no subject)
+            if [[ $(bcftools query -l $FILE | wc -l) -eq 0 ]]; then
+                echo -e >&2 "$(timestamp) ERROR: No subjects found in input VCF!"; exit 129;
+            fi
+
             # GATK validation
             gatk -R $REF_GENOME -V $FILE --validation-type-to-exclude ALL --verbosity DEBUG || { echo -e >&2 "$(timestamp) ERROR: Input file $FILE failed GATK validation." && exit 129; }
-
-
         fi
 else if [ ! -v FILE ]; then exit 3;
 else # Unrecognized file type
