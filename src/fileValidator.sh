@@ -31,13 +31,19 @@ do
             shift
             shift
             ;;
+        -e|--expected-subjects)
+            EXPECTED_SUB="$2"
+            shift
+            shift
+            ;;
         -h|--help)
             echo "File validator for BAM and VCF"
             echo "Usage:    $BASH_SOURCE"
-            echo "          --file          | path of file to be validated"
-            echo "          --type          | type of file (bam/vcf)"
-            echo "          --ref-genome    | path of reference genome file (hg19)"
-            echo "          -h | --help     | display this message"
+            echo "          --file                      | path of file to be validated"
+            echo "          --type                      | type of file (bam/vcf)"
+            echo "          --ref-genome                | path of reference genome file (hg19)"
+            echo "          -e | --expected-subjects    | a file list of expected subject IDs (only for vcf)"
+            echo "          -h | --help                 | display this message"
             exit 0
             ;;
         *)
@@ -120,9 +126,9 @@ else if [[ ${TYPE,,} == "vcf" ]]; then
     if [[ 0x$(head -c 2 $FILE | xxd -p) -eq 0x1f8b ]] && gunzip -t $FILE; then
         # Case: GZIP input (Note: BGZF follows the same header format as GZIP)
         echo -e "$(timestamp) INFO: GZIP file detected."
-    
+
         # Check index file metadata
-        if [[ $FILE -nt ${FILE}.tbi ]]; then 
+        if [[ $FILE -nt ${FILE}.tbi ]]; then
         tabix -f -p vcf $FILE || { echo -e >&2 "$(timestamp) ERROR: Input VCF may not be sorted by chr pos. Try bcftools sort."; exit 6; }
         fi
         echo -e "$(timestamp) INFO: Index file not up-to-date. A new index file has been created."
@@ -135,7 +141,7 @@ else if [[ ${TYPE,,} == "vcf" ]]; then
         # GATK validation
         gatk -R $REF_GENOME -V $FILE --validation-type-to-exclude ALL --verbosity DEBUG || { echo -e >&2 "$(timestamp) ERROR: Input file $FILE failed GATK validation." && exit 129; }
 
-    else if [[ "$FILE" =~ \.[bgz,gz] ]]; then 
+    else if [[ "$FILE" =~ \.[bgz,gz] ]]; then
         echo -e >&2 "$(timestamp) ERROR: Input file has corrupted."
         exit 6;
 
@@ -153,7 +159,22 @@ else if [[ ${TYPE,,} == "vcf" ]]; then
             gatk -R $REF_GENOME -V $FILE --validation-type-to-exclude ALL --verbosity DEBUG || { echo -e >&2 "$(timestamp) ERROR: Input file $FILE failed GATK validation." && exit 129; }
         fi
 else if [ ! -v FILE ]; then exit 3;
+else if [ ! -v TYPE ]; then exit 3;
 else # Unrecognized file type
     echo -e >&2 "$(timestamp) ERROR: Unrecognized file type (BAM / VCF)."
     exit 4;
+fi
+
+# Compare subject IDs if the source VCF is valid
+if [ ! -v EXPECTED_SUB ]; then
+    echo -e >&2 "$(timestamp) WARNING: Expected list of subject IDs not provided. Skipping subject ID comparison."
+    exit 0;
+fi
+
+if [[ ${TYPE,,} == "vcf" ]]; then
+    dest="$EXPECTED_SUB"
+    echo -e "$(timestamp) INFO: The following subjects are found both in the VCF and the expected list."
+    grep -wf <(bcftools query -l "$FILE") "$dest"
+    echo -e "$(timestamp) INFO: The following subjects are NOT found in the VCF but found in the expected list."
+    grep -vwf <(bcftools query -l "$FILE") "$dest"
 fi
