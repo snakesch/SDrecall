@@ -6,8 +6,8 @@
 # - HTSlib
 # - BCFtools
 
-source ./errorHandling.sh
-source ./miscellaneous.sh
+source $(dirname $(realpath $0))/errorHandling.sh
+source $(dirname $(realpath $0))/miscellaneous.sh
 
 [ $# -eq 0 ] && { $BASH_SOURCE --help; exit 2; }
 POSITIONAL=()
@@ -68,7 +68,7 @@ if [[ ${TYPE,,} == "bam" ]]; then
     fi
 
     # Check query name disagreement from DRAGMAP
-    if [[ $(samtools view "${BACKUP_BAM}/${SAMP_ID}.bam" | cut -f1 | grep -v ^@ | egrep -c '/1$|/2$') -gt 0 ]]; then
+    if [[ $(samtools view "$FILE" | cut -f1 | grep -v ^@ | egrep -c '/1$|/2$') -gt 0 ]]; then
         echo -e >&2 "$(timestamp) WARNING: BAM file contains unexpected query names. Trying to format ..."
         samtools view "${FILE}" | cut -f1 | grep -v ^@ | egrep '/1$|/2$' | head -10
         samtools view "${FILE}" | sed 's+/1\t+\t+g;s+/2\t+\t+g' | \
@@ -117,7 +117,7 @@ if [[ ${TYPE,,} == "bam" ]]; then
         # <- .check file not removed for debugging purposes
     fi
 
-else if [[ ${TYPE,,} == "vcf" ]]; then
+elif [[ ${TYPE,,} == "vcf" ]]; then
     if [ ! -f "$FILE" ]; then exit 6; fi
 
     [ -v REF_GENOME ] || { echo -e >&2 "$(timestamp) ERROR: No reference genome provided." && exit 3; }
@@ -139,7 +139,7 @@ else if [[ ${TYPE,,} == "vcf" ]]; then
         fi
 
         # GATK validation
-        gatk -R $REF_GENOME -V $FILE --validation-type-to-exclude ALL --verbosity DEBUG || { echo -e >&2 "$(timestamp) ERROR: Input file $FILE failed GATK validation." && exit 129; }
+        gatk ValidateVariants -R $REF_GENOME -V $FILE --validation-type-to-exclude ALL --verbosity DEBUG || { echo -e >&2 "$(timestamp) ERROR: Input file $FILE failed GATK validation." && exit 129; }
 
     else if [[ "$FILE" =~ \.[bgz,gz] ]]; then
         echo -e >&2 "$(timestamp) ERROR: Input file has corrupted."
@@ -156,10 +156,12 @@ else if [[ ${TYPE,,} == "vcf" ]]; then
             fi
 
             # GATK validation
-            gatk -R $REF_GENOME -V $FILE --validation-type-to-exclude ALL --verbosity DEBUG || { echo -e >&2 "$(timestamp) ERROR: Input file $FILE failed GATK validation." && exit 129; }
+            gatk ValidateVariants -R $REF_GENOME -V $FILE --validation-type-to-exclude ALL --verbosity DEBUG || { echo -e >&2 "$(timestamp) ERROR: Input file $FILE failed GATK validation." && exit 129; }
         fi
-else if [ ! -v FILE ]; then exit 3;
-else if [ ! -v TYPE ]; then exit 3;
+    fi
+fi
+elif [ ! -v TYPE ]; then
+    exit 3;
 else # Unrecognized file type
     echo -e >&2 "$(timestamp) ERROR: Unrecognized file type (BAM / VCF)."
     exit 4;
