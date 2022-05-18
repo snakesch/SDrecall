@@ -8,6 +8,7 @@
 
 source $(dirname $(realpath $0))/errorHandling.sh
 source $(dirname $(realpath $0))/miscellaneous.sh
+SRC_PATH=$(dirname $(realpath $0))
 
 [ $# -eq 0 ] && { $BASH_SOURCE --help; exit 2; }
 POSITIONAL=()
@@ -40,7 +41,7 @@ do
             echo "File validator for BAM and VCF"
             echo "Usage:    $BASH_SOURCE"
             echo "          --file                      | path of file to be validated"
-            echo "          --type                      | type of file (bam/vcf)"
+            echo "          --type                      | type of file (bam/vcf/fastq)"
             echo "          --ref-genome                | path of reference genome file (hg19)"
             echo "          -e | --expected-subjects    | a file list of expected subject IDs (only for vcf)"
             echo "          -h | --help                 | display this message"
@@ -141,7 +142,7 @@ elif [[ ${TYPE,,} == "vcf" ]]; then
         # GATK validation
         gatk ValidateVariants -R $REF_GENOME -V $FILE --validation-type-to-exclude ALL --verbosity DEBUG || { echo -e >&2 "$(timestamp) ERROR: Input file $FILE failed GATK validation." && exit 129; }
 
-    else if [[ "$FILE" =~ \.[bgz,gz] ]]; then
+    elif [[ "$FILE" =~ \.[bgz,gz] ]]; then
         echo -e >&2 "$(timestamp) ERROR: Input file has corrupted."
         exit 6;
 
@@ -159,11 +160,15 @@ elif [[ ${TYPE,,} == "vcf" ]]; then
             gatk ValidateVariants -R $REF_GENOME -V $FILE --validation-type-to-exclude ALL --verbosity DEBUG || { echo -e >&2 "$(timestamp) ERROR: Input file $FILE failed GATK validation." && exit 129; }
         fi
     fi
-fi
+elif [[ ${TYPE,,} == "fastq" ]]; then
+    if [[ $(${SRC_PATH}/fqValidator -i $FILE -t fastq) -eq 0 ]]; then
+        echo -e >&2 "$(timestamp) ERROR: Input FASTQ file $FILE is invalid. Possibly due to invalid line number."
+        exit 4;
+    fi
 elif [ ! -v TYPE ]; then
     exit 3;
 else # Unrecognized file type
-    echo -e >&2 "$(timestamp) ERROR: Unrecognized file type (BAM / VCF)."
+    echo -e >&2 "$(timestamp) ERROR: Unrecognized file type (BAM / VCF / FASTQ)."
     exit 4;
 fi
 
