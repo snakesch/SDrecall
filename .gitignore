@@ -1,4 +1,7 @@
-test
 xingtian_src
 ref
 tmp
+data
+src
+out
+*.pbs
