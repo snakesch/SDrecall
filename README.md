@@ -8,11 +8,11 @@ This pipeline extracts segmental duplication (SD) regions from a given genome, a
 * [BISER](https://github.com/0xTCG/biser)
 * GCC
 * Python3
-* A panel of known causal genes for disease(s) of interest (See part 3 below)
+* A gene panel (See part 3 below)
 
 ## Usage
 ### 0. Download reference genome
-Current algorithm only supports hg19 build. Please skip gene annotation and PID gene filtering for other builds. 
+Current algorithm only supports hg19 build. Please skip gene annotation and gene filtering (part 3) for other builds. 
 
 Users can acquire the FASTA file of hg19 build by UCSC [here](https://github.com/creggian/ucsc-hg19-fasta).
 
@@ -32,7 +32,7 @@ Input BED file is trimmed by its CIGAR strings record by record. Resulting BED i
 For the CIGAR string of each record, we first format the string as a list of tuples (INT, LABEL) where INT is the fragment length and LABEL belongs to the set {D, I, N, S, M}. We aim to extract 1) contiguous block of match/mismatch (M) with fragment length >= FRAGLEN, and 2) discontinuous blocks with total gap length <= GAPLEN. In the case where no M fragment with fragment length >= FRAGLEN is found, we only consider the latter discontinuous blocks. In case overlapping blocks are
 reported, the one with the longest fragment length (sum of INT when LABEL == M) is reported. For each block in a record, we record separately on the output BED file.
 
-Example:
+Example: (FRAGLEN = 300; GAPLEN = 10)
 ```{python3}
 CIGAR = [ (2, M), (1, D), (35, M), (6, I), (7, M), (1, S), (2, I), (292, M), (5, D), (30, M) ]
 extracted_block = [ (35, M), (6, I), (7, M), (1, S), (2, D), (292, M) ]
@@ -75,13 +75,13 @@ This repository implements segmental duplication (SD) pipeline from Xingtian. Th
 ## 0. Input (TODO)
 * BAM file ready for variant calling / paired-end FASTQ files
 * SD region data fetched from BISER
+* (optional) a gene panel
 
 ## 1. Major features
 - [x] Fetch SD data from BISER
 - [x] Trim CIGAR strings of SD regions
-- [ ] Extract homologous regions
-- [ ] Gene annotation to BED
-- [ ] Filter PID causal gene
+- [x] Gene annotation and panel filter
+- [ ] Deploy
 - [ ] Prepare map file per region (in GATK4.1)
 - [ ] Call polyploidy per priority region (in realign_masked_and_HC_multiploidy.sh)
 - [ ] bcftools_concatvcfs (in common_bash_utils)
