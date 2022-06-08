@@ -1,6 +1,6 @@
 # SD analysis
 
-This pipeline extracts segmental duplication (SD) regions from a given genome, annotates the regions and extracts regions that fall within known causal genes of certain diseases. 
+This pipeline extracts segmental duplication (SD) regions from a given genome, annotates the regions and extracts regions that intersect known causal genes of certain diseases. 
 
 ## Prerequisites
 * [samtools](http://www.htslib.org/)
@@ -11,18 +11,18 @@ This pipeline extracts segmental duplication (SD) regions from a given genome, a
 * A panel of known causal genes for disease(s) of interest (See part 3 below)
 
 ## Usage
-### 0. Download reference genome.
+### 0. Download reference genome
 Current algorithm only supports hg19 build. Please skip gene annotation and PID gene filtering for other builds. 
 
 Users can acquire the FASTA file of hg19 build by UCSC [here](https://github.com/creggian/ucsc-hg19-fasta).
 
-### 1. Extract SD regions by BISER.
+### 1. Extract SD regions by BISER
 ```{bash}
 ./1_biserFetch.sh [-h] --ref-genome REF_GENOME --out OUTPUT_PATH [--thread THREAD]
 ```
 This script writes extracted regions to <OUTPUT_PATH>/SD_hg19.bed (for hg19 build). By default, 4 threads are used.
 
-### 2. Trim CIGAR strings of BISER output.
+### 2. Trim CIGAR strings of BISER output
 ```{bash}
 ./2_trimCIGAR.py [-h] -i INPUT_FN -o OUTPUT_FN [--fraglen | -f  FRAGLEN] [--gaplen | -g GAPLEN] [--verbose | -v VERBOSE]
 ```
@@ -49,9 +49,9 @@ extracted_block = [ (7, M), (1, S), (2, D), (292, M), (5, D), (30, M) ]
 ```
 This step requires trimmed BED file from part 2 as INPUT. Users should also provide a file for gene annotation (REF), and a panel of genes of interest. VERBOSE follows the usage documented in part 2.
 
-Gene annotation file (hg19) can be acquired [here]()
+Gene annotation file (hg19) can be acquired [here]().
 
-The format of gene / region list is as follows:
+The gene/region list should contain the following column:
 ```{latex}
 Genetic defect
 gene_1
