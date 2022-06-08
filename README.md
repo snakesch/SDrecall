@@ -60,10 +60,10 @@ gene_3
 ...
 ```
 Outputs are as follows:
-* `\*.homo.expanded.bed`: expanded two-way map of trimmed BED file
-* `\*.homo.expanded.geneanno.bed`: two-way map with annotations
-* `\*.homo.expanded.geneanno.PID.bed`: two-way map of regions intersecting the provided LIST
-* `\*.homo.expanded.geneanno.PID.condensed.bed`: intersected two-way map with gene names concatenated if all other columns are the same
+* `*.homo.expanded.bed`: expanded two-way map of trimmed BED file
+* `*.homo.expanded.geneanno.bed`: two-way map with annotations
+* `*.homo.expanded.geneanno.PID.bed`: two-way map of regions intersecting the provided LIST
+* `*.homo.expanded.geneanno.PID.condensed.bed`: intersected two-way map with gene names concatenated if all other columns are the same
 
 ## Simulations
 <TODO>
