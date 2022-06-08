@@ -5,3 +5,5 @@ data
 src
 out
 *.pbs
+.ipynb_checkpoints/
+__pycache__/

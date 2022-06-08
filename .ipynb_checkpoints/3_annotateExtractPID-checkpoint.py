@@ -11,6 +11,7 @@ parser._optionals.title = "Options"
 parser.add_argument("-i", "--input", type = str, required = True, help = "trimmed BED file")
 parser.add_argument("-r", "--ref", type = str, required = True, help = "gene region list for annotation")
 parser.add_argument("-l", "--list", type = str, required = True, help = "list of genes/regions of interest")
+parser.add_argument("-c", "--genecol", type = int, default = 17, help = "0-based column index of \"Genetic defect\" in gene list (default: 17)")
 parser.add_argument("-v", "--verbose", type = str, default = "INFO", help = "verbosity level (default: INFO)")
 args = parser.parse_args()
 logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%a %b-%m %I:%M:%S%P',
@@ -71,10 +72,10 @@ def main():
     PID_genes = set(PID_df['Genetic defect'].tolist())
 
     anno_df = pd.read_csv(anno_path, sep="\t", header=None)
-    raw_pid_df = anno_df[anno_df[17].isin(PID_genes)]
+    raw_pid_df = anno_df[anno_df[args.genecol].isin(PID_genes)]
     raw_pid_df.to_csv(raw_pid_path, sep="\t", index=False, header=None)
 
-    condensed_pid_df = condense(raw_pid_df, gene_col=17)
+    condensed_pid_df = condense(raw_pid_df, gene_col=args.genecol)
     condensed_pid_df.to_csv(condensed_pid_path, sep="\t", index=False, header=None)
 
     return
