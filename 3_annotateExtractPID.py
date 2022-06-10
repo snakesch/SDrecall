@@ -72,7 +72,7 @@ def main():
     PID_genes = set(PID_df['Genetic defect'].tolist())
 
     anno_df = pd.read_csv(anno_path, sep="\t", header=None)
-    raw_pid_df = anno_df[anno_df[args.genecol].isin(PID_genes)]
+    raw_pid_df = anno_df[anno_df[args.genecol].isin(PID_genes)].drop_duplicates()
     raw_pid_df.to_csv(raw_pid_path, sep="\t", index=False, header=None)
     
     condensed_pid_df = condense(raw_pid_df, gene_col=args.genecol)
