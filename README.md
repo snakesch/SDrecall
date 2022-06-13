@@ -27,12 +27,11 @@ Current algorithm only supports hg19 build. Please skip gene annotation and gene
 Users can acquire the FASTA file of hg19 build by UCSC [here](https://github.com/creggian/ucsc-hg19-fasta).
 
 #### 0.2 Gene annotation file
-:crystal_ball: TODO: Fetching gene annotation file from RefSeq. :crystal_ball:
 Users are expected to provide a gene annotation file with the following format.
 ```
-| Chrom | cdsStart | cdsEnd | gene | feature | strand | length |
-| ----- | -------- | ------ | ---- | ------- | ------ | ------ |
-| chr1  |  11868   | 12227  | DDX11L17 | exon_1 | + | 359 |
+| Chrom | cdsStart | cdsEnd |   gene   | feature | strand | length |
+| ----- | -------- | ------ |   ----   | ------- | ------ | ------ |
+| chr1  |  11868   | 12227  | DDX11L17 | exon_1  |    +   |   359  |
 ```
 Alternatively, follow the steps below to download from [NCBI RefSeq FTP server](ftp://ftp.ebi.ac.uk/pub/databases/genenames/new/tsv/locus_groups/protein-coding_gene.txt).
 ```{bash}
