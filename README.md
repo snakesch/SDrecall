@@ -16,14 +16,20 @@ This pipeline extracts segmental duplication (SD) regions from a given genome, a
 * Gene annotation file (use NCBI RefSeq data if not specified)
 * A panel of genes in BEDPE format (optional)
 
-<-------- TODO: Quick run wrapper script -------->
+:crystal_ball: TODO: Quick run wrapper script :crystal_ball:
 
 ## Customized run
 ## Usage
-### 0. Download reference genome
+### 0. Download reference files
+#### 0.1 Reference genome (hg19)
 Current algorithm only supports hg19 build. Please skip gene annotation and gene filtering (part 3) for other builds. 
 
 Users can acquire the FASTA file of hg19 build by UCSC [here](https://github.com/creggian/ucsc-hg19-fasta).
+
+#### 0.2 Gene annotation file
+Users can download gene annotation file (hg19) from NCBI RefSeq FTP server. 
+
+:bangbang: TODO: Fetching gene annotation file from RefSeq.
 
 ### 1. Extract SD regions by BISER
 ```{bash}
@@ -54,7 +60,7 @@ extracted_block = [ (7, M), (1, S), (2, D), (292, M), (5, D), (30, M) ]
 
 ### 3. Annotate and extract regions of interest 
 ```{bash}
-./3_annotateExtractPID.py [-h] -i INPUT -r REF -l LIST [-c|--genecol GENECOL] [-v VERBOSE]
+./3_annotateExtract.py [-h] -i INPUT -r REF -l LIST [-c|--genecol GENECOL] [-v VERBOSE]
 ```
 This step requires trimmed BED file from part 2 as INPUT. Users should also provide a file for gene annotation (REF), and a panel of genes of interest. Users should indicate the 0-based column index of "Genetic defect" by `--genecol|-c`, a column index of 16 is assumed for BISER derived inputs. VERBOSE follows the usage documented in part 2.
 
