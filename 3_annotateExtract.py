@@ -54,6 +54,9 @@ def main():
     # Gene annotation
     annotate(expanded_path, REF_REGIONS, anno_path)
 
+    if not args.list:
+        return
+
     # Gene/Region filtering
     PID_df = pd.read_csv(PID_PATH, sep='\t', encoding="utf-8")
     PID_df['Genetic defect'] = PID_df['Genetic defect'].apply(lambda x: x[:x.index(u'\xa0')] if u'\xa0' in x else x)
@@ -62,7 +65,7 @@ def main():
     anno_df = pd.read_csv(anno_path, sep="\t", header=None)
     raw_pid_df = anno_df[anno_df[args.genecol].isin(PID_genes)].drop_duplicates()
     raw_pid_df.to_csv(raw_pid_path, sep="\t", index=False, header=None)
-    
+
     condensed_pid_df = condense(raw_pid_df, gene_col=args.genecol)
     condensed_pid_df.to_csv(condensed_pid_path, sep="\t", index=False, header=None)
     logging.info("Writing filtered BED to " + condensed_pid_path)
@@ -75,7 +78,7 @@ if __name__ == "__main__":
     parser._optionals.title = "Options"
     parser.add_argument("-i", "--input", type = str, required = True, help = "trimmed BED file")
     parser.add_argument("-r", "--ref", type = str, required = True, help = "gene region list for annotation")
-    parser.add_argument("-l", "--list", type = str, required = True, help = "list of genes/regions of interest")
+    parser.add_argument("-l", "--list", type = str, required = False, help = "list of genes/regions of interest")
     parser.add_argument("-c", "--genecol", type = int, default = 16, help = "0-based column index of \"Genetic defect\" in gene list (default: 16)")
     parser.add_argument("-v", "--verbose", type = str, default = "INFO", help = "verbosity level (default: INFO)")
     args = parser.parse_args()

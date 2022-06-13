@@ -1,7 +1,7 @@
 function catch_exit_status () {
 
     IFS=' ' read -a cmd <<< "$BASH_COMMAND"
-    
+
     local exit_code=$1
     local lineNum=$2
     local src=$3
@@ -61,28 +61,6 @@ function catch_exit_status () {
         echo -e >&2 "$(timestamp) ERROR: Unknown error encountered."
         ;;
     esac
-    
-    while :
-    do
-        read -p "$(timestamp) PROMPT: Do you want to report the error via email? (y/n)" -n 1 send_email
-        if [ "${send_email}" == "y" ]
-        then
-            echo -e "$(timestamp) INFO: An email will be sent to report the incident."
-            emailAddr='u3005579@connect.hku.hk'
-            temp_dir="/home/louisshe/ngs_scripts_louis/tmp"
-            echo -e "Dear Yangyxt,\n" > "${temp_dir}"/error_$(date +%Y%m%d).txt
-            echo -e "An error is reported on $(date +%F\ %T) with exit code ${exit_code}.\n" >> "${temp_dir}"/error_$(date +%Y%m%d).txt
-            echo -e "Below is the list of log files found in ~/tmp/ for your reference.\n" >> "${temp_dir}"/error_$(date +%Y%m%d).txt
-            find ${temp_dir}/*.log -type f >> "${temp_dir}"/error_$(date +%Y%m%d).txt
-            echo -e '\n'
-            mail -s 'Error running pipelines $(date +%Y%m%d)' ${emailAddr} < "${temp_dir}"/error_$(date +%Y%m%d).txt || { echo -e >&2 "$(timestamp) ERROR: Unable to send email!" && exit 129; }
-            break;
-        elif [ "${send_email}" == "n" ]
-        then
-            echo -e '\n'
-            break;
-        fi
-        echo -e '\n'
-    done
+
     exit ${exit_code}
 }

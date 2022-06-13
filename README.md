@@ -29,13 +29,15 @@ Users can acquire the FASTA file of hg19 build by UCSC [here](https://github.com
 #### 0.2 Gene annotation file
 Users can download gene annotation file (hg19) from NCBI RefSeq FTP server. 
 
-:bangbang: TODO: Fetching gene annotation file from RefSeq.
+:crystal_ball: TODO: Fetching gene annotation file from RefSeq. :crystal_ball:
 
 ### 1. Extract SD regions by BISER
 ```{bash}
 ./1_biserFetch.sh [-h] --ref-genome REF_GENOME --out OUTPUT_PATH [--thread THREAD]
 ```
 This script writes extracted regions to <OUTPUT_PATH>/SD_hg19.bed (for hg19 build). By default, 8 threads are used.
+
+Note: Users are advised to use 6-10 threads for this step. (<6 threads will lead to unnecessarily long execution time)
 
 ### 2. Trim CIGAR strings of BISER output
 ```{bash}
@@ -60,11 +62,15 @@ extracted_block = [ (7, M), (1, S), (2, D), (292, M), (5, D), (30, M) ]
 
 ### 3. Annotate and extract regions of interest 
 ```{bash}
-./3_annotateExtract.py [-h] -i INPUT -r REF -l LIST [-c|--genecol GENECOL] [-v VERBOSE]
+./3_annotateExtract.py [-h] -i INPUT -r REF [-l LIST] [-c|--genecol GENECOL] [-v VERBOSE]
 ```
-This step requires trimmed BED file from part 2 as INPUT. Users should also provide a file for gene annotation (REF), and a panel of genes of interest. Users should indicate the 0-based column index of "Genetic defect" by `--genecol|-c`, a column index of 16 is assumed for BISER derived inputs. VERBOSE follows the usage documented in part 2.
+This step requires trimmed BED file from part 2 as INPUT. Users should also provide a file for gene annotation (REF), and a panel of genes of interest. VERBOSE follows the usage documented in part 2.
 
-Gene annotation file (hg19) can be acquired [here]().
+#### 3.1 Gene annotation
+Gene annotation file (hg19) is acquired as discussed in section 0.2. This path should be provided via the `--ref|-r` argument.
+
+#### 3.2 Extract region(s) of interest (optional)
+A gene panel (in a list) should be provided via `--list|-l` argument. If this argument is not given, the script terminates after completing gene annotation. Users should manually inspect the annotated BED file for the 0-based column index of "Genetic defect" and specify it by `--genecol|-c` (default: 16).
 
 The gene/region list should contain the following column:
 ```{latex}
