@@ -27,9 +27,18 @@ Current algorithm only supports hg19 build. Please skip gene annotation and gene
 Users can acquire the FASTA file of hg19 build by UCSC [here](https://github.com/creggian/ucsc-hg19-fasta).
 
 #### 0.2 Gene annotation file
-Users can download gene annotation file (hg19) from NCBI RefSeq FTP server. 
-
 :crystal_ball: TODO: Fetching gene annotation file from RefSeq. :crystal_ball:
+Users are expected to provide a gene annotation file with the following format.
+```
+| Chrom | cdsStart | cdsEnd | gene | feature | strand | length |
+| ----- | -------- | ------ | ---- | ------- | ------ | ------ |
+| chr1  |  11868   | 12227  | DDX11L17 | exon_1 | + | 359 |
+```
+Alternatively, follow the steps below to download from [NCBI RefSeq FTP server](ftp://ftp.ebi.ac.uk/pub/databases/genenames/new/tsv/locus_groups/protein-coding_gene.txt).
+```{bash}
+./geneAnnotation.py -om <merged output path> -oe <exon output path> -oi <intron output path>
+```
+Please specify the **full paths** (directory + file name) for all 3 arguments. `-om` writes the merged output (exon & intron); `-oe` writes only exon output; `-oi` writes only intron output. All 3 outputs will be formatted accordingly to the desired output.  
 
 ### 1. Extract SD regions by BISER
 ```{bash}
@@ -89,7 +98,7 @@ Outputs are as follows:
 ## Simulations
 <TODO>
 
-<------------- For personal reference only ------------->
+<------------- For personal reference only ------------>
 
 This repository implements segmental duplication (SD) pipeline from Xingtian. This is supposed to be implemented mainly in python3.
 
