@@ -51,7 +51,7 @@ do
     esac
 done
 
-NTHREADS=${NTHREADS:-4}
+NTHREADS=${NTHREADS:-8}
 samtools faidx ${REF_GENOME}
 biser -o ${OUTPATH}/SD_hg19.bed -t ${NTHREADS} ${REF_GENOME}
 

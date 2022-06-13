@@ -5,11 +5,20 @@ This pipeline extracts segmental duplication (SD) regions from a given genome, a
 ## Prerequisites
 * [samtools](http://www.htslib.org/)
 * [BEDTools](https://bedtools.readthedocs.io/en/latest/)
-* [BISER](https://github.com/0xTCG/biser)
+* [BISER](https://github.com/0xTCG/biser) v1.1
 * GCC
 * Python3
 * A gene panel (See part 3 below)
 
+## Default run
+### Required input files
+* Base Quality Score Recalibrated (BQSR) BAM file
+* Gene annotation file (use NCBI RefSeq data if not specified)
+* A panel of genes in BEDPE format (optional)
+
+<-------- TODO: Quick run wrapper script -------->
+
+## Customized run
 ## Usage
 ### 0. Download reference genome
 Current algorithm only supports hg19 build. Please skip gene annotation and gene filtering (part 3) for other builds. 
@@ -20,7 +29,7 @@ Users can acquire the FASTA file of hg19 build by UCSC [here](https://github.com
 ```{bash}
 ./1_biserFetch.sh [-h] --ref-genome REF_GENOME --out OUTPUT_PATH [--thread THREAD]
 ```
-This script writes extracted regions to <OUTPUT_PATH>/SD_hg19.bed (for hg19 build). By default, 4 threads are used.
+This script writes extracted regions to <OUTPUT_PATH>/SD_hg19.bed (for hg19 build). By default, 8 threads are used.
 
 ### 2. Trim CIGAR strings of BISER output
 ```{bash}
@@ -45,9 +54,9 @@ extracted_block = [ (7, M), (1, S), (2, D), (292, M), (5, D), (30, M) ]
 
 ### 3. Annotate and extract regions of interest 
 ```{bash}
-./3_annotateExtractPID.py [-h] -i INPUT -r REF -l LIST [-v VERBOSE]
+./3_annotateExtractPID.py [-h] -i INPUT -r REF -l LIST [-c|--genecol GENECOL] [-v VERBOSE]
 ```
-This step requires trimmed BED file from part 2 as INPUT. Users should also provide a file for gene annotation (REF), and a panel of genes of interest. VERBOSE follows the usage documented in part 2.
+This step requires trimmed BED file from part 2 as INPUT. Users should also provide a file for gene annotation (REF), and a panel of genes of interest. Users should indicate the 0-based column index of "Genetic defect" by `--genecol|-c`, a column index of 16 is assumed for BISER derived inputs. VERBOSE follows the usage documented in part 2.
 
 Gene annotation file (hg19) can be acquired [here]().
 
