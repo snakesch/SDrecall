@@ -14,7 +14,7 @@ def update_hgnc(table, d=";", label=None, url="ftp://ftp.ebi.ac.uk/pub/databases
 
     try:
         hgnc_anno_table = pd.read_csv(url, sep='\t', low_memory=False)
-    except Timeo:
+    except:
         logging.critical("Failed to fetch data from default URL.")
         sys.exit(-1)
     if label:
