@@ -179,6 +179,45 @@ def merge_ncbi_id(row, df, dicts):
             dicts = dicts[1:]
         return row_dict
 
+def convert_per_row(row, table, label, delimiter):
+    # Select the cell where it matches with the Gene symbol in to_be_modified_table
+    selected_record = table.loc[table['symbol'].isin(str(row[label]).split(delimiter)), 'symbol']
+    # Convert the series into list
+    # If we found one match
+    if len(selected_record.tolist()) == 1:
+        return selected_record.tolist()[0]
+    # If we found more than one match
+    elif len(selected_record.tolist()) > 1:
+        logging.info("This record (index {}) contains multiple updated HGNC symbols {}".format(row.name, str(row[label])))
+        return delimiter.join(selected_record.tolist())
+    # If we haven't found one match, it means the symbol in to_be_modified table is an alias.
+    else:
+        logging.info("This record (index {}) does not contain an updated HGNC symbol {}".format(row.name, str(row[label])))
+        # Prepare a series of booleans based on checking if there are intersection
+        # bool_ser_alias = table['alias_symbol'].apply(intersection, args=str(row[label]).split(delimiter))
+        bool_ser_alias = table['alias_symbol'].str.strip('"').str.split("|", expand=True).isin(str(row[label]).split(delimiter)).any(axis=1)
+        # bool_ser_prev = table['prev_symbol'].apply(intersection, args=str(row[label]).split(delimiter))
+        bool_ser_prev = table['prev_symbol'].str.strip('"').str.split("|", expand=True).isin(str(row[label]).split(delimiter)).any(axis=1)
+        alias_or_prev_record_list = table.loc[bool_ser_alias | bool_ser_prev, 'symbol'].tolist()
+        if len(alias_or_prev_record_list) == 1:
+            return alias_or_prev_record_list[0]
+        elif len(alias_or_prev_record_list) > 1:
+            # We may found the name match with one prev symbol for one gene and one alias symbol for another gene
+            # We need to determine the true gene for the current symbol
+            search_symbols = str(row[label]).split(delimiter)
+            if bool_ser_alias.any(): alias_symbols = table.loc[bool_ser_alias, 'alias_symbol'].str.split("|", expand=True)
+            if bool_ser_prev.any(): prev_symbols = table.loc[bool_ser_prev, 'prev_symbol'].str.split("|", expand=True)
+            if 'alias_symbols' in locals() and 'prev_symbols' in locals(): 
+                symbol_dict = {alias_symbols.shape[1]: 'alias_symbol', prev_symbols.shape[1]:'prev_symbol'}
+                if symbol_dict[min(alias_symbols.shape[1], prev_symbols.shape[1])] == "alias_symbol":
+                    return delimiter.join(table.loc[bool_ser_alias,'symbol'].tolist())
+                elif symbol_dict[min(alias_symbols.shape[1], prev_symbols.shape[1])] == "prev_symbol":
+                    return delimiter.join(table.loc[bool_ser_prev, 'symbol'].tolist())
+            else:
+                return delimiter.join(alias_or_prev_record_list)
+        else:
+            return str(row[label])              
+
 def main_convert(output_merged, output_exon, output_intron, target_genes=None):
 
     dict_lists = pd.read_json('http://api.genome.ucsc.edu/getData/track?genome=hg19;track=refGene', orient='records')['refGene'].tolist()

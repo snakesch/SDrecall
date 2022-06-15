@@ -2,8 +2,8 @@ xingtian_src
 ref
 tmp
 data
-src
 out
+archive
 *.pbs
 .ipynb_checkpoints
 __pycache__

@@ -9,8 +9,8 @@
 # samtools
 # biser
 
-source $(dirname $(realpath -s $0))/miscellaneous.sh
-source $(dirname $(realpath -s $0))/errorHandling.sh
+source $(dirname $(realpath -s $0))/src/miscellaneous.sh
+source $(dirname $(realpath -s $0))/src/errorHandling.sh
 
 set -o errtrace
 trap 'catch_exit_status $? $LINENO $0' ERR

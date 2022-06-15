@@ -4,7 +4,7 @@ import numpy as np
 import logging
 import re
 import argparse
-from utils import getIntersect
+from src.utils import getIntersect
 
 def lr_trim(cigar_arr, blocks):
     '''
