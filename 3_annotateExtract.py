@@ -27,16 +27,6 @@ def annotate(INPATH: str, REF_REGIONS: str, OUTPATH: str):
         sys.exit(-1)
     return
 
-def condense(df, gene_col = 17):
-
-    cols = list(range(df.shape[1]))
-    cols.pop(gene_col)
-    out = df.groupby(cols)[gene_col].apply(",".join).reset_index()
-    out = out[[*range(0, df.shape[1])]]
-    logging.info("Original df shape : {}; Condensed df shape : {}".format(df.shape, out.shape))
-
-    return out
-
 def main():
 
     INPATH = args.input
@@ -66,9 +56,7 @@ def main():
     raw_pid_df = anno_df[anno_df[args.genecol].isin(PID_genes)].drop_duplicates()
     raw_pid_df.to_csv(raw_pid_path, sep="\t", index=False, header=None)
 
-    condensed_pid_df = condense(raw_pid_df, gene_col=args.genecol)
-    condensed_pid_df.to_csv(condensed_pid_path, sep="\t", index=False, header=None)
-    logging.info("Writing filtered BED to " + condensed_pid_path)
+    logging.info("Writing filtered BED to " + raw_pid_path)
 
     return
 

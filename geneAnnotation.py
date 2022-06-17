@@ -5,6 +5,7 @@ import argparse as ap
 import logging
 import sys
 import re
+import gc
 
 def update_hgnc(table, d=";", label=None, url="ftp://ftp.ebi.ac.uk/pub/databases/genenames/new/tsv/locus_groups/protein-coding_gene.txt"):
     # a stands for the absolute path to the annotation table, if not inputted, we'll use a default URL
@@ -43,7 +44,7 @@ def update_hgnc(table, d=";", label=None, url="ftp://ftp.ebi.ac.uk/pub/databases
     to_be_modified_table.insert(loc=original_column_index, column=label, value=tobe_mov)
     if label == "Later_defined_header":
         to_be_modified_table.to_csv(table, sep='\t', index=False, header=False)
-    elif isinstance(table, pd.DataFrame):
+    elif not isinstance(table, pd.DataFrame):
         to_be_modified_table.to_csv(table, sep='\t', index=False)
     else:
         return to_be_modified_table
