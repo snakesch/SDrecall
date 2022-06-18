@@ -6,8 +6,12 @@ This pipeline extracts segmental duplication (SD) regions from a given genome, a
 * [samtools](http://www.htslib.org/)
 * [BEDTools](https://bedtools.readthedocs.io/en/latest/)
 * [BISER](https://github.com/0xTCG/biser) v1.1
-* GCC
-* Python3
+* [seqkit](https://github.com/shenwei356/seqkit) v2.2.0
+* [seqtk](https://github.com/lh3/seqtk) v1.3
+* [GATK](https://gatk.broadinstitute.org/hc/en-us) v4.2.5
+* [bwa](https://github.com/lh3/bwa) v0.7.17
+* [GCC](https://gcc.gnu.org/) v9.1.0
+* [Python3](https://www.python.org/downloads/)
 * A gene panel (See part 3 below)
 
 ## Required input files
@@ -23,7 +27,7 @@ This pipeline extracts segmental duplication (SD) regions from a given genome, a
 ### 0. Prepare SD regions (BED format)
 #### 0.1. Download reference files
 ##### 0.1.1. Reference genome (hg19)
-Current algorithm only supports hg19 build. Please skip gene annotation and gene filtering (part 3) for other builds. 
+Current algorithm only supports hg19 build. 
 
 Users can acquire the FASTA file of hg19 build by UCSC [here](https://github.com/creggian/ucsc-hg19-fasta).
 
@@ -71,15 +75,9 @@ extracted_block = [ (7, M), (1, S), (2, D), (292, M), (5, D), (30, M) ]
 
 #### 0.4. Annotate and extract regions of interest 
 ```{bash}
-./3_annotateExtract.py [-h] -i INPUT -r REF [-l LIST] [-c|--genecol GENECOL] [-v VERBOSE]
+./3_annotateExtract.py [-h] -i INPUT -r REF -o OUTPATH [-l LIST] [-c|--genecol GENECOL] [-v VERBOSE]
 ```
-This step requires trimmed BED file from part 2 as INPUT. Users should also provide a file for gene annotation (REF), and a panel of genes of interest. VERBOSE follows the usage documented in part 2.
-
-##### 0.4.1. Gene annotation
-Gene annotation file (hg19) is acquired as discussed in section 0.2. This path should be provided via the `--ref|-r` argument.
-
-##### 0.4.2. Extract region(s) of interest (optional)
-A gene panel (in a list) should be provided via `--list|-l` argument. If this argument is not given, the script terminates after completing gene annotation. Users should manually inspect the annotated BED file for the 0-based column index of "Genetic defect" and specify it by `--genecol|-c` (default: 16).
+This step requires trimmed BED file from part 2 as INPUT. Gene annotation is done with reference to REF specified by `-r`. Users can also provide a list of genes of interest. Current alogorithm will extract specified genes for analysis (`-l`); it takes the whole annotated BED file for analysis if otherwise. GENECOL is a 0-based column index of "Genetic defect" in the given table/list (default = 16). 
 
 The gene/region list should contain the following column:
 ```{latex}
@@ -89,21 +87,47 @@ gene_2
 gene_3
 ...
 ```
-Outputs are as follows:
+The following files are written to the path of INPUT:
 * `*.homo.expanded.bed`: expanded two-way map of trimmed BED file
 * `*.homo.expanded.geneanno.bed`: two-way map with annotations
-* `*.homo.expanded.geneanno.PID.bed`: two-way map of regions intersecting the provided LIST
-* `*.homo.expanded.geneanno.PID.condensed.bed`: intersected two-way map with gene names concatenated if all other columns are the same
+* `*.homo.expanded.geneanno.region.bed`: two-way map of regions intersecting the provided LIST
+The following files are written to OUTPATH:
+* `all_homo_regions.bed`: BED containing the coordinates of all genes of interest (equivalent to the annotated BED output if no list is given)
+* `<region>_related_homo_region.bed`: extracted BED with only <region> data
+Format:
+```{latex}
+\begin{tabular}{|c|c|c|c|}
+\hline
+<chr> & <start pos> & <end pos> & <gene> \\
+\vdots & \vdots & \vdots & \vdots \\
+\hline
+\end{tabular}
+```
+### 1. Preparation
+We first extract fragments that align to SD regions from the input BAM file, build a masked genome, and then build a file name map for easy reference.
 
-### 1. Prepare sample map file
-We first extract fragments that align to SD regions from the input BAM file, then build a sample map for further analysis.
+For single region analysis,
+```{bash}
+./4_buildFileMap.sh --input-bam BAM --region-list REGION_BED --ref-genome REF_GENOME --ref-bed REF_BED --out OUTPATH [-mq INT] [--thread INT]
+```
+For multiple regions analysis,
+```
+find DIR -name "*.bed" | xargs -I{} -t bash ./4_buildFileMap.sh --input-bam BAM --region-list {} --ref-genome REF_GENOME --ref-bed REF_BED --out OUTPATH [-mq INT] [--thread INT]
+```
+BAM is the path of base quality score recalibrated (BQSR) BAM file, REF_GENOME is the indexed reference genome FASTA file, REF_BED contains 3 columns (in order): chromosome name, 0 (start pos) and length of the chromosome (in bp). `-mq` is the mapping quality filtering threshold. OUTPATH is the desired output directory.
 
+For multiple regions analysis, DIR is the directory containing all BED files created in step 0.
+
+In this step, we extract regions in REGION_BED from BAM and prepare masked genomes for each of the regions. A table of all files related to a certain region is also created. In the extraction step, we extract reads tagged with XA (multi-aligned) or with mapping quality MQ < _&alpha;_ where _&alpha;_ is the mapping quality threshold specified by `-mq`, which holds a default value of 30. Masked genomes are written to `OUTPATH/masked_genome/` and indexed.
 
 ### 2. Polyploid variant calling in the priority regions
 
 ### 3. Compare with intrinsic VCFs
 
 ## Simulations
+
+## Contact and correspondance
+
 <TODO>
 
 <------------- For personal reference only ------------>
