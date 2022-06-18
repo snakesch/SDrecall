@@ -80,12 +80,20 @@ extracted_block = [ (7, M), (1, S), (2, D), (292, M), (5, D), (30, M) ]
 This step requires trimmed BED file from part 2 as INPUT. Gene annotation is done with reference to REF specified by `-r`. Users can also provide a list of genes of interest. Current alogorithm will extract specified genes for analysis (`-l`); it takes the whole annotated BED file for analysis if otherwise. GENECOL is a 0-based column index of "Genetic defect" in the given table/list (default = 16). 
 
 The gene/region list should contain the following column:
-```{latex}
-Genetic defect
-gene_1
-gene_2
-gene_3
-...
+```html
+<table>
+    <tr>
+        <th>Genetic defect</th>
+    </tr>
+    <tr>
+        <th>gene_1</th>
+        <th>gene_2</th>
+        <th>gene_3</th>
+        <th><span>&#8320;
+            </span>
+            </th>
+    </tr>
+</table>
 ```
 The following files are written to the path of INPUT:
 * `*.homo.expanded.bed`: expanded two-way map of trimmed BED file
