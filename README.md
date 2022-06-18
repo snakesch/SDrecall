@@ -95,7 +95,9 @@ The following files are written to the path of INPUT:
 The following files are written to OUTPATH:
 * `all_homo_regions.bed`: BED containing the coordinates of all genes of interest (equivalent to the annotated BED output if no list is given)
 * `<region>_related_homo_region.bed`: extracted BED with only <region> data
+
 Format:
+
 | chr | start pos | end pos | gene |
 | --- | --------- | ------- | ---- |
 | ... |  ... | ... | ... |
