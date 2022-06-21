@@ -144,6 +144,7 @@ The second half of the script proceeds with polyploid variant calling only if es
 
 <TODO>
 In 5_maskedAlignPolyVarCall.sh?
+
 - [x] replace_contig_lines_in_vcf_head -> common_bash_utils.sh
 - [ ] convert_vcf_to_diploidy.py
 - [ ] pick_poorcov_region_bam
