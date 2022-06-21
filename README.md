@@ -1,23 +1,26 @@
 # SD analysis
 
+:crystal_ball: TODO: Repo description :crystal_ball:
 This pipeline extracts segmental duplication (SD) regions from a given genome, annotates the regions and extracts regions that intersect known causal genes of certain diseases. 
 
 ## Prerequisites
-* [samtools](http://www.htslib.org/)
-* [BEDTools](https://bedtools.readthedocs.io/en/latest/)
-* [BISER](https://github.com/0xTCG/biser) v1.1
-* [seqkit](https://github.com/shenwei356/seqkit) v2.2.0
-* [seqtk](https://github.com/lh3/seqtk) v1.3
-* [GATK](https://gatk.broadinstitute.org/hc/en-us) v4.2.5
-* [bwa](https://github.com/lh3/bwa) v0.7.17
-* [GCC](https://gcc.gnu.org/) v9.1.0
-* [Python3](https://www.python.org/downloads/)
-* A gene panel (See part 3 below)
+* [samtools](http://www.htslib.org/) >=v1.15.1
+* [BEDTools](https://bedtools.readthedocs.io/en/latest/) >=v2.27.1
+* [BISER](https://github.com/0xTCG/biser) >=v1.1
+* [seqkit](https://github.com/shenwei356/seqkit) >=v2.2.0
+* [seqtk](https://github.com/lh3/seqtk) >=v1.3
+* [GATK](https://gatk.broadinstitute.org/hc/en-us) >=v4.2.5
+* [bwa](https://github.com/lh3/bwa) >=v0.7.17
+* [GCC](https://gcc.gnu.org/) >=v9.1.0
+* [Python](https://www.python.org/downloads/) >=v3.9
+* [HTSlib](http://www.htslib.org/download/) >=v1.7
 
-## Required input files
+## Input files
+### Required
 * Base Quality Score Recalibrated (BQSR) BAM file
 * Gene annotation file (use NCBI RefSeq data if not specified)
-* A panel of genes in BEDPE format (optional)
+### Optional
+* A gene panel in BEDPE format (See [part 0.4](#### 0.4. Annotate and extract regions of interest))
 
 ## Usage
 ## Quick run
@@ -29,7 +32,7 @@ This pipeline extracts segmental duplication (SD) regions from a given genome, a
 ##### 0.1.1. Reference genome (hg19)
 Current algorithm only supports hg19 build. 
 
-Users can acquire the FASTA file of hg19 build by UCSC [here](https://github.com/creggian/ucsc-hg19-fasta).
+Users can acquire UCSC reference genome (hg19) [here](https://github.com/creggian/ucsc-hg19-fasta).
 
 ##### 0.1.2. Gene annotation file
 Users are expected to provide a gene annotation file with the following format.
@@ -46,7 +49,7 @@ Please specify the **full paths** (directory + file name) for all 3 arguments. `
 
 #### 0.2. Extract SD regions by BISER
 ```{bash}
-./1_biserFetch.sh [-h] --ref-genome REF_GENOME --out OUTPUT_PATH [--thread THREAD]
+./1_biserFetch.sh [-h] --ref-genome REF_GENOME --out OUTPUT_PATH [--thread THREAD=8]
 ```
 This script writes extracted regions to <OUTPUT_PATH>/SD_hg19.bed (for hg19 build). By default, 8 threads are used.
 
@@ -54,7 +57,7 @@ Note: Users are advised to use 6-10 threads for this step. (<6 threads will lead
 
 #### 0.3. Trim CIGAR strings of BISER output
 ```{bash}
-./2_trimCIGAR.py [-h] -i INPUT_FN -o OUTPUT_FN [--fraglen | -f  FRAGLEN] [--gaplen | -g GAPLEN] [--verbose | -v VERBOSE]
+./2_trimCIGAR.py [-h] -i INPUT_FN -o OUTPUT_FN [--fraglen | -f  FRAGLEN=300] [--gaplen | -g GAPLEN=10] [--verbose | -v VERBOSE=INFO]
 ```
 Input BED file is trimmed by its CIGAR strings record by record. Resulting BED is written to OUTPUT_FN. By default, FRAGLEN = 300 and GAPLEN = 10. VERBOSE can be any logging level stipulated in [python's logging module](https://docs.python.org/3/library/logging.html#logging-levels).
 
@@ -75,7 +78,7 @@ extracted_block = [ (7, M), (1, S), (2, D), (292, M), (5, D), (30, M) ]
 
 #### 0.4. Annotate and extract regions of interest 
 ```{bash}
-./3_annotateExtract.py [-h] -i INPUT -r REF -o OUTPATH [-l LIST] [-c|--genecol GENECOL] [-v VERBOSE]
+./3_annotateExtract.py [-h] -i INPUT -r REF -o OUTPATH [-l LIST] [-c|--genecol GENECOL=16] [-v VERBOSE=INFO]
 ```
 This step requires trimmed BED file from part 2 as INPUT. Gene annotation is done with reference to REF specified by `-r`. Users can also provide a list of genes of interest. Current alogorithm will extract specified genes for analysis (`-l`); it takes the whole annotated BED file for analysis if otherwise. GENECOL is a 0-based column index of "Genetic defect" in the given table/list (default = 16). 
 
@@ -103,24 +106,36 @@ Format:
 | ... |  ... | ... | ... |
 
 ### 1. Preparation
-We first extract fragments that align to SD regions from the input BAM file, build a masked genome, and then build a file name map for easy reference.
+We first extract fragments that align to extracted SD regions in the input BAM file, then build a masked genome against the region.
 
 For single region analysis,
 ```{bash}
-./4_buildFileMap.sh --input-bam BAM --region-list REGION_BED --ref-genome REF_GENOME --ref-bed REF_BED --out OUTPATH [-mq INT] [--thread INT]
+./4_preparation.sh [-h] --input-bam BAM --region-list REGION_BED --ref-genome REF_GENOME --ref-bed REF_BED --out OUTPATH [-mq INT=30] [--thread THREAD=8]
 ```
 For multiple regions analysis,
+```{bash}
+find DIR -name "*.bed" | xargs -I{} -P XARGS_THREADS -t bash ./4_preparation.sh --input-bam BAM --region-list {} --ref-genome REF_GENOME --ref-bed REF_BED --out OUTPATH [-mq INT=30] [--thread THREAD=8]
 ```
-find DIR -name "*.bed" | xargs -I{} -t bash ./4_buildFileMap.sh --input-bam BAM --region-list {} --ref-genome REF_GENOME --ref-bed REF_BED --out OUTPATH [-mq INT] [--thread INT]
-```
-BAM is the path of base quality score recalibrated (BQSR) BAM file, REF_GENOME is the indexed reference genome FASTA file, REF_BED contains 3 columns (in order): chromosome name, 0 (start pos) and length of the chromosome (in bp). `-mq` is the mapping quality filtering threshold. OUTPATH is the desired output directory.
+BAM is the path of base quality score recalibrated (BQSR) BAM file, REF_GENOME is the indexed reference genome FASTA file, REF_BED contains 3 columns (in order): chromosome name, 0 (start pos) and length of the chromosome (in bp). `-mq` is the mapping quality filtering threshold. OUTPATH is the desired output directory. By default, THREAD = 8.
 
-For multiple regions analysis, DIR is the directory containing all BED files created in step 0.
+For multiple regions analysis, DIR is the directory containing all BED files created in step 0. Total number of threads used = `XARGS_THREADS x THREAD`.
 
 In this step, we extract regions in REGION_BED from BAM and prepare masked genomes for each of the regions. A table of all files related to a certain region is also created. In the extraction step, we extract reads tagged with XA (multi-aligned) or with mapping quality MQ < _&alpha;_ where _&alpha;_ is the mapping quality threshold specified by `-mq`, which holds a default value of 30. Masked genomes are written to `OUTPATH/masked_genome/` and indexed.
 
-### 2. Polyploid variant calling in the priority regions
+**WARNING: This step may create extremely large FASTA files. Please ensure disk availability before running 4_preparation.sh.**
 
+Note: More threads (>10) should be used for WGS data.
+
+### 2. Masked alignment and polyploid variant calling
+```{bash}
+./5_maskedAlignPolyVarCall.sh [-h] --input-bam BAM_PATH --data DATAPATH --region-bed BED --ref-genome REF_GENOME [--thread INT=10]
+```
+#### 2.1. Realign against masked genome
+The first half of the script looks for `fastq/` and `masked_genome/` in `OUTPATH`. Paired-end FASTQs generated from BAM_PATH (stored in `fastq/`) are realigned to respective masked genomes stored in `masked_genome/`. Average read depths before realignment and after alignment are compared and used to compute an estimate ploidy of the realigned data.
+    
+#### 2.2. Polyploid variant calling
+The second half of the script proceeds with polyploid variant calling only if estimated ploidy is greater than or equal to 2. Variants are first called with the assumption of possible polyploidy events. The called variants are then genotyped and cleaned to generate a VCF file.
+    
 ### 3. Compare with intrinsic VCFs
 
 ## Simulations
@@ -128,35 +143,12 @@ In this step, we extract regions in REGION_BED from BAM and prepare masked genom
 ## Contact and correspondance
 
 <TODO>
-
-<------------- For personal reference only ------------>
-
-This repository implements segmental duplication (SD) pipeline from Xingtian. This is supposed to be implemented mainly in python3.
-
-## 0. Input (TODO)
-* BAM file ready for variant calling / paired-end FASTQ files
-* SD region data fetched from BISER
-* (optional) a gene panel
-
-## 1. Major features
-- [x] Fetch SD data from BISER
-- [x] Trim CIGAR strings of SD regions
-- [x] Gene annotation and panel filter
-- [ ] Deploy
-- [ ] Prepare map file per region (in GATK4.1)
-- [ ] Call polyploidy per priority region (in realign_masked_and_HC_multiploidy.sh)
-- [ ] bcftools_concatvcfs (in common_bash_utils)
-- [ ] Compare with intrinsic VCFs (py)
-
-## 2. Helper functions
-- [x] Check BAM validity
-- [x] Check VCF validity
-- [ ] Check FASTQ validity
-- [ ] Extract XA tags from input BAM
-- [ ] Extract XA tags from input FASTQ
-- [ ] Set environmental variables (\_THREADS)
-- [ ] Prepare masked genome
-
-## 3. Others (TODO)
-* Number of threads should be user-defined (for systems without PBS)
-* Replace GNU parallel with xargs
+In 5_maskedAlignPolyVarCall.sh?
+- [x] replace_contig_lines_in_vcf_head -> common_bash_utils.sh
+- [ ] convert_vcf_to_diploidy.py
+- [ ] pick_poorcov_region_bam
+    
+Another script ...
+- [ ] bcftools concat VCFs
+- [ ] compare_with_intrinsic_VCFs
+- [ ] delete masked genomes after use (in 5_maskedAlignPolyVarCall.sh?)
