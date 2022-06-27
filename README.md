@@ -14,6 +14,8 @@ This pipeline extracts segmental duplication (SD) regions from a given genome, a
 * [GCC](https://gcc.gnu.org/) >=v9.1.0
 * [Python](https://www.python.org/downloads/) >=v3.9
 * [HTSlib](http://www.htslib.org/download/) >=v1.7
+* [VCFPy](https://github.com/bihealth/vcfpy) >=v0.13.4
+* [mosdepth](https://github.com/brentp/mosdepth)
 
 ## Input files
 ### Required
@@ -27,6 +29,8 @@ This pipeline extracts segmental duplication (SD) regions from a given genome, a
 :crystal_ball: TODO: Quick run wrapper script :crystal_ball:
 
 ## Customized run
+As users may allocate different number of threads in each step, customized run allows users to execute each step separately with a defined number of threads. Users are advised to use more threads for WGS data in some steps discussed below.
+
 ### 0. Prepare SD regions (BED format)
 #### 0.1. Download reference files
 ##### 0.1.1. Reference genome (hg19)
@@ -130,26 +134,45 @@ Note: More threads (>10) should be used for WGS data.
 ```{bash}
 ./5_maskedAlignPolyVarCall.sh [-h] --input-bam BAM_PATH --data DATAPATH --region-bed BED --ref-genome REF_GENOME [--thread INT=10]
 ```
-#### 2.1. Realign against masked genome
-The first half of the script looks for `fastq/` and `masked_genome/` in `OUTPATH`. Paired-end FASTQs generated from BAM_PATH (stored in `fastq/`) are realigned to respective masked genomes stored in `masked_genome/`. Average read depths before realignment and after alignment are compared and used to compute an estimate ploidy of the realigned data.
+Available options:
+* `--input-bam`: input BQSR BAM file
+* `--data`: parent directory of `masked_genome` and `fastq`
+* `--region-bed`: BED file of selected SD regions
+
+Note: The script only handles ONE BED file each time. To analyse multiple regions, users can iterate over each BED file:
+```{bash}
+for region in $(find BED_DIR -name "*.bed" -type f | sort)
+do
+    ${ROOT}/5_maskedAlignPolyVarCall.sh --input-bam BAM_PATH --data DATAPATH --region-bed $region --ref-genome ${REF_GENOME} [--thread INT=10]
+done
+```
     
-#### 2.2. Polyploid variant calling
-The second half of the script proceeds with polyploid variant calling only if estimated ploidy is greater than or equal to 2. Variants are first called with the assumption of possible polyploidy events. The called variants are then genotyped and cleaned to generate a VCF file.
+#### 2.1. Realign against masked genome
+Paired-end FASTQs generated from BAM_PATH (stored in `fastq/`) are realigned to respective masked genomes stored in `masked_genome/`. Ploidy is estimated as follows. 
+
+$ Depth_1 = Average depth of all reads in input BAM file $
+$ Depth_2 = Average depth of high-quality reads in input BAM file $
+$ Depth_3 = Average depth of all reads in the extracted BAM file $
+$ Depth_4 = Depth_3 - Depth_2 $
+$ Ploidy = 2 \times {Depth_4}/{Depth_1} $
+    
+Variants are called if and only if ploidy >= 2. Regions are omitted if otherwise.
+    
+#### 2.2. Variant calling
+Variants are first called with the assumption of possible multiploidy cases, genotyped, left-aligned and trimmed. If polyploidy is detected, it is converted to diploid VCF(s). Variants are first called with the assumption of possible multiploidy events. The called variants are then genotyped and cleaned to generate a VCF file. Variants called are filtered by coverage, only those with low coverage are retained (<=15).
     
 ### 3. Compare with intrinsic VCFs
+```{bash}
+./6_postProcessing.sh [-h] --vcfpath VCF_DIR --regions REGIONS_DIR
+```
+Available option:
+* `--vcfpath`: directory of VCFs in poor coverage regions (the one generated in step 2)
+* `--regions`: directory of all BED files
+
+For variants called from poor coverage regions, they are compared to an "intrinsic VCF". Intrinsic VCFs contain variants ...
+
+By default, `masked_genome/` and VCFs in `vcf/` are deleted to save space.
 
 ## Simulations
 
 ## Contact and correspondance
-
-<TODO>
-In 5_maskedAlignPolyVarCall.sh?
-
-- [x] replace_contig_lines_in_vcf_head -> common_bash_utils.sh
-- [ ] convert_vcf_to_diploidy.py
-- [ ] pick_poorcov_region_bam
-    
-Another script ...
-- [ ] bcftools concat VCFs
-- [ ] compare_with_intrinsic_VCFs
-- [ ] delete masked genomes after use (in 5_maskedAlignPolyVarCall.sh?)

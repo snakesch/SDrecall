@@ -53,14 +53,27 @@ def get_intron_coor(row):
     """
     This function generates two columns: intron start coordinates and intron end coordinates.
     """
-    exon_starts = row['exonStarts'][:-1].split(',')
-    exon_ends = row['exonEnds'][:-1].split(',')
+    exon_starts = list(map(int, row['exonStarts'][:-1].split(',')))
+    exon_ends = list(map(int, row['exonEnds'][:-1].split(',')))
     # Determine whether the record represents a non-coding gene. (cdsStart == cdsEnd)
     cds_available = int(row['cdsStart']) < int(row['cdsEnd'])
-
+    __pre, __cur = 0, 1
+    consec = False
+    intron_starts = []
+    intron_ends = []
+    while __cur < len(exon_starts):
+        if exon_starts[__cur] > exon_ends[__pre] + 1:
+            intron_starts.append(exon_ends[__pre] + 1)
+            intron_ends.append(exon_starts[__cur] - 1)
+            if consec:
+                consec = False
+        elif consec:
+            pass
+        else:
+            consec = True
+        __pre += 1
+        __cur += 1
     if row['strand'] == '+':
-        intron_starts = [int(exon_ends[i]) + 1 for i in range(0, len(exon_ends)-1)]
-        intron_ends = [int(exon_starts[i]) - 1 for i in range(1, len(exon_starts))]
         if cds_available:
             utr_5_starts = row['txStart']
             utr_5_ends = row['cdsStart'] - 1
@@ -72,8 +85,6 @@ def get_intron_coor(row):
             utr_3_starts = row['cdsEnd'] + 1
             utr_3_ends = row['txEnd']
     elif row['strand'] == '-':
-        intron_starts = [int(exon_ends[i]) + 1 for i in range(0, len(exon_ends)-1)]
-        intron_ends = [int(exon_starts[i]) - 1 for i in range(1, len(exon_starts))]
         intron_starts.reverse()
         intron_ends.reverse()
         if cds_available:
@@ -208,7 +219,7 @@ def convert_per_row(row, table, label, delimiter):
             search_symbols = str(row[label]).split(delimiter)
             if bool_ser_alias.any(): alias_symbols = table.loc[bool_ser_alias, 'alias_symbol'].str.split("|", expand=True)
             if bool_ser_prev.any(): prev_symbols = table.loc[bool_ser_prev, 'prev_symbol'].str.split("|", expand=True)
-            if 'alias_symbols' in locals() and 'prev_symbols' in locals(): 
+            if 'alias_symbols' in locals() and 'prev_symbols' in locals():
                 symbol_dict = {alias_symbols.shape[1]: 'alias_symbol', prev_symbols.shape[1]:'prev_symbol'}
                 if symbol_dict[min(alias_symbols.shape[1], prev_symbols.shape[1])] == "alias_symbol":
                     return delimiter.join(table.loc[bool_ser_alias,'symbol'].tolist())
@@ -217,7 +228,7 @@ def convert_per_row(row, table, label, delimiter):
             else:
                 return delimiter.join(alias_or_prev_record_list)
         else:
-            return str(row[label])              
+            return str(row[label])
 
 def main_convert(output_merged, output_exon, output_intron, target_genes=None):
 
@@ -258,6 +269,7 @@ def main_convert(output_merged, output_exon, output_intron, target_genes=None):
     # convert list of dicts to dict and split it to two dfs
     merged_df = pd.DataFrame.from_records(df_array)
     merged_df.dropna(how='all', inplace=True)
+    merged_df = merged_df.replace(to_replace = "", value = ".")
     logging.info(str(merged_df.head()))
     merged_exon_df = merged_df.loc[merged_df['Feature'].str.startswith("exon"), :]
     merged_intron_df = merged_df.loc[np.logical_not(merged_df['Feature'].str.startswith("exon")), :]
