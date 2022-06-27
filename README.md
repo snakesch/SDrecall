@@ -49,21 +49,32 @@ Alternatively, follow the steps below to download from [NCBI RefSeq FTP server](
 ```{bash}
 ./geneAnnotation.py -om <merged output path> -oe <exon output path> -oi <intron output path>
 ```
-Please specify the **full paths** (directory + file name) for all 3 arguments. `-om` writes the merged output (exon & intron); `-oe` writes only exon output; `-oi` writes only intron output. All 3 outputs will be formatted accordingly to the desired output.  
+Available options:
+`-om`: combined exon & intron annotation table
+`-oe`: exon annotation table
+`-oi`: intron annotation table
+
+Please specify the **full paths** (directory + file name) for all 3 arguments.
 
 #### 0.2. Extract SD regions by BISER
 ```{bash}
 ./1_biserFetch.sh [-h] --ref-genome REF_GENOME --out OUTPUT_PATH [--thread THREAD=8]
 ```
-This script writes extracted regions to <OUTPUT_PATH>/SD_hg19.bed (for hg19 build). By default, 8 threads are used.
-
-Note: Users are advised to use 6-10 threads for this step. (<6 threads will lead to unnecessarily long execution time)
+Available options:
+* `--ref-genome|-r`: path of reference genome (hg19)
+* `--out|-o`: output path, file is written to OUTPUT_PATH/SD_hg19.bed
+* `--thread|-t`: number of threads (Recommended: 6-10)
 
 #### 0.3. Trim CIGAR strings of BISER output
 ```{bash}
 ./2_trimCIGAR.py [-h] -i INPUT_FN -o OUTPUT_FN [--fraglen | -f  FRAGLEN=300] [--gaplen | -g GAPLEN=10] [--verbose | -v VERBOSE=INFO]
 ```
-Input BED file is trimmed by its CIGAR strings record by record. Resulting BED is written to OUTPUT_FN. By default, FRAGLEN = 300 and GAPLEN = 10. VERBOSE can be any logging level stipulated in [python's logging module](https://docs.python.org/3/library/logging.html#logging-levels).
+Available options:
+* `--input|-i`: input path of BED files
+* `--output|-o`: output directory
+* `--fraglen|-f`: fragment length cutoff (Default: 300)
+* `--gaplen|-g`: small gap cutoff (Default: 10)
+* `--verbose|-v`: verbosity level (any logging level stipulated in [python's logging module](https://docs.python.org/3/library/logging.html#logging-levels))
 
 ##### 0.3.1. Trimming logic
 For the CIGAR string of each record, we first format the string as a list of tuples (INT, LABEL) where INT is the fragment length and LABEL belongs to the set {D, I, N, S, M}. We aim to extract 1) contiguous block of match/mismatch (M) with fragment length >= FRAGLEN, and 2) discontinuous blocks with total gap length <= GAPLEN. In the case where no M fragment with fragment length >= FRAGLEN is found, we only consider the latter discontinuous blocks. In case overlapping blocks are
@@ -84,9 +95,15 @@ extracted_block = [ (7, M), (1, S), (2, D), (292, M), (5, D), (30, M) ]
 ```{bash}
 ./3_annotateExtract.py [-h] -i INPUT -r REF -o OUTPATH [-l LIST] [-c|--genecol GENECOL=16] [-v VERBOSE=INFO]
 ```
-This step requires trimmed BED file from part 2 as INPUT. Gene annotation is done with reference to REF specified by `-r`. Users can also provide a list of genes of interest. Current alogorithm will extract specified genes for analysis (`-l`); it takes the whole annotated BED file for analysis if otherwise. GENECOL is a 0-based column index of "Genetic defect" in the given table/list (default = 16). 
+Available options:
+* `--input|-i`: input path of trimmed BED file (from previous step)
+* `--out|-o`: output path
+* `--ref|-r`: reference annotation table (tab-separated)
+* `--genecol|-c`: 0-based column index of "Genetic defect" in reference annotation table (Default: 16)
+* `--list|-l`: list of genes of interest (genes not listed will be excluded) (optional)
+* `--verbose|-v`: verbosity level
 
-The gene/region list should contain the following column:
+Note: The gene list should contain the following column (0-based index should be specified with `-c`):
 
 | Genetic defect |
 | -------------- |
@@ -120,9 +137,14 @@ For multiple regions analysis,
 ```{bash}
 find DIR -name "*.bed" | xargs -I{} -P XARGS_THREADS -t bash ./4_preparation.sh --input-bam BAM --region-list {} --ref-genome REF_GENOME --ref-bed REF_BED --out OUTPATH [-mq INT=30] [--thread THREAD=8]
 ```
-BAM is the path of base quality score recalibrated (BQSR) BAM file, REF_GENOME is the indexed reference genome FASTA file, REF_BED contains 3 columns (in order): chromosome name, 0 (start pos) and length of the chromosome (in bp). `-mq` is the mapping quality filtering threshold. OUTPATH is the desired output directory. By default, THREAD = 8.
-
-For multiple regions analysis, DIR is the directory containing all BED files created in step 0. Total number of threads used = `XARGS_THREADS x THREAD`.
+Available options:
+* `--input-bam|-i`: input path of base quality score recalibrated (BQSR) BAM file
+* `--ref-genome|-r`: path of reference genome
+* `--region-list|-l`: file list of BED files / path of BED file
+* `--ref-bed|-rb`: BED of reference genome (3 columns (in order): chromosome name, start position and length of chromosome (in bp)
+* `--mq-threshold|-mq`: mapping quality (MQ) threshold (Default: 30)
+* `--out|-o`: output path
+* `--thread|-t`: number of threads (Default: 8) (For multiple regions analysis, total number of threads used = XARGS_THREADS $\times$ THREAD
 
 In this step, we extract regions in REGION_BED from BAM and prepare masked genomes for each of the regions. A table of all files related to a certain region is also created. In the extraction step, we extract reads tagged with XA (multi-aligned) or with mapping quality MQ < _&alpha;_ where _&alpha;_ is the mapping quality threshold specified by `-mq`, which holds a default value of 30. Masked genomes are written to `OUTPATH/masked_genome/` and indexed.
 
@@ -138,6 +160,7 @@ Available options:
 * `--input-bam`: input BQSR BAM file
 * `--data`: parent directory of `masked_genome` and `fastq`
 * `--region-bed`: BED file of selected SD regions
+* `--thread|-t`: number of threads (Default: 10)
 
 Note: The script only handles ONE BED file each time. To analyse multiple regions, users can iterate over each BED file:
 ```{bash}
