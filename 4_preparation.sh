@@ -98,7 +98,7 @@ if [[ $( echo "$(samtools --version-only | cut -d. -f1-2) >= 1.15" | bc -l ) -eq
     exit 127
 fi
 
-if ! $(dirname $(realpath -s $0))/src/checkBAM.sh
+if ! $(dirname $(realpath -s $0))/src/checkBAM.sh -t $NTHREADS ${INPUT_BAM}
 then
     exit 5
 fi
@@ -114,14 +114,14 @@ bedtools sort -i "$REGION" | bedtools merge -i - | sort -k1,1 -V -s > ${OUTPATH}
 samtools view -hb -@ ${NTHREADS} -P -L "$REGION" "$INPUT_BAM" > ${OUTPATH}/${REGION_PREFIX}_extracted.bam.tmp
 
 # Extract XA reads OR MQ < MQ_THRES
-samtools view -h -@ ${NTHREADS} ${OUTPATH}/${REGION_PREFIX}_extracted.bam.tmp | awk -F'\t' -v mq=${MQ_THRES} '($0 ~ /XA:Z/ || $5 < mq) {print $1}' | sort -uV | uniq > ${OUTPATH}/${REGION_PREFIX}_qnames.tmp
+samtools view -h -@ ${NTHREADS} ${OUTPATH}/${REGION_PREFIX}_extracted.bam.tmp | awk -F'\t' -v mq=${MQ_THRES} '($0 ~ /XA:Z/ || $5 < mq) {print $1;}' | sort -uV | uniq > ${OUTPATH}/${REGION_PREFIX}_qnames.tmp
 samtools view --qname-file ${OUTPATH}/${REGION_PREFIX}_qnames.tmp -h -b -@ ${NTHREADS} ${OUTPATH}/${REGION_PREFIX}_extracted.bam.tmp > ${OUTPATH}/${REGION_PREFIX}_extracted.bam
 RECORDS=$(samtools view -c ${OUTPATH}/${REGION_PREFIX}_extracted.bam)
 echo -e "$(timestamp) INFO: Total number of reads extracted : ${RECORDS}"
 if [[ $RECORDS -eq 0 ]]
 then
-    echo -e >&2 "$(timestamp) ERROR: No reads extracted! (Criteria: XA / MQ < ${MQ_THRES})"
-    echo -e >&2 "$(timestamp) ERROR: Hint: Check ${OUTPATH}/${REGION_PREFIX}_extracted.bam.tmp"
+    echo -e >&2 "$(timestamp) WARNING: No reads extracted! (Criteria: XA / MQ < ${MQ_THRES})"
+    echo -e >&2 "$(timestamp) WARNING: Hint: Check ${OUTPATH}/${REGION_PREFIX}_extracted.bam.tmp"
     exit 4
 fi
 
@@ -130,7 +130,7 @@ samtools sort -n -o ${OUTPATH}/${REGION_PREFIX}_extracted_sorted.bam.tmp ${OUTPA
 
 # Generate paired-end FASTQ
 [[ -d "${OUTPATH}/fastq/" ]] || mkdir -p "${OUTPATH}/fastq/"
-samtools fastq -1 ${OUTPATH}/fastq/$(basename $INPUT_BAM | cut -d. -f1)_${REGION_PREFIX}-XA_1.fq -2 ${OUTPATH}/fastq/$(basename $INPUT_BAM | cut -d. -f1)_${REGION_PREFIX}-XA_2.fq -0 /dev/null -s /dev/null -n -@ 4 ${OUTPATH}/${REGION_PREFIX}_extracted_sorted.bam.tmp
+samtools fastq -1 ${OUTPATH}/fastq/$(basename $INPUT_BAM | cut -d. -f1)_${REGION_PREFIX}-XA_1.fq -2 ${OUTPATH}/fastq/$(basename $INPUT_BAM | cut -d. -f1)_${REGION_PREFIX}-XA_2.fq -0 /dev/null -s /dev/null -n -@ $NTHREADS ${OUTPATH}/${REGION_PREFIX}_extracted_sorted.bam.tmp
 
 gzip -f "${OUTPATH}/fastq/$(basename $INPUT_BAM | cut -d. -f1)_${REGION_PREFIX}-XA_1.fq"
 gzip -f "${OUTPATH}/fastq/$(basename $INPUT_BAM | cut -d. -f1)_${REGION_PREFIX}-XA_2.fq"

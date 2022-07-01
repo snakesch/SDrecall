@@ -1,0 +1,56 @@
+Bootstrap: docker
+From: centos:centos7
+
+%setup
+    echo -e "Begin to compile definition file ... "
+
+%post
+    set -e
+
+    # Basic utilities.
+    yum install -y wget git-all git zlib1g-dev vim 
+    yum group install -y "Development Tools"
+    mkdir -p "/root/tools/"
+    cd "/root/tools/"
+
+    # Install miniconda.
+    wget -c https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
+    bash Miniconda3-latest-Linux-x86_64.sh -b -p /opt/miniconda
+    . /opt/miniconda/etc/profile.d/conda.sh
+
+    cd "/root/"
+    git clone https://github.com/snakesch/misc.git misc
+
+    cd "misc/"
+    conda env create -f environment.yml
+    cd "/opt/miniconda/bin"
+    echo -e "source /opt/miniconda/bin/activate shortVariantFromSD" >> /root/.bashrc
+
+    # Clone work repository 
+    # git clone git@github.com:snakesch/shortVariantVCF.git
+
+%environment
+    export LC_ALL=C
+
+%runscript
+    echo -e "Container created successfully."
+    exec /bin/bash/ -i
+
+%test
+    which bwa
+    which mosdepth
+    which gatk
+    which samtools
+    which bedtools
+    which seqkit
+    which python3
+    which biser
+    which gcc
+    which seqtk
+
+%labels
+    Author louisshe@hku.hk (Louis SHE)
+    Version v0.0.1
+
+%help
+    This is a Singularity definition file for implementing short variant calling from SD regions.

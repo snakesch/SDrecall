@@ -55,10 +55,19 @@ INVALID=($(echo ${all_regions[@]} ${vcf_regions[@]} | tr ' ' '\n' | sort | uniq 
 echo -e "$(timestamp) INFO: Regions with valid VCF: ${VALID[@]}"
 echo -e "$(timestamp) INFO: Regions with invalid VCF: ${INVALID[@]}"
 
-bcftools_concatvcfs -v ${valid_files} -o ${VCFPATH}/${samp_ID}.homo_region.vcf.gz
+find $VCFPATH -name "*.vcf.gz" -type f | grep -v "HC.g" | sort -uV | uniq > ${VCFPATH}/${samp_ID}.homo_region.tmp
+bcftools concat -a --no-version -Ov -f ${VCFPATH}/${samp_ID}.homo_region.tmp -o ${VCFPATH}/${samp_ID}.homo_region.vcf
+rm -f ${VCFPATH}/${samp_ID}.homo_region.tmp
+bcftools sort -Oz ${VCFPATH}/${samp_ID}.homo_region.vcf -o ${VCFPATH}/${samp_ID}.homo_region.vcf.gz
+if [ -f "${VCFPATH}/${samp_ID}.homo_region.vcf" ]; then rm -f "${VCFPATH}/${samp_ID}.homo_region.vcf"; fi
+if ! isValidVCF ${VCFPATH}/${samp_ID}.homo_region.vcf.gz
+then
+    echo -e >&2 "$(timestamp) ERROR: Failed to concatenate VCFs of homologous regions."
+    exit 1
+fi
 
 python3 $(dirname $(dirname $VCFPATH))/src/compare_with_intrinsic_vcf.py -qv ${VCFPATH}/${samp_ID}.homo_region.vcf.gz -ov ${VCFPATH}/${samp_ID}.homo_region.filtered.vcf.gz -iv "$(dirname $(dirname $VCFPATH))/ref/intrinsic_diff_calls.trimmed.bial.vcf.gz"
-tabix -f -p vcf ${VCFPATH}/${samp_ID}.homo_region.filtered.vcf.gz
+bcftools index ${VCFPATH}/${samp_ID}.homo_region.filtered.vcf.gz
 
 # Cleanup (remove masked genomes & intermediate VCFs)
 if [ -d $(dirname $VCFPATH)/masked_genome ]; then

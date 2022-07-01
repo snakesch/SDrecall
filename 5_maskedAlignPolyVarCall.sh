@@ -66,15 +66,15 @@ done
 NTHREADS=${NTHREADS:-10}
 REGION=$(basename $(basename ${REGION_BED} .bed) _related_homo_regions)
 declare -a fastq=($(find ${DATAPATH}/fastq/ -name "*${REGION}*.fq.gz" -type f | sort))
-declare -a mgenome=($(find ${DATAPATH}/masked_genome/ -name "*${REGION}_masked.fasta" -type f | sort))
+declare -a mgenome=($(find ${DATAPATH}/masked_genome/ -name "$(basename ${REF_GENOME} .fasta)_${REGION}_masked.fasta" -type f | sort))
 if [[ "${#mgenome[@]}" -gt 1 ]]
 then
     echo -e >&2 "$(timestamp) ERROR: More than 1 masked genome found for ${REGION}!"
     exit 129
 elif [[ "${#mgenome[@]}" -eq 0 ]]
 then
-    echo -e >&2 "$(timestamp) ERROR: No masked genome found for ${REGION}!"
-    exit 3
+    echo -e >&2 "$(timestamp) WARNING: No masked genome found for ${REGION}! (Probably due to 0 coverage in input BAM file.)"
+    exit 0
 fi
 [[ ${#fastq[@]} -eq 2 ]] || exit 3;
 
@@ -88,7 +88,7 @@ ori_depth=$(getDepth $INPUT_BAM $REGION_BED $NTHREADS)
 ori_hq_depth=$(getDepth $INPUT_BAM $REGION_BED $NTHREADS HQ)
 echo -e "$(timestamp) INFO: Average depth = ${ori_depth}"
 echo -e "$(timestamp) INFO: Average depth (XA removed) = ${ori_hq_depth}"
- echo -e "$(timestamp) INFO: Running BWA MEM on $NTHREADS threads for ${REGION}"
+echo -e "$(timestamp) INFO: Running BWA MEM on $NTHREADS threads for ${REGION}"
 time bwa mem -t "${NTHREADS}" -M -R "@RG\tID:${samp_ID}\tLB:SureSelectXT Library Prep Kit\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}" "${mgenome}" "${fastq[0]}" "${fastq[1]}" | samtools view -uSh -@ "${NTHREADS}" - | samtools sort -O bam -@ "${NTHREADS}" -o "${aligned_out}"
 samtools index "${aligned_out}"
 echo -e "$(timestamp) INFO: BWA MEM completed for ${REGION}"
@@ -169,18 +169,26 @@ then
     tabix -f -p vcf "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz"
 
     [[ -f "${REF_GENOME}.fai" ]] || samtools faidx "${REF_GENOME}";
-    awk -F'\t' '{printf "##contig=<ID=%s,length=%d>\n", $1, $2}' "${REF_GENOME}.fai" | bcftools reheader -h - -o "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.reheader.vcf.gz" "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz"
-    rm -f "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz" && mv "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.reheader.vcf.gz" "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz"
+    awk -F'\t' '{printf "##contig=<ID=%s,length=%d>\n", $1, $2}' "${REF_GENOME}.fai" > "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.contig_header.tmp"
+    zgrep "^##" "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz" | grep -v "^##contig=" > "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.other_header.tmp"
+    zgrep "^#CHROM" "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz" > "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.chrom_header.tmp"
+    
+    cat "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.other_header.tmp" "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.contig_header.tmp" "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.chrom_header.tmp" > "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.new_header.tmp"
+    rm -f "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.other_header.tmp" "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.contig_header.tmp" "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.chrom_header.tmp"
+    
+    bcftools reheader -h "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.new_header.tmp" -o "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.reheader.vcf.gz" "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz"
+    rm -f "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz" "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.new_header.tmp" && mv "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.reheader.vcf.gz" "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz"
 
     python3 $(dirname $(realpath -s $0))/src/convert_vcf_to_diploidy.py -vp "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz" || echo -e >&2 "$(timestamp) ERROR: Failed to convert multiploid VCF to diploid VCF";
 
-    pick_poorcov_region_bam -i "${INPUT_BAM}" -t "${REGION_BED}" -o "${INPUT_BAM/.bam}.${REGION}.txt" && echo -e "$(timestamp) INFO: The poor coverage region in ${INPUT_BAM} overlapping with ${REGION_BED} is stored in "${INPUT_BAM/.bam}.${REGION}.txt": (Show first 5 rows)"
-    head -5 "${INPUT_BAM/.bam}.${REGION}.txt"
-    bcftools view -R "${INPUT_BAM/.bam}.${REGION}.txt" -Oz -o "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz" "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz"
-    if check_vcf_validity "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz"; then
+    pick_poorcov_region_bam -i "${INPUT_BAM}" -t "${REGION_BED}" -o "${INPUT_BAM/.bam}.${REGION}.txt" && echo -e "$(timestamp) INFO: The poor coverage region in ${INPUT_BAM} overlapping with ${REGION_BED} is stored in "${INPUT_BAM/.bam}.${REGION}.txt
+    bcftools view -R "${INPUT_BAM/.bam}.${REGION}.txt" -Oz -o "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.tmp.vcf.gz" "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz"
+    bcftools sort -Oz "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.tmp.vcf.gz" -o "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz"
+    rm -f "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.tmp.vcf.gz"
+    if isValidVCF "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz"; then
         echo -e "$(timestamp): INFO: In function ${FUNCNAME}: Picked out variants in poor coverage regions: ${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz"
     else
         >&2 echo -e "$(timestamp): ERROR: In function ${FUNCNAME}: Error in picking out variants in poor coverage regions: ${REGION}."
-        return 1
+        exit 1
     fi
 fi
