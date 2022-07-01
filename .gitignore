@@ -8,3 +8,4 @@ archive
 .ipynb_checkpoints
 __pycache__
 *.log
+setup/*.sif
