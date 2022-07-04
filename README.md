@@ -1,6 +1,6 @@
-# Short Variant Calling
+# SDrecall
 
-This is the prototype of a tool for calling short variants that may be missed by GATK best practice by ascertaining segmental duplication regions. It only supports hg19 build now.
+SDrecall is the prototype of a tool for calling short variants that may be missed by GATK best practice by ascertaining segmental duplication regions. It only supports hg19 build now.
 
 ## Prerequisites
 * [samtools](http://www.htslib.org/) >=v1.15
@@ -37,11 +37,24 @@ cd .. # Users should find main scripts in parent directory of setup/
 * A gene panel in BEDPE format (See [part 0.4](https://github.com/snakesch/shortVariantVCF#04-annotate-and-extract-regions-of-interest))
 
 ## Quick run
-:crystal_ball: TODO: Quick run wrapper script :crystal_ball:
+```{bash}
+Usage:    ./wrapper.sh
 
+Required:
+          --input-bam|-i          | input BQSR BAM file
+          --ref-bed|-rb           | BED file of reference genome
+          --ref-genome|-rg        | reference genome
+          --out|-o                | output directory (default: ./out)
+
+Optional:
+          --fraglen|-f            | fragment length FRAGLEN in CIGAR processing (default: 300)
+          --gaplen|-g             | small gap cutoff GAPLEN in CIGAR processing (default: 10)
+          --mq|-mq                | MQ threshold for extracting multi-aligned reads (default: 30)
+          --thread|-t             | number of threads (default: 8)
+          --gene-list|-l          | list of genes of interest
+```
 ## Custom run
 As users may allocate different number of threads in each step, custom run allows users to execute each step separately with a defined number of threads. Users are advised to reserve more threads for WGS data as described [here](customRun.md).
 
 ## Contact and correspondance
-
 Xingtian Yang (Email), Louis She (louisshe@hku.hk)
