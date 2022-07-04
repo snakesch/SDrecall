@@ -18,15 +18,18 @@ SDrecall is the prototype of a tool for calling short variants that may be misse
 * [bcftools](http://www.htslib.org/download/) >=v1.14
 
 ## Installation
+For conda users, create an environment from YAML.
+```{bash}
+conda env create -f ./setup/environment.yml
+```
+For users who wish not to install conda locally may download [Singularity](https://docs.sylabs.io/guides/3.0/user-guide/quick_start.html). Singularity allows users to build a container from an image pulled from Singularity hub without root privilege. A CentOS image is provided here.
+
 ```{bash}
 # - Clone from a temporary repository until actual release - #
-# Install by conda
-conda env create -f ./setup/environment.yml
-
-# Install via Singularity
 cd setup && singularity build svsd.sif svsd.def # This step may take some time
 singularity shell svsd.sif # Create a Singularity shell
-cd .. # Users should find main scripts in parent directory of setup/
+conda env create -f ./setup/environment.yml
+source /opt/miniconda/bin/activate SDrecall
 ```
 
 ## Input files
