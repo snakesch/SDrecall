@@ -100,7 +100,7 @@ function isValidVCF () {
             cat $vcf | bgzip -c > ${vcf}.gz
         fi
 
-        if [ ! -f ${vcf}.csi ]; then bcftools index $vcf; fi
+        if [ ! -f ${vcf}.tbi ]; then tabix -p vcf $vcf; fi
         gatk ValidateVariants -V $vcf --validation-type-to-exclude ALL 1>/dev/null 2>&1
     done
 }

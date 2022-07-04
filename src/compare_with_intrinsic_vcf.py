@@ -51,11 +51,7 @@ def if_same_vcfrec(rec1, rec2):
     '''
     Input rec1 and rec2 are vcfpy.Record object
     '''
-    if rec1.CHROM == rec2.CHROM and rec1.POS == rec2.POS and rec1.REF == rec2.REF and rec1.ALT[0] == rec2.ALT[0]:
-        return True
-    else:
-        return False
-
+    return (rec1.CHROM == rec2.CHROM) and (rec1.POS == rec2.POS) and (rec1.REF == rec2.REF) and (rec1.ALT[0] == rec2.ALT[0])
 
 def modify_intrin_vars(rec_tuple, lowerbound=1.1):
     '''

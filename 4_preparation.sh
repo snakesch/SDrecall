@@ -60,7 +60,7 @@ do
             shift
             ;;
         --help|-h)
-            echo "Extract multi-aligned readds from SD regions from BAM and prepare masked genomes"
+            echo "Extract multi-aligned reads from SD regions from BAM and prepare masked genomes"
             echo "Usage:    $BASH_SOURCE"
             echo "          --input-bam | -i        | path of indexed BAM file"
             echo "          --region-list | -l      | list of regions in BED format"

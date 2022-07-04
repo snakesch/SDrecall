@@ -305,14 +305,14 @@ def main_convert(output_merged, output_exon, output_intron, target_genes=None):
 
 if __name__ == '__main__':
     parser = ap.ArgumentParser()
-    parser.add_argument("-om", "--output_merged", type=str, help="The path leading to the file of output merged annotation table",
+    parser.add_argument("-om", "--output_merged", type=str, help="Output path of merged annotation table (exon & intron)",
                         required=True)
-    parser.add_argument("-oe", "--output_exon", type=str, help="The path leading to the file of output exon annotation table",
+    parser.add_argument("-oe", "--output_exon", type=str, help="Output path of exon annotation table",
                         required=True)
-    parser.add_argument("-oi", "--output_intron", type=str, help="The path leading to the file of output intron annotation table",
+    parser.add_argument("-oi", "--output_intron", type=str, help="Output path of intron annotation table",
                         required=True)
     parser.add_argument("-v", "--verbose", type=str, default="INFO", help="Verbosity level")
-    parser.add_argument("-tg", "--target_genes", type=str, help="The path leading to the file of target gene list with one gene per row.",
+    parser.add_argument("-tg", "--target_genes", type=str, help="Target gene list (one gene per row)",
                         required=False, default=None)
 
     args = parser.parse_args()

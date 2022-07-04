@@ -67,7 +67,6 @@ then
 fi
 
 python3 $(dirname $(dirname $VCFPATH))/src/compare_with_intrinsic_vcf.py -qv ${VCFPATH}/${samp_ID}.homo_region.vcf.gz -ov ${VCFPATH}/${samp_ID}.homo_region.filtered.vcf.gz -iv "$(dirname $(dirname $VCFPATH))/ref/intrinsic_diff_calls.trimmed.bial.vcf.gz"
-bcftools index ${VCFPATH}/${samp_ID}.homo_region.filtered.vcf.gz
 
 # Cleanup (remove masked genomes & intermediate VCFs)
 if [ -d $(dirname $VCFPATH)/masked_genome ]; then
