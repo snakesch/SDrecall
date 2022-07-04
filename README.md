@@ -4,18 +4,31 @@
 This pipeline extracts segmental duplication (SD) regions from a given genome, annotates the regions and extracts regions that intersect known causal genes of certain diseases. 
 
 ## Prerequisites
-* [samtools](http://www.htslib.org/) >=v1.15.1
-* [BEDTools](https://bedtools.readthedocs.io/en/latest/) >=v2.27.1
+* [samtools](http://www.htslib.org/) >=v1.15
+* [BEDTools](https://bedtools.readthedocs.io/en/latest/) >=v2.30.0
 * [BISER](https://github.com/0xTCG/biser) >=v1.1
 * [seqkit](https://github.com/shenwei356/seqkit) >=v2.2.0
 * [seqtk](https://github.com/lh3/seqtk) >=v1.3
-* [GATK](https://gatk.broadinstitute.org/hc/en-us) >=v4.2.5
+* [GATK](https://gatk.broadinstitute.org/hc/en-us) >=v4.2.6.1
 * [bwa](https://github.com/lh3/bwa) >=v0.7.17
 * [GCC](https://gcc.gnu.org/) >=v9.1.0
-* [Python](https://www.python.org/downloads/) >=v3.9
-* [HTSlib](http://www.htslib.org/download/) >=v1.7
+* [Python](https://www.python.org/downloads/) >=v3.9.2
+* [HTSlib](http://www.htslib.org/download/) >=v1.14
 * [VCFPy](https://github.com/bihealth/vcfpy) >=v0.13.4
-* [mosdepth](https://github.com/brentp/mosdepth)
+* [mosdepth](https://github.com/brentp/mosdepth) >=v0.3.3
+* [bcftools](http://www.htslib.org/download/) >=v1.14
+
+## Installation
+```{bash}
+# - Clone from a temporary repository until actual release - #
+# Install by conda
+conda env create -f ./setup/environment.yml
+
+# Install via Singularity
+cd setup && singularity build svsd.sif svsd.def # This step may take some time
+singularity shell svsd.sif # Create a Singularity shell
+cd .. # Users should find main scripts in parent directory of setup/
+```
 
 ## Input files
 ### Required
@@ -173,11 +186,15 @@ done
 #### 2.1. Realign against masked genome
 Paired-end FASTQs generated from BAM_PATH (stored in `fastq/`) are realigned to respective masked genomes stored in `masked_genome/`. Ploidy is estimated as follows. 
 
-$ Depth_1 = Average depth of all reads in input BAM file $
-$ Depth_2 = Average depth of high-quality reads in input BAM file $
-$ Depth_3 = Average depth of all reads in the extracted BAM file $
-$ Depth_4 = Depth_3 - Depth_2 $
-$ Ploidy = 2 \times {Depth_4}/{Depth_1} $
+Depth_1 = Average depth of all reads in input BAM file
+    
+Depth_2 = Average depth of high-quality reads in input BAM file
+    
+Depth_3 = Average depth of all reads in the extracted BAM file
+    
+Depth_4 = Depth_3 - Depth_2
+    
+Ploidy = 2 $\times$ Depth_4 / Depth_1
     
 Variants are called if and only if ploidy >= 2. Regions are omitted if otherwise.
     
