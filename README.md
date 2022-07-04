@@ -40,7 +40,7 @@ cd .. # Users should find main scripts in parent directory of setup/
 :crystal_ball: TODO: Quick run wrapper script :crystal_ball:
 
 ## Custom run
-As users may allocate different number of threads in each step, custom run allows users to execute each step separately with a defined number of threads. Users are advised to reserve more threads for WGS data.
+As users may allocate different number of threads in each step, custom run allows users to execute each step separately with a defined number of threads. Users are advised to reserve more threads for WGS data as described [here](customRun.md).
 
 ## Contact and correspondance
 
