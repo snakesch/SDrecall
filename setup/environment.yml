@@ -1,4 +1,4 @@
-name: shortVariantFromSD 
+name: SDrecall 
 channels:
   - conda-forge
   - bioconda

@@ -21,37 +21,23 @@ From: centos:centos7
     cd "/root/"
     git clone https://github.com/snakesch/misc.git misc
 
-    cd "misc/"
-#    conda env create -f environment.yml
-    cd "/opt/miniconda/bin"
-    echo -e "source /opt/miniconda/bin/activate shortVariantFromSD" >> /root/.bashrc
-
     # Clone work repository 
     # git clone git@github.com:snakesch/shortVariantVCF.git
 
 %environment
     export LC_ALL=C
+    source /opt/miniconda/bin/activate
 
 %runscript
     echo -e "Container created successfully."
     exec /bin/bash/ -i
-    source /root/.bashrc
 
 #%test
-#    which bwa
-#    which mosdepth
-#    which gatk
-#    which samtools
-#    which bedtools
-#    which seqkit
-#    which python3
-#    which biser
-#    which gcc
-#    which seqtk
-#
+    which conda    
+
 %labels
     Author louisshe@hku.hk (Louis SHE)
     Version v0.0.1
 
 %help
-    This is a Singularity definition file for implementing short variant calling from SD regions.
+    This is a Singularity definition file for running SDrecall.
