@@ -54,7 +54,7 @@ Optional:
           --gene-list|-l          | list of genes of interest
 ```
 ## Custom run
-As users may allocate different number of threads in each step, custom run allows users to execute each step separately with a defined number of threads. Users are advised to reserve more threads for WGS data as described [here](customRun.md).
+As users may allocate different number of threads in each step, custom run allows users to execute each step separately with a defined number of threads. Users are advised to reserve more threads for WGS data as described [here](doc/customRun.md).
 
 ## Contact and correspondance
 Xingtian Yang (Email), Louis She (louisshe@hku.hk)
