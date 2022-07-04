@@ -22,7 +22,7 @@ From: centos:centos7
     git clone https://github.com/snakesch/misc.git misc
 
     cd "misc/"
-    conda env create -f environment.yml
+#    conda env create -f environment.yml
     cd "/opt/miniconda/bin"
     echo -e "source /opt/miniconda/bin/activate shortVariantFromSD" >> /root/.bashrc
 

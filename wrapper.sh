@@ -64,7 +64,7 @@ do
             echo -e "\nOptional:"
             echo "          --fraglen|-f            | fragment length FRAGLEN in CIGAR processing (default: 300)"
             echo "          --gaplen|-g             | small gap cutoff GAPLEN in CIGAR processing (default: 10)"
-            echo "          --mq|-mq                | MQ threshold for extracting multi-aligned reads"
+            echo "          --mq|-mq                | MQ threshold for extracting multi-aligned reads (default: 30)"
             echo "          --thread|-t             | number of threads (default: 8)"
             echo "          --gene-list|-l          | list of genes of interest"
             exit 0
