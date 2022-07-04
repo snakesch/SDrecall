@@ -21,6 +21,7 @@ SDrecall is the prototype of a tool for calling short variants that may be misse
 For conda users, create an environment from YAML.
 ```{bash}
 conda env create -f ./setup/environment.yml
+conda activate SDrecall
 ```
 For users who wish not to install conda locally may download [Singularity](https://docs.sylabs.io/guides/3.0/user-guide/quick_start.html). Singularity allows users to build a container from an image pulled from Singularity hub without root privilege. A CentOS image is provided here.
 
@@ -35,7 +36,8 @@ source /opt/miniconda/bin/activate SDrecall
 ## Input files
 ### Required
 * Base Quality Score Recalibrated (BQSR) BAM file
-* Gene annotation file (use NCBI RefSeq data if not specified)
+* Gene annotation file ([NCBI RefSeq data](https://github.com/snakesch/SDrecall/blob/main/doc/customRun.md#gene-annotation-file))
+
 ### Optional
 * A gene panel in BEDPE format (See [part 0.4](https://github.com/snakesch/shortVariantVCF#04-annotate-and-extract-regions-of-interest))
 
@@ -47,6 +49,7 @@ Required:
           --input-bam|-i          | input BQSR BAM file
           --ref-bed|-rb           | BED file of reference genome
           --ref-genome|-rg        | reference genome
+          --anno-ref|-a           | annotation table
           --out|-o                | output directory (default: ./out)
 
 Optional:
@@ -54,6 +57,7 @@ Optional:
           --gaplen|-g             | small gap cutoff GAPLEN in CIGAR processing (default: 10)
           --mq|-mq                | MQ threshold for extracting multi-aligned reads (default: 30)
           --thread|-t             | number of threads (default: 8)
+          --log                   | log level (default: INFO)
           --gene-list|-l          | list of genes of interest
 ```
 ## Custom run
