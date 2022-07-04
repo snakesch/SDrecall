@@ -56,5 +56,10 @@ Optional:
 ## Custom run
 As users may allocate different number of threads in each step, custom run allows users to execute each step separately with a defined number of threads. Users are advised to reserve more threads for WGS data as described [here](doc/customRun.md).
 
+## Workflow
+<p align="center">
+  <img src="doc/SDrecall.png" />
+</p>
+
 ## Contact and correspondance
 Xingtian Yang (Email), Louis She (louisshe@hku.hk)
