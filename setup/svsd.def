@@ -35,19 +35,20 @@ From: centos:centos7
 %runscript
     echo -e "Container created successfully."
     exec /bin/bash/ -i
+    source /root/.bashrc
 
-%test
-    which bwa
-    which mosdepth
-    which gatk
-    which samtools
-    which bedtools
-    which seqkit
-    which python3
-    which biser
-    which gcc
-    which seqtk
-
+#%test
+#    which bwa
+#    which mosdepth
+#    which gatk
+#    which samtools
+#    which bedtools
+#    which seqkit
+#    which python3
+#    which biser
+#    which gcc
+#    which seqtk
+#
 %labels
     Author louisshe@hku.hk (Louis SHE)
     Version v0.0.1
