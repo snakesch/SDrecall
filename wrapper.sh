@@ -23,6 +23,11 @@ do
             shift
             shift
             ;;
+        --anno-ref|-a)
+            ANNO_REF="$2"
+            shift
+            shift
+            ;;
         --out|-o)
             OUTPATH="$2"
             shift
@@ -43,6 +48,11 @@ do
             shift
             shift
             ;;
+        --log)
+            LOGLEVEL="$2"
+            shift
+            shift
+            ;;
         --thread|-t)
             NTHREADS="$2"
             shift
@@ -60,12 +70,14 @@ do
             echo "          --input-bam|-i          | input BQSR BAM file"
             echo "          --ref-bed|-rb           | BED file of reference genome"
             echo "          --ref-genome|-rg        | reference genome"
+            echo "          --anno-ref|-a           | annotation table"
             echo "          --out|-o                | output directory (default: ./out)"
             echo -e "\nOptional:"
             echo "          --fraglen|-f            | fragment length FRAGLEN in CIGAR processing (default: 300)"
             echo "          --gaplen|-g             | small gap cutoff GAPLEN in CIGAR processing (default: 10)"
             echo "          --mq|-mq                | MQ threshold for extracting multi-aligned reads (default: 30)"
             echo "          --thread|-t             | number of threads (default: 8)"
+            echo "          --log                   | log level (default: INFO)"
             echo "          --gene-list|-l          | list of genes of interest"
             exit 0
             ;;
@@ -80,12 +92,14 @@ done
 [ -n "${BAM_PATH}" ] || exit 2;
 [ -n "${REF_BED}" ] || exit 2;
 [ -n "${REF_GENOME}" ] || exit 2;
+[ -n "${ANNO_REF}" ] || exit 2;
 ROOT=$(pwd)
 NTHREADS=${NTHREADS:-8}
 FRAGLEN=${FRAGLEN:-300}
 GAPLEN=${GAPLEN:-10}
 MQ_THRES=${MQ_THRES:-30}
 OUTPATH=${OUTPATH:-${ROOT}/out}
+LOGLEVEL=${LOGLEVEL:-INFO}
 export NTHREADS
 source "${ROOT}/src/miscellaneous.sh"
 source "${ROOT}/errorHandling.sh"
@@ -135,3 +149,5 @@ do
 done
 
 ./6_postProcessing.sh --vcfpath "${OUTPATH}/vcf/" --regions "${ROOT}/ref/homologous_regions/"
+
+# Deep cleaning ...

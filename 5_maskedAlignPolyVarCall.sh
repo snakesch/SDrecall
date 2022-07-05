@@ -181,7 +181,7 @@ then
 
     python3 $(dirname $(realpath -s $0))/src/convert_vcf_to_diploidy.py -vp "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz" || echo -e >&2 "$(timestamp) ERROR: Failed to convert multiploid VCF to diploid VCF";
 
-    pick_poorcov_region_bam -i "${INPUT_BAM}" -t "${REGION_BED}" -o "${INPUT_BAM/.bam}.${REGION}.txt" && echo -e "$(timestamp) INFO: The poor coverage region in ${INPUT_BAM} overlapping with ${REGION_BED} is stored in "${INPUT_BAM/.bam}.${REGION}.txt
+    pick_poorcov_region_bam -i "${INPUT_BAM}" -t "${REGION_BED}" -o "${INPUT_BAM/.bam}.${REGION}.txt" -d 15 && echo -e "$(timestamp) INFO: The poor coverage region in ${INPUT_BAM} overlapping with ${REGION_BED} is stored in "${INPUT_BAM/.bam}.${REGION}.txt
     bcftools view -R "${INPUT_BAM/.bam}.${REGION}.txt" -Oz -o "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.tmp.vcf.gz" "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz"
     bcftools sort -Oz "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.tmp.vcf.gz" -o "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.vcf.gz"
     rm -f "${DATAPATH}/vcf/${samp_ID}.only_${REGION}.tmp.vcf.gz"

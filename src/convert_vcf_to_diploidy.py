@@ -8,74 +8,8 @@ import logging
 import os
 import sys
 import argparse as ap
-
-def read_vcf_gz(path=""):
-    '''
-    Returning a tuple
-    Return vcf head as a list of lines(each line is a str object) as the first element of the tuple
-    Return vcf body as pandas DataFrame Object as the second element of the tuple
-    '''
-    with bgzf.open(path, "r") as bgzf_handle:
-        line = ""
-        header_lines = []
-        while True:
-            reader_pos = bgzf_handle.tell()
-            line = bgzf_handle.readline()
-            if re.search(r'#CHROM', line):
-                break
-            header_lines.append(line)
+from utils import read_vcf_gz, read_vcf_gz_chunkwise
             
-        headers = line.strip("\n").split("\t")
-        logging.info("This vcf ({}) body content start at line {}".format(path, reader_pos))
-        logging.info("This vcf ({}) body header are {}".format(path, headers))
-
-        total_records = []
-        while True:
-            reader_pos = bgzf_handle.tell()
-            logging.debug("Current reader pos is {}".format(reader_pos))
-            line = bgzf_handle.readline()
-            total_records.append(tuple(line.strip('\n').split("\t"))) 
-            if reader_pos == bgzf_handle.tell():
-                del total_records[-1]
-                break
-        bgzf_handle.close()
-        return (header_lines, pd.DataFrame(total_records, columns=headers))
-
-
-def read_vcf_gz_chunkwise(path="", chunksize=10000):
-    '''
-    Returning an iterator of tuples
-    Return vcf head as a list of lines(each line is a str object) as the first element of the tuples (the same content across all the tuples)
-    Return vcf body as pandas DataFrame Object as the second element of the tuple (chunked dfs)
-    '''
-    with bgzf.open(path, "r") as bgzf_handle:
-        line = ""
-        header_lines = []
-        while True:
-            reader_pos = bgzf_handle.tell()
-            line = bgzf_handle.readline()
-            header_lines.append(line)
-            if re.search(r'#CHROM', line):
-                break
-        headers = line.strip("\n").split("\t")
-        logging.info("This vcf ({}) body content start at pos {}".format(path, reader_pos))
-        logging.info("This vcf ({}) body header are {}".format(path, headers))
-        
-        while True:
-            chunk_records = []
-            for i in range(0, chunksize):
-                reader_pos = bgzf_handle.tell()
-                chunk_records.append(tuple(bgzf_handle.readline().strip("\n").split("\t")))
-                if reader_pos == bgzf_handle.tell():
-                    break
-            if reader_pos == bgzf_handle.tell():
-                del chunk_records[-1]
-            if len(chunk_records) > 0:
-                yield (header_lines, pd.DataFrame(chunk_records, columns=headers))
-            else:
-                break
-            
-
 def convert_vcf_to_diploidy_from_high_ploidy(vcf_df=pd.core.frame.DataFrame):
     vcf_body_dip = vcf_df.copy()
     
@@ -186,13 +120,11 @@ def main_convert(vcf_file="", chunksize=0, replace=False):
     
     # Set the output path 
     output_vcf_file = ".dip.vcf".join(vcf_file.rsplit(".vcf", 1)).replace(".gz", "")
-    # output_vcf_file = ".".join(vcf_file.split(".")[:vcf_file.split(".").index("vcf")]) + ".dip.vcf"
-    logging.info("The output diploid vcf file path is {}".format(output_vcf_file))
+    logging.info("Writing diploid vcf to {}".format(output_vcf_file))
     
     # Output the vcf headers 
     with open(output_vcf_file, "w") as ov:
         ov.write(vcf_head)
-        ov.close()
     
     # Detect the vcf ploidy
     gt_list = str(vcf_body.iat[0, 9]).split(str(vcf_body.iat[0, 9])[1]) # choose the first row
@@ -210,10 +142,9 @@ def main_convert(vcf_file="", chunksize=0, replace=False):
     dip_vcf_body.to_csv(output_vcf_file, index=False, sep='\t', mode='a')
     if replace:
         # mv the file to the original file
-        cmd = "bash /paedyl01/disk1/yangyxt/ngs_scripts/common_bash_utils.sh check_vcf_validity {ov} 2> /dev/null && echo valid || echo invalid".format(ov=output_vcf_file)
-        res = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8")
-        if "invalid" in res.stdout:
-            logging.warning("Though input argument set to replace the vcf file. The output vcf file {ov} seems invalid. So we do not replace the original file.".format(ov = output_vcf_file))
+        code = subprocess.run("source miscellaneous.sh && isValidVCF {}".format(output_vcf_file), shell=True, capture_output=True).returncode
+        if code:
+            logging.warning("Invalid output VCF ({}). Original VCF kept.".format(output_vcf_file))
             cmd = 'bgzip -f ' + output_vcf_file + ' && bcftools sort -Oz -o {gz_vcf} {gz_vcf} && tabix -f -p vcf {gz_vcf} && ls -lh {gz_vcf}'.format(gz_vcf=output_vcf_file + ".gz")
         else:
             cmd = 'bgzip -f ' + output_vcf_file + ' && bcftools sort -Oz -o {gz_vcf} {gz_vcf} && tabix -f -p vcf '.format(gz_vcf=output_vcf_file + ".gz") + output_vcf_file + '.gz && mv ' + output_vcf_file + '.gz ' + vcf_file + \
@@ -221,7 +152,7 @@ def main_convert(vcf_file="", chunksize=0, replace=False):
     else:
         # Bgzip the plain vcf file and create index of it.
         cmd = 'bgzip -f ' + output_vcf_file + ' && bcftools sort -Oz -o {gz_vcf} {gz_vcf} && tabix -f -p vcf {gz_vcf} && ls -lh {gz_vcf}'.format(gz_vcf=output_vcf_file + ".gz")
-    logging.info("Executing these bash commands within python env: \n{}\n".format(cmd))
+    logging.debug("Command stack: \n{}\n".format(cmd))
     res = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8")
     print(res.stdout, file=sys.stderr)
     

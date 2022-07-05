@@ -4,7 +4,7 @@
 
 # Usage: ./checkBAM.sh [-t THREAD] FILE [FILES]
 # Return value: 0 if OK, 1 otherwise
-# if $( ./checkBAM.sh ); then <case when the file(s) is OK>; fi
+# if $( ./checkBAM.sh BAM ); then <case when the file(s) is OK>; fi
 
 source $(dirname $(realpath -s $0))/miscellaneous.sh
 source $(dirname $(realpath -s $0))/errorHandling.sh

@@ -69,4 +69,4 @@ As users may allocate different number of threads in each step, custom run allow
 </p>
 
 ## Contact and correspondance
-Xingtian Yang (Email), Louis She (louisshe@hku.hk)
+Xingtian Yang (u3005579@connect.hku.hk), Louis She (louisshe@hku.hk)
