@@ -7,6 +7,36 @@ import argparse
 import re
 import os
 
+# Shell utilities
+def annotate(INPATH: str, REF_REGIONS: str, OUTPATH: str):
+
+    if subprocess.run("which bedtools", shell=True, capture_output=True).returncode != 0:
+        logging.critical("BEDTools not detected. Abort.")
+        raise ModuleNotFoundError("BEDTools not detected.")
+    code = subprocess.run("tail -n+2 {} | bedtools intersect -a {} -b - -wo > {}".format(REF_REGIONS, INPATH, OUTPATH), shell=True).returncode
+    if code != 0:
+        logging.error("Error in bedtools intersect.")
+        sys.exit(-1)
+    return
+
+def update_bed_file(bed_df, bed_path):
+    bed_df.drop_duplicates().to_csv(bed_path + ".tmp", sep="\t", index=False, header=False)
+    cmd = "cat {tbed} | sort -k1,1n -k2,2n -k3,3n | cut -f 1-3 | bedtools merge -i - > {tbed}.tmp && mv {tbed}.tmp {tbed}".format(tbed=bed_path + ".tmp")
+    code = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8").returncode
+    if code:
+        logging.error("Error in creating " + bed_path + ".")
+        sys.exit(-1)
+    return
+
+def merge_bed_intervals(bed_path):
+    cmd = "bedtools sort -i {bed} | bedtools merge -i - > {bed}".format(bed=bed_path)
+    code = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8").returncode
+    if code:
+        logging.error("Error in merging BED intervals.")
+        sys.exit(-1)
+    return   
+    
+# Python utilities
 def makeTwoWay(INPATH: str, OUTPATH: str):
 
     trimmed_df = pd.read_csv(INPATH, sep = "\t", header = None)
@@ -28,91 +58,89 @@ def one_way(two_way_df, col_1 = [0, 1, 2, 16], col_2 = [3, 4, 5, 16]):
 
     return pd.concat([df_1, df_2], axis=0).drop_duplicates().reset_index(drop=True)
 
-def intersectBED(sorted_df, to_path=None):
-    """
-    Note: This function works in a chromosome-wise and gene-wise manner. To_path should be a valid directory.
-    """
-    chrom = sorted_df["chr"].tolist()[0]
-    start_lst = sorted_df["start"].tolist()
-    end_lst = sorted_df["end"].tolist()
-    gene = sorted_df["gene"].tolist()[0]
-    if len(start_lst) == 1:
-        return sorted_df
-    prev, cur = 0, 1
-    while cur < len(start_lst):
-        if start_lst[prev] == start_lst[cur]:
-            if end_lst[prev] > end_lst[cur]:
-                end_lst.pop(cur)
-                start_lst.pop(cur)
-            else:
-                end_lst.pop(prev)
-                start_lst.pop(prev)
-        elif end_lst[prev] == end_lst[cur]:
-            if start_lst[prev] < start_lst[cur]:
-                start_lst.pop(cur)
-                end_lst.pop(cur)
-            else:
-                start_lst.pop(prev)
-                end_lst.pop(prev)
-        elif end_lst[prev] >= start_lst[cur]:
-            end_lst.pop(prev)
-            start_lst.pop(cur)
-        else:
-            prev += 1
-            cur += 1
-    out = pd.DataFrame({"chr": chrom, "start": start_lst, "end": end_lst, "gene": gene})
-    if not to_path:
-        return out
+def condense(df, outpath="", gene_col=17):
+    cols = df.columns.tolist()
+    by_pairs = df.groupby(by=cols[:6])
+    condensed_df = by_pairs.apply(condense_per_group, cols, gene_col-1)
+    if len(outpath) > 0:
+        condensed_df.to_csv(outpath, sep='\t', header=False, index=False)
     else:
-        os.makedirs(os.path.join(to_path), exist_ok=True)
-        out.to_csv(os.path.join(to_path, gene + "_related_homo_regions.bed"), sep="\t", index=False, header=False)
-        logging.info("Successfully extracted homologous regions to " + os.path.join(to_path, gene + "_related_homo_regions.bed") + ".")
+        return condensed_df
+    
+def condense_per_group(group_df, cols, gene_col):
+    condense_col = cols[gene_col-1]
+    group_df[condense_col] = ",".join(list(dict.fromkeys(group_df[condense_col].tolist())))
+    return group_df.drop_duplicates()
+   
+def generate_bed_per_gene(group_df, gene_col, outpath):
+    
+    if group_df.shape[0] == 0:
         return
-
-def annotate(INPATH: str, REF_REGIONS: str, OUTPATH: str):
-
-    if subprocess.run("which bedtools", shell=True, capture_output=True).returncode != 0:
-        logging.critical("BEDTools not detected. Abort.")
-        raise ModuleNotFoundError("BEDTools not detected.")
-    code = subprocess.run("sed 's/\t$//g' {} | bedtools intersect -a {} -b - -wo > {}".format(REF_REGIONS, INPATH, OUTPATH), shell=True).returncode
-    if code != 0:
-        logging.error("Error in bedtools intersect.")
-        sys.exit(-1)
+    
+    gene = group_df.iloc[0, gene_col].replace(",", "_")
+    
+    # Homologous regions
+    total_bed = one_way(group_df, col_1=[0, 1, 2, gene_col-1], col_2=[3, 4, 5, gene_col-1])
+    total_bed.iloc[:,[1,2]] = total_bed.iloc[:,[1,2]].astype(int)
+    update_bed_file(total_bed, os.path.join(args.out, "homologous_regions", gene + "_related_homo_regions.bed"))
+    merge_bed_intervals(os.path.join(args.out, "homologous_regions", gene + "_related_homo_regions.bed"))
+    
+    # Principal components
+    selected_bed = group_df.iloc[:, [0,1,2,gene_col-1]]
+    selected_bed.iloc[:,[1,2]] = selected_bed.iloc[:,[1,2]].astype(int)
+    update_bed_file(selected_bed, os.path.join(args.out, "principal_components", gene + ".bed"))
+    merge_bed_intervals(os.path.join(args.out, "principal_components", gene + ".bed"))
+    
     return
 
 def main():
 
-    INPATH = args.input
-    REF_REGIONS = args.ref
-    REGION_PATH = args.list
+    GENE_COL=17
 
-    expanded_path = INPATH.rstrip("trimmed.bed") + ".homo.expanded.bed"
+    expanded_path = args.input.rstrip("trimmed.bed") + ".homo.expanded.bed"
     anno_path = expanded_path.rstrip("bed") + "geneanno.bed"
-    outpath = expanded_path.rstrip("bed") + "geneanno.region.bed"
 
     # Make two-way map
-    two_way = makeTwoWay(INPATH, expanded_path)
+    two_way = makeTwoWay(args.input, expanded_path)
 
     # Gene annotation
-    annotate(expanded_path, REF_REGIONS, anno_path)
+    annotate(expanded_path, args.ref, anno_path)
+    os.remove(expanded_path)
     logging.info("Writing annotated BED file to " + anno_path)
     anno_df = pd.read_csv(anno_path, sep="\t", header=None)
     if args.list:
-        region_df = pd.read_csv(REGION_PATH, sep='\t', encoding="utf-8")
+        region_df = pd.read_csv(args.list, sep='\t', encoding="utf-8")
         region_df['Genetic defect'] = region_df['Genetic defect'].apply(lambda x: x[:x.index(u'\xa0')] if u'\xa0' in x else x)
         region_genes = set(region_df['Genetic defect'].tolist())
-        cleaned_df = anno_df[anno_df[args.genecol].isin(region_genes)].drop_duplicates()
+        cleaned_df = anno_df[anno_df[GENE_COL].isin(region_genes)].drop_duplicates()
+        cleaned_df = condense(cleaned_df)
     else:
         cleaned_df = anno_df
+        cleaned_df = condense(cleaned_df)
 
-    one_way_df = one_way(cleaned_df, col_1=[0, 1, 2, args.genecol], col_2=[3, 4, 5, args.genecol])
-    sorted_df = one_way_df.sort_values(["chr", "start"]).reset_index(drop=True)
-    grouped = sorted_df.groupby(["chr", "gene"], as_index=False).apply(intersectBED, to_path=args.out)
-    total_bed = grouped.droplevel(level=0).reset_index(drop=True)
+    # Condense twice and deploy
+    os.remove(anno_path)
+    
+    # Create necessary directories
     os.makedirs(args.out, exist_ok=True)
-    total_bed.to_csv(os.path.join(args.out, "all_homo_regions.bed"), sep="\t", index=False, header=False)
-    logging.info("Successfully combined all homologous regions to " + os.path.join(args.out, "all_homo_regions.bed"))
-
+    os.makedirs(os.path.join(args.out, "principal_components"), exist_ok=True)
+    os.makedirs(os.path.join(args.out, "homologous_regions"), exist_ok=True)
+    by_gene = cleaned_df.groupby([GENE_COL], as_index=False)
+    all_homo_regions = by_gene.apply(generate_bed_per_gene, GENE_COL, args.out)
+    all_homo_regions.to_csv(os.path.join(args.out, "homologous_regions", "all_homo_regions.bed"), sep="\t", index=False, header=False)
+    merge_bed_intervals(os.path.join(args.out, "homologous_regions", "all_homo_regions.bed"))
+    
+    # Re-annotate all_homo_regions.bed
+    cmd = "bedtools intersect -a {bed} -b {ref} -wao | cut -f 1,2,3,7 | sort -uV | uniq > {bed}.tmp; mv -f {bed}.tmp {bed}".format(
+        bed=os.path.join(args.out, "homologous_regions", "all_homo_regions.bed"),
+        ref=args.ref)
+    code = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8").returncode
+    if code:
+        logging.error("Error in annotating " + os.path.join(args.out, "homologous_regions", "all_homo_regions.bed"))
+        sys.exit(-1)
+    
+    logging.info("Created BED files successfully.")
+ 
     return
 
 if __name__ == "__main__":
@@ -122,7 +150,6 @@ if __name__ == "__main__":
     parser.add_argument("-i", "--input", type = str, required = True, help = "trimmed BED file")
     parser.add_argument("-r", "--ref", type = str, required = True, help = "gene region list for annotation")
     parser.add_argument("-l", "--list", type = str, required = False, help = "list of genes/regions of interest")
-    parser.add_argument("-c", "--genecol", type = int, default = 16, help = "0-based column index of \"Genetic defect\" in gene list (default: 16)")
     parser.add_argument("-o", "--out", type = str, required = True, help = "output path")
     parser.add_argument("-v", "--verbose", type = str, default = "INFO", help = "verbosity level (default: INFO)")
     args = parser.parse_args()
