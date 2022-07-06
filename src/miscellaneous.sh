@@ -130,3 +130,4 @@ function pick_poorcov_region_bam {
 
 # Alias
 alias time="/usr/bin/time -f '$(timestamp) INFO: Elapsed time: %es\tMemory usage: %M KB\tCPU usage: %P'"
+
