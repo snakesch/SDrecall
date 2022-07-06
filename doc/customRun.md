@@ -58,17 +58,16 @@ extracted_block = [ (7, M), (1, S), (2, D), (292, M), (5, D), (30, M) ]
 
 #### 0.4. Annotate and extract regions of interest 
 ```{bash}
-./3_annotateExtract.py [-h] -i INPUT -r REF -o OUTPATH [-l LIST] [-c|--genecol GENECOL=16] [-v VERBOSE=INFO]
+./3_annotateExtract.py [-h] -i INPUT -r REF -o OUTPATH [-l LIST] [-v VERBOSE=INFO]
 ```
 Available options:
 * `--input|-i`: input path of trimmed BED file (from previous step)
 * `--out|-o`: output path
 * `--ref|-r`: reference annotation table (tab-separated)
-* `--genecol|-c`: 0-based column index of "Genetic defect" in reference annotation table (Default: 16)
 * `--list|-l`: list of genes of interest (genes not listed will be excluded) (optional)
 * `--verbose|-v`: verbosity level
 
-Note: The gene list should contain the following column (0-based index should be specified with `-c`):
+Note: The gene list should contain the following column:
 
 | Genetic defect |
 | -------------- |
@@ -77,13 +76,12 @@ Note: The gene list should contain the following column (0-based index should be
 | gene_3 |
 | ... |
 
-The following files are written to the path of INPUT:
-* `*.homo.expanded.bed`: expanded two-way map of trimmed BED file
-* `*.homo.expanded.geneanno.bed`: two-way map with annotations
-* `*.homo.expanded.geneanno.region.bed`: two-way map of regions intersecting the provided LIST
-The following files are written to OUTPATH:
-* `all_homo_regions.bed`: BED containing the coordinates of all genes of interest (equivalent to the annotated BED output if no list is given)
+The following files are written to `OUTPATH/homologous_regions`:
+* `all_homo_regions.bed`: BED containing the coordinates of all genes of interest
 * `<region>_related_homo_region.bed`: extracted BED with only <region> data
+
+The following files are written to `OUTPATH/principal_components`:
+* <region>.bed: start and end coordinates of <region>
 
 Format:
 
