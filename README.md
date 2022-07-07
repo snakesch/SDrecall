@@ -39,7 +39,7 @@ source /opt/miniconda/bin/activate SDrecall
 * Gene annotation file ([NCBI RefSeq data](https://github.com/snakesch/SDrecall/blob/main/doc/customRun.md#gene-annotation-file))
 
 ### Optional
-* A gene panel in BEDPE format (See [part 0.4](https://github.com/snakesch/SDrecall/blob/main/doc/customRun.md#04-annotate-and-extract-regions-of-interest))
+* A gene panel in BEDPE format (Strongly recommended. See [part 0.4](https://github.com/snakesch/SDrecall/blob/main/doc/customRun.md#04-annotate-and-extract-regions-of-interest))
 
 ## Quick run
 ```{bash}
