@@ -20,8 +20,8 @@ def annotate(INPATH: str, REF_REGIONS: str, OUTPATH: str):
     return
 
 def update_bed_file(bed_df, bed_path):
-    bed_df.drop_duplicates().to_csv(bed_path + ".tmp", sep="\t", index=False, header=False)
-    cmd = "cat {tbed} | sort -k1,1n -k2,2n -k3,3n | cut -f 1-3 | bedtools merge -i - > {tbed}.tmp && mv {tbed}.tmp {tbed}".format(tbed=bed_path + ".tmp")
+    bed_df.drop_duplicates().to_csv(bed_path, sep="\t", index=False, header=False)
+    cmd = "cat {tbed} | sort -V -k1,3 | cut -f 1-3 | bedtools merge -i - > {tbed}.tmp && mv {tbed}.tmp {tbed}".format(tbed=bed_path)
     code = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8").returncode
     if code:
         logging.error("Error in creating " + bed_path + ".")
@@ -29,7 +29,7 @@ def update_bed_file(bed_df, bed_path):
     return
 
 def merge_bed_intervals(bed_path):
-    cmd = "bedtools sort -i {bed} | bedtools merge -i - > {bed}".format(bed=bed_path)
+    cmd = "bedtools sort -i {bed} | bedtools merge -i - > {bed}.tmp && mv {bed}.tmp {bed}".format(bed=bed_path)
     code = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8").returncode
     if code:
         logging.error("Error in merging BED intervals.")
@@ -61,9 +61,9 @@ def one_way(two_way_df, col_1 = [0, 1, 2, 16], col_2 = [3, 4, 5, 16]):
 def condense(df, outpath="", gene_col=17):
     cols = df.columns.tolist()
     by_pairs = df.groupby(by=cols[:6])
-    condensed_df = by_pairs.apply(condense_per_group, cols, gene_col-1)
+    condensed_df = by_pairs.apply(condense_per_group, cols, gene_col)
     if len(outpath) > 0:
-        condensed_df.to_csv(outpath, sep='\t', header=False, index=False)
+        condensed_df.to_csv(outpath, sep='\t', mode="a", header=False, index=False)
     else:
         return condensed_df
     
@@ -76,22 +76,23 @@ def generate_bed_per_gene(group_df, gene_col, outpath):
     
     if group_df.shape[0] == 0:
         return
-    
     gene = group_df.iloc[0, gene_col].replace(",", "_")
     
     # Homologous regions
-    total_bed = one_way(group_df, col_1=[0, 1, 2, gene_col-1], col_2=[3, 4, 5, gene_col-1])
+    total_bed = one_way(group_df, col_1=[0, 1, 2, gene_col], col_2=[3, 4, 5, gene_col])
     total_bed.iloc[:,[1,2]] = total_bed.iloc[:,[1,2]].astype(int)
-    update_bed_file(total_bed, os.path.join(args.out, "homologous_regions", gene + "_related_homo_regions.bed"))
-    merge_bed_intervals(os.path.join(args.out, "homologous_regions", gene + "_related_homo_regions.bed"))
+    update_bed_file(total_bed, os.path.join(outpath, "homologous_regions", gene + "_related_homo_regions.bed"))
+    merge_bed_intervals(os.path.join(outpath, "homologous_regions", gene + "_related_homo_regions.bed"))
     
     # Principal components
-    selected_bed = group_df.iloc[:, [0,1,2,gene_col-1]]
+    selected_bed = group_df.iloc[:, [0,1,2,gene_col]]
     selected_bed.iloc[:,[1,2]] = selected_bed.iloc[:,[1,2]].astype(int)
-    update_bed_file(selected_bed, os.path.join(args.out, "principal_components", gene + ".bed"))
-    merge_bed_intervals(os.path.join(args.out, "principal_components", gene + ".bed"))
+    update_bed_file(selected_bed, os.path.join(outpath, "principal_components", gene + ".bed"))
+    merge_bed_intervals(os.path.join(outpath, "principal_components", gene + ".bed"))
     
-    return
+    out = pd.read_csv(os.path.join(outpath, "homologous_regions", gene + "_related_homo_regions.bed"), sep="\t", header=None)
+
+    return out
 
 def main():
 
@@ -112,7 +113,7 @@ def main():
         region_df = pd.read_csv(args.list, sep='\t', encoding="utf-8")
         region_df['Genetic defect'] = region_df['Genetic defect'].apply(lambda x: x[:x.index(u'\xa0')] if u'\xa0' in x else x)
         region_genes = set(region_df['Genetic defect'].tolist())
-        cleaned_df = anno_df[anno_df[GENE_COL].isin(region_genes)].drop_duplicates()
+        cleaned_df = anno_df[anno_df[GENE_COL-1].isin(region_genes)].drop_duplicates()
         cleaned_df = condense(cleaned_df)
     else:
         cleaned_df = anno_df
@@ -125,8 +126,9 @@ def main():
     os.makedirs(args.out, exist_ok=True)
     os.makedirs(os.path.join(args.out, "principal_components"), exist_ok=True)
     os.makedirs(os.path.join(args.out, "homologous_regions"), exist_ok=True)
-    by_gene = cleaned_df.groupby([GENE_COL], as_index=False)
-    all_homo_regions = by_gene.apply(generate_bed_per_gene, GENE_COL, args.out)
+    by_gene = cleaned_df.groupby([GENE_COL-1], as_index=False)
+    all_homo_regions = by_gene.apply(generate_bed_per_gene, GENE_COL-1, args.out)
+    all_homo_regions = all_homo_regions.droplevel(level=0).reset_index(drop=True)
     all_homo_regions.to_csv(os.path.join(args.out, "homologous_regions", "all_homo_regions.bed"), sep="\t", index=False, header=False)
     merge_bed_intervals(os.path.join(args.out, "homologous_regions", "all_homo_regions.bed"))
     
@@ -137,9 +139,6 @@ def main():
     code = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8").returncode
     if code:
         logging.error("Error in annotating " + os.path.join(args.out, "homologous_regions", "all_homo_regions.bed"))
-        sys.exit(-1)
-    
-    logging.info("Created BED files successfully.")
  
     return
 
