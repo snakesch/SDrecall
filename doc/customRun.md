@@ -67,7 +67,7 @@ Available options:
 * `--list|-l`: list of genes of interest (genes not listed will be excluded) (optional)
 * `--verbose|-v`: verbosity level
 
-Note: The gene list should contain the following column:
+Users should devise a gene panel from a subset of `genelist.txt` [here](genelist.txt). The gene list should be a column of a table that contains:
 
 | Genetic defect |
 | -------------- |
@@ -78,16 +78,18 @@ Note: The gene list should contain the following column:
 
 The following files are written to `OUTPATH/homologous_regions`:
 * `all_homo_regions.bed`: BED containing the coordinates of all genes of interest
-* `<region>_related_homo_region.bed`: extracted BED with only <region> data
+* `<gene>_related_homo_region.bed`: extracted BED with only \<gene\> data
 
 The following files are written to `OUTPATH/principal_components`:
-* <region>.bed: start and end coordinates of <region>
+* `<gene>.bed`: start and end coordinates of \<gene\>
 
 Format:
 
 | chr | start pos | end pos | gene |
 | --- | --------- | ------- | ---- |
 | ... |  ... | ... | ... |
+    
+**WARNING: Users should never attempt to skip `--list` option. The script will run for a total of 5548 genes if unspecified which may take unexpectedly long time.** 
 
 ### 1. Preparation
 We first extract fragments that align to extracted SD regions in the input BAM file, then build a masked genome against the region.
