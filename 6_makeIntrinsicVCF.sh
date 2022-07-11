@@ -40,7 +40,7 @@ do
             shift
             ;;
         --help|-h)
-            echo "Extract multi-aligned reads from SD regions from BAM and prepare masked genomes"
+            echo "Call intrinsic variants for comparison in post-processing step."
             echo "Usage:    $BASH_SOURCE"
             echo "          --bed-dir | -b          | parent directory of homologous_regions/ and principal components/"
             echo "          --ref-genome | -r       | reference genome (hg19)"

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# 6_postProcessing.sh
+# 7_postProcessing.sh
 # Description: This script compares gVCFs generated from 5_maskedAlignPolyVarCall.sh to an "intrinsic VCF" derived from the reference genome (hg19).
 # Author: Yang XT, She CH (2022)
 
