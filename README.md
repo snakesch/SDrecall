@@ -59,7 +59,8 @@ Optional:
           --thread|-t             | number of threads (default: 8)
           --log                   | log level (default: INFO)
           --gene-list|-l          | list of genes of interest
-          --read-length | -rl     | window size for homologous regions```
+          --read-length | -rl     | window size for homologous regions
+```
 ## Custom run
 As users may allocate different number of threads in each step, custom run allows users to execute each step separately with a defined number of threads. Users are advised to reserve more threads for WGS data as described [here](doc/customRun.md).
 
