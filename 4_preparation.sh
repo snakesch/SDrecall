@@ -3,19 +3,10 @@
 # 4_buildSampleMap.sh
 # Description: Extract XA tagged reads or reads with MQ < alpha; then create a masked genome for each region for downstream analysis.
 # Note: This script is designed for multithread execution of mutliple regions.
-# Author: Louis She (2022-06)
-# Contact: louisshe@hku.hk
-
-# Prerequisites:
-# samtools v1.15
-# BEDTools v2.27.1
-# seqkit
-# GATK
-# bwa
+# Author: Yang XT, She CH (2022)
 
 source $(dirname $(realpath -s $0))/src/miscellaneous.sh
 source $(dirname $(realpath -s $0))/src/errorHandling.sh
-
 set -o errtrace
 trap 'catch_exit_status $? $LINENO $0' ERR
 

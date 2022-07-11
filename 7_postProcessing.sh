@@ -2,16 +2,11 @@
 
 # 6_postProcessing.sh
 # Description: This script compares gVCFs generated from 5_maskedAlignPolyVarCall.sh to an "intrinsic VCF" derived from the reference genome (hg19).
-# Prerequisites:
-# - bcftools
-# - samtools
-# - vcfpy
-# - HTSlib
+# Author: Yang XT, She CH (2022)
 
 # Input handler
 source $(dirname $(realpath -s $0))/src/miscellaneous.sh
 source $(dirname $(realpath -s $0))/src/errorHandling.sh
-
 set -o errtrace
 trap 'catch_exit_status $? $LINENO $0' ERR
 [[ $# -eq 0 ]] && { $BASH_SOURCE --help; exit 2; }
@@ -29,11 +24,17 @@ do
             shift
             shift
             ;;
+        --intrin|-iv)
+            INTRIN_VCF="$2"
+            shift
+            shift
+            ;;
         --help|-h)
             echo "Postprocessing: Compare with intrinsic VCF"
             echo "Usage:    $BASH_SOURCE"
             echo "          --vcfpath | -p         | directory of VCFs in poor coverage regions"
             echo "          --regions | -r         | directory of all BED files of homologous regions"
+            echo "          --intrin | -iv         | path of intrinsic VCF"
             echo "          --help | -h            | display this message and exit"
             exit 0
             ;;
@@ -43,6 +44,8 @@ do
             ;;
     esac
 done
+
+[ -f "${INTRIN_VCF}" ] || exit 2;
 
 all_regions=($(find $REGIONS_PATH -name "*.bed" -type f -exec basename {} .bed \; | sed 's/_related_homo_regions//g'))
 vcf_regions=($(find $VCFPATH -name "*.vcf.gz" -type f -exec basename {} .vcf.gz \; | grep -v g$ | cut -d_ -f2-))
@@ -66,7 +69,7 @@ then
     exit 1
 fi
 
-python3 $(dirname $(dirname $VCFPATH))/src/compare_with_intrinsic_vcf.py -qv ${VCFPATH}/${samp_ID}.homo_region.vcf.gz -ov ${VCFPATH}/${samp_ID}.homo_region.filtered.vcf.gz -iv "$(dirname $(dirname $VCFPATH))/ref/intrinsic_diff_calls.trimmed.bial.vcf.gz"
+python3 $(dirname $(dirname $VCFPATH))/src/compare_with_intrinsic_vcf.py -qv ${VCFPATH}/${samp_ID}.homo_region.vcf.gz -ov ${VCFPATH}/${samp_ID}.homo_region.filtered.vcf.gz -iv "${INTRIN_VCF}"
 
 # Cleanup (remove masked genomes & intermediate VCFs)
 if [ -d $(dirname $VCFPATH)/masked_genome ]; then

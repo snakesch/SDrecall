@@ -2,18 +2,11 @@
 
 # 5_maskedAlignPolyVarCall.sh
 # Description: This script realigns BAM to masked genome, call for polyploidy variants if ploidy >= 2.
-
-# Prerequisites:
-# - bwa
-# - samtools
-# - GATK
-# - tabix of HTSlib
-# - bcftools
+# Author: Yang XT, She CH (2022)
 
 # Input handler
 source $(dirname $(realpath -s $0))/src/miscellaneous.sh
 source $(dirname $(realpath -s $0))/src/errorHandling.sh
-
 set -o errtrace
 trap 'catch_exit_status $? $LINENO $0' ERR
 [[ $# -eq 0 ]] && { $BASH_SOURCE --help; exit 2; }

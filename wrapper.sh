@@ -2,7 +2,7 @@
 
 # wrapper.sh
 # Description: This script is a wrapper script of SDrecall.
-
+# Author: Yang XT, She CH (2022)
 
 [[ $# -eq 0 ]] && { $BASH_SOURCE --help; exit 2; }
 while [[ $# -gt 0 ]]
@@ -64,8 +64,8 @@ do
             shift
             shift
             ;;
-        --genecol|-c)
-            GENE_COL="$2"
+        --read-length|-rl)
+            READ_LENGTH="$2"
             shift
             shift
             ;;
@@ -85,7 +85,7 @@ do
             echo "          --thread|-t             | number of threads (default: 8)"
             echo "          --log                   | log level (default: INFO)"
             echo "          --gene-list|-l          | list of genes of interest"
-            echo "          --genecol|-c            | 0-based index of Genetic defect column in LIST"
+            echo "          --read-length | -rl     | window size for homologous regions"
             exit 0
             ;;
         *)
@@ -107,6 +107,7 @@ GAPLEN=${GAPLEN:-10}
 MQ_THRES=${MQ_THRES:-30}
 OUTPATH=${OUTPATH:-${ROOT}/out}
 LOGLEVEL=${LOGLEVEL:-INFO}
+READ_LENGTH=${READ_LENGTH:-250}
 export NTHREADS
 source "${ROOT}/src/miscellaneous.sh"
 source "${ROOT}/src/errorHandling.sh"
@@ -127,6 +128,7 @@ function getThread () {
 # Create directories if needed
 [[ -d "${ROOT}/out/fastq" ]] || mkdir -p "${ROOT}/out/fastq"
 [[ -d "${ROOT}/ref/homologous_regions" ]] || mkdir -p "${ROOT}/ref/homologous_regions"
+[[ -d "${ROOT}/ref/principal_components" ]] || mkdir -p "${ROOT}/ref/principal_components"
 
 # Main
 # $ROOT/1_biserFetch.sh --ref-genome "${REF_GENOME}" --out "${OUTPATH}" --thread $(getThread 8)
@@ -141,13 +143,13 @@ function getThread () {
 #if [ -f "${GENE_LIST}" ]
 #then
 #    if [ -n "${GENE_COL}" ]; then
-#       $ROOT/3_annotateExtract.py --input "${OUTPATH}/SD_hg19.trimmed.bed" --ref "${ANNO_REF}" --list "${GENE_LIST}" --verbose "${LOGLEVEL}" --out "${ROOT}/ref/homologous_regions"
+#       $ROOT/3_annotateExtract.py --input "${OUTPATH}/SD_hg19.trimmed.bed" --ref "${ANNO_REF}" --list "${GENE_LIST}" --verbose "${LOGLEVEL}" --out "${ROOT}/ref/"
 #    else
 #       echo -e >&2 "$(timestamp) ERROR: Column index not specified!"
 #       exit 2
 #    fi
 #else
-#    $ROOT/3_annotateExtract.py --input "${OUTPATH}/SD_hg19.trimmed.bed" --ref "${ANNO_REF}" --verbose "${LOGLEVEL}" --out "${ROOT}/ref/homologous_regions"
+$ROOT/3_annotateExtract.py --input "${OUTPATH}/SD_hg19.trimmed.bed" --ref "${ANNO_REF}" --verbose "${LOGLEVEL}" --out "${ROOT}/ref"
 # fi
 
 find ${ROOT}/ref/homologous_regions/ -name "*.bed" | xargs -I{} -t -P3 bash ${ROOT}/4_preparation.sh --input-bam "${BAM_PATH}" --thread $(getThread 8) --region-list {} --out "${OUTPATH}" --ref-genome "${REF_GENOME}" --ref-bed "${REF_BED}" -mq "${MQ_THRES}"
@@ -157,7 +159,10 @@ do
     $ROOT/5_maskedAlignPolyVarCall.sh --input-bam "${BAM_PATH}" --data "${OUTPATH}" --region-bed "${region}" --ref-genome "${REF_GENOME}" --thread $(getThread 14)
 done
 
-$ROOT/6_postProcessing.sh --vcfpath "${OUTPATH}/vcf/" --regions "${ROOT}/ref/homologous_regions/"
+# Make intrinsic VCF
+$ROOT/6_makeIntrinsicVCF.sh --bed-dir "${ROOT}/ref" --ref-genome "${REF_GENOME}" --ref-bed "${REF_BED}" --read-length "${READ_LENGTH}" --thread $(getThread 8) 
+
+$ROOT/7_postProcessing.sh --vcfpath "${OUTPATH}/vcf/" --regions "${ROOT}/ref/homologous_regions/" -iv "${ROOT}/ref/all_pc.realign.${READ_LENGTH}.trim.vcf.gz"
 
 echo -e " ############# Part 2 done ############# "
 # Deep cleaning ...

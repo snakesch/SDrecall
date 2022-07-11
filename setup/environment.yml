@@ -1,4 +1,4 @@
-name: SDrecall 
+name: SDrecall
 channels:
   - conda-forge
   - bioconda
@@ -12,7 +12,7 @@ dependencies:
   - biopython=1.78=py39h7f8727e_0
   - blas=1.0=openblas
   - brotlipy=0.7.0=py39hb9d737c_1004
-  - bwa=0.7.17
+  - bwa=0.7.17=h7132678_9
   - bzip2=1.0.8=h7b6447c_0
   - c-ares=1.18.1=h7f8727e_0
   - ca-certificates=2022.6.15=ha878542_0
@@ -25,7 +25,7 @@ dependencies:
   - cryptography=37.0.2=py39hd97740a_0
   - curl=7.83.1=h7bff187_0
   - gatk4=4.2.6.1=py36hdfd78af_1
-  - gsl=2.7.1=h6e86dc7_1
+  - gsl=2.7=he838d99_0
   - htslib=1.14=h9093b5e_0
   - icu=70.1=h27087fc_0
   - idna=3.3=pyhd8ed1ab_0
@@ -63,7 +63,9 @@ dependencies:
   - ncurses=6.3=h7f8727e_2
   - numpy=1.22.3=py39h7a5d4dd_0
   - numpy-base=1.22.3=py39hb8be1f0_0
-  - openssl=1.1.1p=h166bdaf_0
+  - openblas=0.3.20=pthreads_h320a7e8_0
+  - openjdk=11.0.1=h516909a_1016
+  - openssl=1.1.1q=h166bdaf_0
   - perl=5.26.2=h14c3975_0
   - pip=21.2.4=py39h06a4308_0
   - pybind11-abi=4=hd8ed1ab_3

@@ -1,23 +1,61 @@
 #!/bin/bash
 
-BED_DIR=$1
-REF_GENOME=$2
-TOTAL_BED=$3
-NTHREADS=$4
-READ_LENGTH=$5
+# 6_makeIntrinsicVCF.sh
+# Description: Call intrinsic variants for comparison in post-processing step.
+# Author: Yang XT, She CH (2022)
 
-#BED_DIR="$(dirname $0)/out"
-#REF_GENOME="$(dirname $0)/ref/ucsc.hg19.fasta"
-#TOTAL_BED="$(dirname $0)/ref/ucsc.hg19.bed"
-#NTHREADS=12
-#READ_LENGTH=250
-
-
-
-source $(dirname $0)/miscellaneous.sh
-source $(dirname $0)/errorHandling.sh
+source $(dirname $0)/src/miscellaneous.sh
+source $(dirname $0)/src/errorHandling.sh
 set -o errtrace
 trap 'catch_exit_status $? $LINENO $0' ERR
+
+[[ $# -eq 0 ]] && { $BASH_SOURCE --help; exit 2; }
+while [[ $# -gt 0 ]]
+do
+    key="$1"
+    case "$key" in
+        --bed-dir|-b)
+            BED_DIR="$2"
+            shift
+            shift
+            ;;
+        --ref-genome|-r)
+            REF_GENOME="$2"
+            shift
+            shift
+            ;;
+        --ref-bed|-rb)
+            TOTAL_BED="$2"
+            shift
+            shift
+            ;;
+        --thread|-t)
+            NTHREADS="$2"
+            shift
+            shift
+            ;;
+        --read-length|-l)
+            READ_LENGTH="$2"
+            shift
+            shift
+            ;;
+        --help|-h)
+            echo "Extract multi-aligned reads from SD regions from BAM and prepare masked genomes"
+            echo "Usage:    $BASH_SOURCE"
+            echo "          --bed-dir | -b          | parent directory of homologous_regions/ and principal components/"
+            echo "          --ref-genome | -r       | reference genome (hg19)"
+            echo "          --ref-bed | -rb         | BED of reference genome"
+            echo "          --read-length | -l      | window size for homologous regions"
+            echo "          --thread | -t           | number of threads"
+            echo "          --help | -h             | display this message and exit"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option encountered - $1"
+            shift
+            ;;
+    esac
+done
 
 # Create file lists
 find "${BED_DIR}/homologous_regions" -name "*_related_homo_regions.bed" -type f > "${BED_DIR}/homologous_regions/all_sd_beds.tmp"

@@ -2,16 +2,10 @@
 
 # 1_biserFetch.sh
 # Description: This script extracts segmental duplication (SD) regions from given genome.
-# Author: Louis She (2022-05)
-# Contact: louisshe@hku.hk
-
-# Prerequisites:
-# samtools
-# biser
+# Author: Yang XT, She CH (2022)
 
 source $(dirname $(realpath -s $0))/src/miscellaneous.sh
 source $(dirname $(realpath -s $0))/src/errorHandling.sh
-
 set -o errtrace
 trap 'catch_exit_status $? $LINENO $0' ERR
 

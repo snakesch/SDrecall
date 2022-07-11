@@ -117,12 +117,12 @@ function pick_poorcov_region_bam {
             *) echo "No argument passed, Pls at least pass sample path." ;;
         esac
     done
-    
+
     samtools view -hb -@ ${NTHREADS} -P -L "${target_region}" "${input_bam}" > "${output_bed/.txt}.bam.tmp"
     if ! $(dirname $0)/checkBAM.sh "${output_bed/.txt}.bam.tmp"; then exit 3; fi
     mosdepth -Q 10 -b "${target_region}" "${input_bam/.bam/.highMQ}" "${input_bam}"
     [ -f "${input_bam/.bam/.highMQ}.per-base.bed.gz" ] || { echo -e >&2 "$(timestamp) ERROR: mosdepth out of memory." && exit 2; }
-    
+
     # mosdepth should create .bed.gz here, exit otherwise
     zcat "${input_bam/.bam/.highMQ}.per-base.bed.gz" | awk -F '\t' '$4 <= '${depth_threshold}' {print;}' > ${output_bed/.gz/}
     rm -f "${output_bed/.txt}.bam.tmp"
