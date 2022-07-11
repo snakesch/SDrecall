@@ -56,10 +56,10 @@ Optional:
           --fraglen|-f            | fragment length FRAGLEN in CIGAR processing (default: 300)
           --gaplen|-g             | small gap cutoff GAPLEN in CIGAR processing (default: 10)
           --mq|-mq                | MQ threshold for extracting multi-aligned reads (default: 30)
-          --thread|-t             | max number of threads (default: 8)
+          --thread|-t             | number of threads (default: 8)
           --log                   | log level (default: INFO)
           --gene-list|-l          | list of genes of interest
-```
+          --read-length | -rl     | window size for homologous regions```
 ## Custom run
 As users may allocate different number of threads in each step, custom run allows users to execute each step separately with a defined number of threads. Users are advised to reserve more threads for WGS data as described [here](doc/customRun.md).
 
