@@ -129,11 +129,12 @@ def main():
     by_gene = cleaned_df.groupby([GENE_COL-1], as_index=False)
     all_homo_regions = by_gene.apply(generate_bed_per_gene, GENE_COL-1, args.out)
     all_homo_regions = all_homo_regions.droplevel(level=0).reset_index(drop=True)
+    logging.info("Writing all homo regions to " + os.path.join(args.out, "homologous_regions", "all_homo_regions.bed"))
     all_homo_regions.to_csv(os.path.join(args.out, "homologous_regions", "all_homo_regions.bed"), sep="\t", index=False, header=False)
     merge_bed_intervals(os.path.join(args.out, "homologous_regions", "all_homo_regions.bed"))
-    
+
     # Re-annotate all_homo_regions.bed
-    cmd = "bedtools intersect -a {bed} -b {ref} -wao | cut -f 1,2,3,7 | sort -uV | uniq > {bed}.tmp; mv -f {bed}.tmp {bed}".format(
+    cmd = "tail -n+2 {ref} | bedtools intersect -a {bed} -b - -wao | cut -f 1,2,3,7 | sort -uV | uniq > {bed}.tmp; mv -f {bed}.tmp {bed}".format(
         bed=os.path.join(args.out, "homologous_regions", "all_homo_regions.bed"),
         ref=args.ref)
     code = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, encoding="utf-8").returncode

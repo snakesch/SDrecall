@@ -87,8 +87,8 @@ samtools index "${aligned_out}"
 echo -e "$(timestamp) INFO: BWA MEM completed for ${REGION}"
 XA_depth=$(getDepth ${aligned_out} $REGION_BED $NTHREADS)
 post_depth=$( echo "$XA_depth-$ori_hq_depth" | bc -l )
-echo -e "$(timestamp) DEBUG: XA_depth = $XA_depth"
-echo -e "$(timestamp) DEBUG: post_depth = $post_depth"
+# echo -e "$(timestamp) DEBUG: XA_depth = $XA_depth"
+# echo -e "$(timestamp) DEBUG: post_depth = $post_depth"
 echo -e "$(timestamp) INFO: Read depth of ${REGION} region has increased by $( echo "$post_depth/$ori_depth" | bc -l ) fold."
 echo -e "$(timestamp) INFO: Estimated ploidy: $(echo "scale=1;2*$post_depth/$ori_depth" | bc -l )"
 PLOIDY=$(echo "scale=0;2*$post_depth/$ori_depth" | bc -l)

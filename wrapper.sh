@@ -140,17 +140,13 @@ function getThread () {
 
 # $ROOT/2_trimCIGAR.py -i "${OUTPATH}/SD_hg19.bed" -o "${OUTPATH}/SD_hg19.trimmed.bed" -v "${LOGLEVEL}" -f "${FRAGLEN}" -g "${GAPLEN}"
 
-#if [ -f "${GENE_LIST}" ]
-#then
-#    if [ -n "${GENE_COL}" ]; then
-#       $ROOT/3_annotateExtract.py --input "${OUTPATH}/SD_hg19.trimmed.bed" --ref "${ANNO_REF}" --list "${GENE_LIST}" --verbose "${LOGLEVEL}" --out "${ROOT}/ref/"
-#    else
-#       echo -e >&2 "$(timestamp) ERROR: Column index not specified!"
-#       exit 2
-#    fi
-#else
-$ROOT/3_annotateExtract.py --input "${OUTPATH}/SD_hg19.trimmed.bed" --ref "${ANNO_REF}" --verbose "${LOGLEVEL}" --out "${ROOT}/ref"
-# fi
+if [ -f "${GENE_LIST}" ]
+then
+    $ROOT/3_annotateExtract.py --input "${OUTPATH}/SD_hg19.trimmed.bed" --ref "${ANNO_REF}" --list "${GENE_LIST}" --verbose "${LOGLEVEL}" --out "${ROOT}/ref/"
+else
+    $ROOT/3_annotateExtract.py --input "${OUTPATH}/SD_hg19.trimmed.bed" --ref "${ANNO_REF}" --verbose "${LOGLEVEL}" --out "${ROOT}/ref"
+    echo -e >&2 "$(timestamp) WARNING: Extracting homologous regions from ALL genes. This may take excessive time."
+fi
 
 find ${ROOT}/ref/homologous_regions/ -name "*.bed" | xargs -I{} -t -P3 bash ${ROOT}/4_preparation.sh --input-bam "${BAM_PATH}" --thread $(getThread 8) --region-list {} --out "${OUTPATH}" --ref-genome "${REF_GENOME}" --ref-bed "${REF_BED}" -mq "${MQ_THRES}"
 
@@ -160,7 +156,7 @@ do
 done
 
 # Make intrinsic VCF
-$ROOT/6_makeIntrinsicVCF.sh --bed-dir "${ROOT}/ref" --ref-genome "${REF_GENOME}" --ref-bed "${REF_BED}" --read-length "${READ_LENGTH}" --thread $(getThread 8) 
+$ROOT/6_makeIntrinsicVCF.sh --bed-dir "${ROOT}/ref" --ref-genome "${REF_GENOME}" --ref-bed "${REF_BED}" --read-length "${READ_LENGTH}" --thread $(getThread 8)
 
 $ROOT/7_postProcessing.sh --vcfpath "${OUTPATH}/vcf/" --regions "${ROOT}/ref/homologous_regions/" -iv "${ROOT}/ref/all_pc.realign.${READ_LENGTH}.trim.vcf.gz"
 

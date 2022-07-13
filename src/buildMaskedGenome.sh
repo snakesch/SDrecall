@@ -36,6 +36,6 @@ seqtk subseq -l 60 "${REF_GENOME}" "${OUTPATH}/$(basename ${REGION_BED} .bed).be
 seqtk seq -l 60 -M "${OUTPATH}/$(basename ${TOTAL_BED} .bed)_exclude_${PRIORITY_COMPONENT}.bed.tmp" -n N "${OUTPATH}/${REF_GENOME_NAME}_${PRIORITY_COMPONENT}_masked.fasta.tmp" > "${OUTPATH}/${REF_GENOME_NAME}_${PRIORITY_COMPONENT}_masked.fasta"
 
 rm -f ${OUTPATH}/$(basename ${TOTAL_BED} .bed)_exclude_${PRIORITY_COMPONENT}.bed.tmp ${OUTPATH}/$(basename ${REGION_BED} .bed).bed.tmp ${OUTPATH}/${REF_GENOME_NAME}_${PRIORITY_COMPONENT}_masked.fasta.tmp
-index_genome "${OUTPATH}/${REF_GENOME_NAME}_${PRIORITY_COMPONENT}_masked.fasta" bwtsw dict fai
+index_genome "${OUTPATH}/${REF_GENOME_NAME}_${PRIORITY_COMPONENT}_masked.fasta" dict fai
 validate_mgenome "${OUTPATH}/${REF_GENOME_NAME}_${PRIORITY_COMPONENT}_masked.fasta" "${REGION_BED}"
 echo -e "$(timestamp) INFO: Masked genome created successfully. ("${OUTPATH}/${REF_GENOME_NAME}_${PRIORITY_COMPONENT}_masked.fasta")"
