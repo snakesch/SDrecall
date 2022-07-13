@@ -154,13 +154,30 @@ Variants are called if and only if ploidy >= 2. Regions are omitted if otherwise
 Variants are first called with the assumption of possible multiploidy cases, genotyped, left-aligned and trimmed. If polyploidy is detected, it is converted to diploid VCF(s). Variants are first called with the assumption of possible multiploidy events. The called variants are then genotyped and cleaned to generate a VCF file. Variants called are filtered by coverage, only those with low coverage are retained (<=15).
     
 ### 3. Compare with intrinsic VCFs
+#### 3.1 Call intrinsic variants
 ```{bash}
-./6_postProcessing.sh [-h] --vcfpath VCF_DIR --regions REGIONS_DIR
+./6_makeIntrinsicVCF.sh [-h] --bed-dir BED_DIR --ref-genome REF_GENOME --ref-bed BED --read-length LEN [--thread INT]
+```
+Available options:
+* `--bed-dir | -b`: parent directory of `homologous_regions/` and `principal_components/`
+* `--ref-genome | -r`: reference genome (hg19)
+* `--ref-bed | -rb`: BED of reference genome
+* `--thread | -t`: number of threads
+
+Output:
+* `BED_DIR/all_pc.realign.LEN.trim.vcf.gz`: trimmed VCF of intrinsic variants
+
+Homologous regions are first broken down into smaller regions with size <= LEN. For each block with LEN >= 100, its sequence is extracted from FASTA of reference genome and then converted to FASTQ format. A masked genome is prepared against all principal components (i.e. gene regions, including 5'-UTR and 3'-UTR), that is masking regions other than principal components. FASTQ files are realigned to the masked genome and intrinsic variants are called.
+
+#### 3.2 Filter out intrinsic variants
+```{bash}
+./7_postProcessing.sh [-h] --vcfpath VCF_DIR --regions REGIONS_DIR --intrin INTRIN_VCF
 ```
 Available option:
-* `--vcfpath`: directory of VCFs in poor coverage regions (the one generated in step 2)
-* `--regions`: directory of all BED files
+* `--vcfpath | -p`: directory of VCFs in poor coverage regions (the one generated in step 2)
+* `--regions | -r`: directory of all BED files
+* `--intrin | -iv`: path of intrinsic VCF
 
-For variants called from poor coverage regions, they are compared to an "intrinsic VCF". Intrinsic VCFs contain variants ...
+For variants called from poor coverage regions, they are compared to intrinsic VCF. Cleaned VCF is written to `VCF_DIR/*.homo_region.filtered.vcf.gz`.
 
 By default, `masked_genome/` and VCFs in `vcf/` are deleted to save space.
