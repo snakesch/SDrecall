@@ -13,6 +13,7 @@ import logging
 def maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS):
     
     logging.info(f"Taking up {NTHREADS} threads.")
+    sample_ID = os.path.basename(BAM_FILE).split(".")[0]
     
     # Available homologous regions coordinates
     os.chdir(os.path.join(BED_DIR, "homologous_regions"))
@@ -48,7 +49,7 @@ def maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS)
         # Check if we have precisely 2 fastq files
         logging.debug(f"Processing {region}")
         os.chdir(FASTQ_DIR)
-        fastq = (glob.glob(f"*{region}-XA*.fq.gz"))
+        fastq = (glob.glob(f"{sample_ID}_{region}-XA*.fq.gz"))
         if len(fastq) != 2:
             raise ValueError(f"More than 2 fastq files found for region {region}")
         fastq = sorted([os.path.join(FASTQ_DIR, f) for f in fastq])

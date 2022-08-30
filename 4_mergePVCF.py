@@ -4,6 +4,7 @@ import os
 import pandas as pd
 import logging
 import argparse
+import gzip
 from src.utils import *
 from pandarallel import pandarallel as pa
 import time

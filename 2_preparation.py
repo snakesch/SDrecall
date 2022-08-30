@@ -225,7 +225,8 @@ def getIntrinsicVcf(all_pc_fp, all_homo_regions_fp, fastq_dir, ref_genome, vcf_d
     cmd = f"gatk LeftAlignAndTrimVariants -V {tmp_vcf} -R {ref_genome} --split-multi-allelics -O {vcf_out} "    
     executeCmd(cmd)
     os.remove(realigned_bam_out)            
-    os.remove(tmp_vcf)       
+    os.remove(tmp_vcf)     
+    logging.info(f"Writing intrinsic VCF to {vcf_out}")
 
     return
 
@@ -274,8 +275,19 @@ if __name__ == "__main__":
     os.remove(_sorted_bam)
     
     start = time.time()
+    overlap_bedfs = []
+    os.makedirs(os.path.join(args.homo_dir, "gene_overlap"), exist_ok=True)
+    for file in region_beds:
+        gene_bed = os.path.join(args.pc_dir, os.path.basename(file)[:-25] + ".bed")
+        out_bed = os.path.join(args.homo_dir, "gene_overlap", os.path.basename(gene_bed))
+        cmd = f"bedtools intersect -a {file} -b {gene_bed} > {out_bed} "
+        executeCmd(cmd)
+        if os.path.getsize(out_bed) == 0:
+            os.remove(out_bed)
+        else:
+            overlap_bedfs.append(out_bed)
     with Pool(args.thread) as p:
-        p.starmap(mask_genome, zip(region_beds, repeat(args.ref_genome), repeat(args.outpath)))
+        p.starmap(mask_genome, zip(overlap_bedfs, repeat(args.ref_genome), repeat(args.outpath)))
     logging.info(f"****************** Genome masking completed in {time.time() - start:.2f} seconds ******************")
  
     # Get intrinsic VCF for selecting unlikely intrinsic variants
