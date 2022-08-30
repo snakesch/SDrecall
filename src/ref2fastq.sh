@@ -48,6 +48,9 @@ if [[ $(awk -F '\t' '{sum+=$3-$2;} END{print sum;}' "${BED_FILE/.bed/.preproc.be
 then
     seqtk subseq "${REF_GENOME}" "${BED_FILE/.bed/.preproc.bed}" | \
     seqtk seq -F "F" - > "${BED_FILE/.bed/.refseq}.${READ_LENGTH}.fastq"
+    
+    # Cleanup
+    rm -f "${BED_FILE/.bed/.preproc.bed}"
 else
     echo -e >&2 "$(timestamp) ERROR: Realignment failed for BED file : ${BED_FILE}"
     echo -e >&2 "$(timestamp) ERROR: Does the BED file have reasonable read length (${READ_LENGTH})?"

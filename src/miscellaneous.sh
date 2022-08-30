@@ -76,9 +76,9 @@ function getDepth () {
     then
         if [[ $readType == "HQ" ]]
         then
-            samtools view -h -@ $threads $bamf | grep -v XA:Z | samtools depth -@ $threads -a -b $target_region -Q 30 -g DUP,UNMAP,QCFAIL,SECONDARY - | awk '{sum+=$3} END{ printf "%s",sum/NR;}'
+            samtools view -h -@ $threads $bamf | grep -v XA:Z | samtools depth -@ $threads -a -b $target_region -Q 30 -g DUP,UNMAP,QCFAIL,SECONDARY - | awk '{sum+=$3} END{ if (NR != 0) {printf "%s",sum/NR;} else {print 0;}}'
         else
-            samtools depth -@ $threads -a -b $target_region -g DUP,UNMAP,QCFAIL,SECONDARY $bamf | awk '{sum+=$3} END{ printf "%s",sum/NR;}'
+            samtools depth -@ $threads -a -b $target_region -g DUP,UNMAP,QCFAIL,SECONDARY $bamf | awk '{sum+=$3} END{ if (NR != 0) { printf "%s",sum/NR;} else {print 0;}}'
         fi
     else
         return 127
@@ -119,7 +119,7 @@ function pick_poorcov_region_bam {
     done
 
     samtools view -hb -@ ${NTHREADS} -P -L "${target_region}" "${input_bam}" > "${output_bed/.txt}.bam.tmp"
-    if ! $(dirname $0)/checkBAM.sh "${output_bed/.txt}.bam.tmp"; then exit 3; fi
+    if ! $(dirname $0)/src/checkBAM.sh "${output_bed/.txt}.bam.tmp"; then exit 3; fi
     mosdepth -Q 10 -b "${target_region}" "${input_bam/.bam/.highMQ}" "${input_bam}"
     [ -f "${input_bam/.bam/.highMQ}.per-base.bed.gz" ] || { echo -e >&2 "$(timestamp) ERROR: mosdepth out of memory." && exit 2; }
 

@@ -9,16 +9,17 @@
 source $(dirname $(realpath -s $0))/miscellaneous.sh
 source $(dirname $(realpath -s $0))/errorHandling.sh
 
-if [[ "$1" == "-t" ]]
-then
-    NTHREADS="$2"
-    shift 2
-fi
-
-NTHREADS=${NTHREADS:-4}
+set -x
 
 while [[ $# -gt 0 ]]
 do
+    if [[ "$1" == "-t" ]]
+    then
+        NTHREADS="$2"
+        shift 2
+    fi
+    NTHREADS=${NTHREADS:-4}
+
     FILE="$1"
     shift
 
@@ -30,12 +31,14 @@ do
         exit 1
     fi
 
-    if [[ $(samtools view -@ ${NTHREADS} "$FILE" | head -n5 | cut -f1 | grep -v ^@ | egrep -c '/1$|/2$') -gt 0 ]]
+    if samtools head -n 5 "$FILE" | cut -f1 | egrep -c '/1$|/2$' > /dev/null
     then
         echo -e >&2 "$(timestamp) WARNING: BAM file contains unexpected query names."
-     fi
+    fi
 
-    if [[ $(samtools stats -@ ${NTHREADS} "$FILE" | grep "is sorted" | cut -f3) -eq 0 ]]
+    #if [[ $(samtools stats -@ ${NTHREADS} "$FILE" | grep "is sorted" | cut -f3) -eq 0 ]]
+    order=$(samtools view -H "$FILE" | grep HD | cut -d: -f3)
+    if [ ${order} == "unknown" ] || [ ${order} == "unsorted" ]
     then
         echo -e >&2 "$(timestamp) ERROR: BAM is not sorted."
         exit 1
@@ -44,6 +47,6 @@ do
     if [[ "$FILE" -nt "${FILE}.bai" ]]
     then
         echo -e >&2 "$(timestamp) ERROR: BAM index file is out-of-date."
-        exit 1
+        samtools index "${FILE}"
     fi
 done

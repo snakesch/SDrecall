@@ -1,15 +1,11 @@
-#!/usr/bin/env python3
-import pandas as pd
-import numpy as np
-import logging
-import re
-import argparse
-from src.utils import getIntersect
-
-def lr_trim(cigar_arr, blocks):
+def lr_trim(cigar_arr, blocks, logLevel="INFO"):
     '''
     This function trims all leading and trailing indels and returns the modified block by reference.
     '''
+    import numpy as np
+    import logging
+    logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%a %b-%m %I:%M:%S%P', level = logLevel.upper())
+    
     if blocks == None:
         return
     first = blocks[0]
@@ -18,12 +14,12 @@ def lr_trim(cigar_arr, blocks):
         logging.debug("Removed {}".format(cigar_arr[first]))
         np.delete(cigar_arr, first)
         blocks.pop(0)
-        lr_trim(cigar_arr, blocks)
+        lr_trim(cigar_arr, blocks, logLevel=logLevel)
     elif cigar_arr[last, 1] != 'M':
         logging.debug("Removed {}".format(cigar_arr[last]))
         np.delete(cigar_arr, last)
         blocks.pop(-1)
-        lr_trim(cigar_arr, blocks)
+        lr_trim(cigar_arr, blocks, logLevel=logLevel)
     else:
         return
                 
@@ -31,6 +27,8 @@ def breakDownCigar(Cigar: str):
     '''
     This function takes CIGAR string (23M8D9M) and returns a list of tuples [(23, M), (8, D), ...].
     '''
+    import re
+    
     lengths = [int(s) for s in re.findall('[0-9]+', Cigar)]
     chars = re.findall('[A-Z]+', Cigar)
     
@@ -42,6 +40,8 @@ def r_extend(cigar_arr, index: int, blocks = [], penalty = 0, small_gap_cutoff =
     For any index _idx, the function looks for a long gapped alignment towards its right hand side and returns the list of indices as a block.
     Note: Left extension is not implemented to facilitate scoring algorithm. (i.e. Decide which CIGAR block to take)
     '''
+    import numpy as np
+    
     if cigar_arr[index, 1] == 'M':
         cur_len += cigar_arr[index, 0].astype(int)
         blocks.append(index)
@@ -61,12 +61,17 @@ def r_extend(cigar_arr, index: int, blocks = [], penalty = 0, small_gap_cutoff =
     elif cur_len >= frag_len and index == len(cigar_arr) - 1:
         return blocks
 
-def getBlockFromCigar(cigar: list, frag_len = 300, small_gap_cutoff = 10):
+def getBlockFromCigar(cigar: list, frag_len = 300, small_gap_cutoff = 10, logLevel="INFO"):
     '''
     This function takes CIGAR string and extract blocks (list of tuples) from it.
     Blocks are either long fragments of match / mismatch OR long fragments intercalated with small indels.
     If no valid long fragments / small indels are detected, the function returns None.
     '''
+    from .utils import getIntersect
+    import numpy as np
+    import logging
+    logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%a %b-%m %I:%M:%S%P', level = logLevel.upper())
+    
     cigar_arr = np.array(cigar)
     long_match_conditions = [ (cigar_arr[:, 1] == 'M') & (cigar_arr[:, 0].astype(int) >= frag_len) ]
     indel_conditions = [ (cigar_arr[:, 1] == 'D') | (cigar_arr[:, 1] == 'I') | (cigar_arr[:, 1] == 'S') | (cigar_arr[:, 1] == 'N') ]
@@ -84,7 +89,7 @@ def getBlockFromCigar(cigar: list, frag_len = 300, small_gap_cutoff = 10):
     for start in range(0, len(cigar_arr)):
         raw_block = r_extend(cigar_arr, start, blocks = [])
         if raw_block != None:
-            lr_trim(cigar_arr, raw_block)
+            lr_trim(cigar_arr, raw_block, logLevel=logLevel)
             logging.debug("Appending {}".format(raw_block))
             raw_blocks.append(raw_block)
     intersect = getIntersect(raw_blocks)
@@ -99,10 +104,14 @@ def getBlockFromCigar(cigar: list, frag_len = 300, small_gap_cutoff = 10):
     
     return sorted(blocks) if blocks != None else None
 
-def trim(raw_df, frag_len = 300, small_gap_cutoff = 10):
+def trim(raw_df, frag_len = 300, small_gap_cutoff = 10, logLevel="INFO"):
     '''
     This is the main driver trimming function.
     '''
+    import pandas as pd
+    import logging
+    logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%a %b-%m %I:%M:%S%P', level = logLevel.upper())
+    
     # Extract data from BISER output
     idx_all = raw_df.index
     ref_start_all = raw_df.iloc[:, 1]
@@ -116,7 +125,7 @@ def trim(raw_df, frag_len = 300, small_gap_cutoff = 10):
     cur = []
     for idx, ref_start, ref_end, query_start, query_end, ref_strand, query_strand, cigar_string in zip(idx_all, ref_start_all, ref_end_all, query_start_all, query_end_all, ref_strand_all, query_strand_all, cigar_string_all):
         cigar = breakDownCigar(cigar_string)
-        blocks = getBlockFromCigar(cigar, frag_len = frag_len, small_gap_cutoff = small_gap_cutoff)
+        blocks = getBlockFromCigar(cigar, frag_len = frag_len, small_gap_cutoff = small_gap_cutoff, logLevel=logLevel)
         logging.debug("Extracted block indices : {}".format(blocks))
         if blocks is None:
             logging.warning("No blocks extracted!")
@@ -181,6 +190,8 @@ def trimCigarCoord(cigar: list, blocks: list, ref_start, ref_end, query_start, q
     
 def scoreBlock(cigar_arr, intersectBlock):
    
+    import numpy as np
+    
     for block in intersectBlock:
         score = []
         for sub_block in block: 
@@ -191,27 +202,3 @@ def scoreBlock(cigar_arr, intersectBlock):
             score.append(running_score)
         target = score.index(max(score))
         yield block[target]
-        
-def main():
-    
-    raw_df = pd.read_csv(args.input, sep = "\t", header = None)
-    logging.info("Total number of reads = {}".format(raw_df.shape[0]))
-    ret = trim(raw_df, frag_len = args.fraglen, small_gap_cutoff = args.gaplen)
-    ret.to_csv(args.output, sep = "\t", index = False, header = None, mode = 'w')
-    logging.info("Successfully trimmed BED!")
-    
-    return
-
-if __name__ == "__main__":
-    # Argparse setup
-    parser = argparse.ArgumentParser(description = "Extract SD regions based on trimmed CIGAR.")
-    parser._optionals.title = "Options"
-    parser.add_argument("-i", "--input", type = str, required = True, help = "input BED file generated by BISER")
-    parser.add_argument("-o", "--output", type = str, required = True, help = "output path of result")
-    parser.add_argument("-f", "--fraglen", type = int, default = 300, help = "expected fragment length (default: 300)")
-    parser.add_argument("-g", "--gaplen", type = int, default = 10, help = "small gap cutoff value (default: 10)")
-    parser.add_argument("-v", "--verbose", type = str, default = "INFO", help = "verbosity level (default: INFO)")
-    args = parser.parse_args()
-    logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%a %b-%m %I:%M:%S%P',
-                        level = args.verbose.upper())
-    main()

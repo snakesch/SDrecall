@@ -10,10 +10,8 @@ SDrecall is the prototype of a tool for calling short variants that may be misse
 * [seqtk](https://github.com/lh3/seqtk) >=v1.3
 * [GATK](https://gatk.broadinstitute.org/hc/en-us) >=v4.2.6.1
 * [bwa](https://github.com/lh3/bwa) >=v0.7.17
-* [GCC](https://gcc.gnu.org/) >=v9.1.0
 * [Python](https://www.python.org/downloads/) >=v3.9.2
 * [HTSlib](http://www.htslib.org/download/) >=v1.14
-* [VCFPy](https://github.com/bihealth/vcfpy) >=v0.13.4
 * [mosdepth](https://github.com/brentp/mosdepth) >=v0.3.3
 * [bcftools](http://www.htslib.org/download/) >=v1.14
 
@@ -37,9 +35,7 @@ source /opt/miniconda/bin/activate SDrecall
 ### Required
 * Base Quality Score Recalibrated (BQSR) BAM file
 * Gene annotation file ([NCBI RefSeq data](https://github.com/snakesch/SDrecall/blob/main/doc/customRun.md#gene-annotation-file))
-
-### Optional
-* A gene panel in BEDPE format (Strongly recommended. See [part 0.4](https://github.com/snakesch/SDrecall/blob/main/doc/customRun.md#04-annotate-and-extract-regions-of-interest))
+* A panel of genes of interest See [part 0.4](https://github.com/snakesch/SDrecall/blob/main/doc/customRun.md#04-annotate-and-extract-regions-of-interest))
 
 ## Quick run
 ```{bash}

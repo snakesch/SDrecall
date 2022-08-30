@@ -131,34 +131,35 @@ function getThread () {
 [[ -d "${ROOT}/ref/principal_components" ]] || mkdir -p "${ROOT}/ref/principal_components"
 
 # Main
-# $ROOT/1_biserFetch.sh --ref-genome "${REF_GENOME}" --out "${OUTPATH}" --thread $(getThread 8)
+# $ROOT/1_biserFetch.sh --ref-genome "${REF_GENOME}" --out "${OUTPATH}" --thread $(getThread 20)
 
-# if [ -f "${OUTPATH}/SD_hg19.trimmed.bed" ]
-# then
-#    rm -f "${OUTPATH}/SD_hg19.trimmed.bed"
-# fi
+#if [ -f "${OUTPATH}/SD_hg19.trimmed.bed" ]
+#then
+#   rm -f "${OUTPATH}/SD_hg19.trimmed.bed"
+#fi
 
-# $ROOT/2_trimCIGAR.py -i "${OUTPATH}/SD_hg19.bed" -o "${OUTPATH}/SD_hg19.trimmed.bed" -v "${LOGLEVEL}" -f "${FRAGLEN}" -g "${GAPLEN}"
+#$ROOT/2_trimCIGAR.py -i "${OUTPATH}/SD_hg19.bed" -o "${OUTPATH}/SD_hg19.trimmed.bed" -v "${LOGLEVEL}" -f "${FRAGLEN}" -g "${GAPLEN}"
 
-if [ -f "${GENE_LIST}" ]
-then
-    $ROOT/3_annotateExtract.py --input "${OUTPATH}/SD_hg19.trimmed.bed" --ref "${ANNO_REF}" --list "${GENE_LIST}" --verbose "${LOGLEVEL}" --out "${ROOT}/ref/"
-else
-    $ROOT/3_annotateExtract.py --input "${OUTPATH}/SD_hg19.trimmed.bed" --ref "${ANNO_REF}" --verbose "${LOGLEVEL}" --out "${ROOT}/ref"
-    echo -e >&2 "$(timestamp) WARNING: Extracting homologous regions from ALL genes. This may take excessive time."
-fi
+#if [ -f "${GENE_LIST}" ]
+#then
+#    $ROOT/3_annotateExtract.py --input "${OUTPATH}/SD_hg19.trimmed.bed" --ref "${ANNO_REF}" --list "${GENE_LIST}" --verbose "${LOGLEVEL}" --out "${ROOT}/ref/"
+#else
+#    $ROOT/3_annotateExtract.py --input "${OUTPATH}/SD_hg19.trimmed.bed" --ref "${ANNO_REF}" --verbose "${LOGLEVEL}" --out "${ROOT}/ref"
+#    echo -e >&2 "$(timestamp) WARNING: Extracting homologous regions from ALL genes. This may take excessive time."
+#fi
 
-find ${ROOT}/ref/homologous_regions/ -name "*.bed" | xargs -I{} -t -P3 bash ${ROOT}/4_preparation.sh --input-bam "${BAM_PATH}" --thread $(getThread 8) --region-list {} --out "${OUTPATH}" --ref-genome "${REF_GENOME}" --ref-bed "${REF_BED}" -mq "${MQ_THRES}"
+# find ${ROOT}/ref/homologous_regions/ -name "*.bed" | xargs -I{} -t -P1 bash ${ROOT}/4_preparation.sh --input-bam "${BAM_PATH}" --thread $(getThread 8) --region-list {} --out "${OUTPATH}" --ref-genome "${REF_GENOME}" --ref-bed "${REF_BED}" -mq "${MQ_THRES}"
 
-for region in $(find ${ROOT}/ref/homologous_regions -name "*.bed" -type f | sort)
-do
-    $ROOT/5_maskedAlignPolyVarCall.sh --input-bam "${BAM_PATH}" --data "${OUTPATH}" --region-bed "${region}" --ref-genome "${REF_GENOME}" --thread $(getThread 14)
-done
+$ROOT/5_maskedAlignPolyVar.py --input-bam "${BAM_PATH}" --thread $(getThread 10) --verbose DEBUG
 
-# Make intrinsic VCF
 $ROOT/6_makeIntrinsicVCF.sh --bed-dir "${ROOT}/ref" --ref-genome "${REF_GENOME}" --ref-bed "${REF_BED}" --read-length "${READ_LENGTH}" --thread $(getThread 8)
 
-$ROOT/7_postProcessing.sh --vcfpath "${OUTPATH}/vcf/" --regions "${ROOT}/ref/homologous_regions/" -iv "${ROOT}/ref/all_pc.realign.${READ_LENGTH}.trim.vcf.gz"
+$ROOT/7_compareIntrinsic.py -v DEBUG
 
-echo -e " ############# Part 2 done ############# "
-# Deep cleaning ...
+exit 0
+# Cleanup
+rm -f $ROOT/out/*_extracted.bam
+rm -f $ROOT/out/*_cleaned.bed
+rm -f $ROOT/out/*.tmp
+rm -rf $ROOT/out/masked_genome
+rm -rf $ROOT/out/fastq
