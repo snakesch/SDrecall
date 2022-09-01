@@ -37,7 +37,7 @@ conda activate SDrecall
 ## Input files
 ### Required
 * Base Quality Score Recalibrated (BQSR) BAM file
-* A panel of genes of interest ([part 0.4](https://github.com/snakesch/SDrecall/blob/main/doc/customRun.md#04-annotate-and-extract-regions-of-interest))
+* A panel of genes of interest ([step 1](https://github.com/snakesch/SDrecall/blob/main/doc/customRun.md))
 * A prioritized VCF (v4.2) (optional)
 
 ## Quick run
@@ -95,5 +95,6 @@ To be implemented.
 - [ ] Replace `samtools depth` with `mosdepth` or other faster algorithms
 - [ ] Uplift dependencies
 - [ ] Simulation and benchmarking
+- [ ] Unit test
 
 
