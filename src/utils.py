@@ -50,7 +50,10 @@ def loadVCF(path, omit_record=False):
                 subjects = col_names[9:]
             else:
                 break
-            line = next(f)
+            try:
+                line = next(f)
+            except StopIteration:
+                break
     if omit_record:
         return header, subjects
     

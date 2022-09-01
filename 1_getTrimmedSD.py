@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 
+# 1_getTrimmedSD.py
+# Description: Extract homologous regions from trimmed SD regions from reference genome.
+# Author: Yang XT, She CH (2022)
+# Contact: Xingtian Yang (u3005579@connect.hku.hk), Louis She (snakesch@connect.hku.hk)
+
 import os
 import logging
 import argparse
@@ -46,12 +51,11 @@ def annotate_from_refgene(infile, outpath, anno_table: str, genelist: str, keep=
     """
     This function annotates trimmed SD regions and extracts gene regions in gene list.
     
-    args:
+    Arguments:
+    ----------
     infile: trimmed SD BED file
     outpath: output directory of BED files
     anno_table: path of annotation table
-    
-    kwargs:
     keep: keep trimmed SD BED file
     genecol: 0-based column index of gene names in annotated dataframe
     
@@ -105,7 +109,7 @@ def annotate_from_refgene(infile, outpath, anno_table: str, genelist: str, keep=
     
 if __name__ == "__main__":
     # Argparse setup
-    parser = argparse.ArgumentParser(description = "Extract trimmed SD regions from reference genome.")
+    parser = argparse.ArgumentParser(description = "Extract homologous trimmed SD regions from reference genome.")
     parser._optionals.title = "Options"
     parser.add_argument("-r", "--ref_genome", type = str, required = True, help = "reference genome to extract SD regions")
     parser.add_argument("-o", "--output", type = str, required = True, help = "output directory of resulting BED files")

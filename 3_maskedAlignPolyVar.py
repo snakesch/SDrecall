@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 
+# 3_maskedAlignPolyVar.py
+# Description: Masked alignment and multi-ploidy variant calling.
+# Author: Yang XT, She CH (2022)
+# Contact: Xingtian Yang (u3005579@connect.hku.hk), Louis She (snakesch@connect.hku.hk)
+
 import os
 import pandas as pd
 import glob
@@ -25,7 +30,7 @@ def maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS)
     fns = (glob.glob("*[0-9A-Z]_masked.fasta"))
     if any(os.path.getsize(f)/1024**3 > 2 for f in fns):
         logging.warning("Some masked genomes have size > 2Gb. BWA index IS algorithm may not be used.")
-    mgenomes = ["_".join(mg.rstrip("_masked.fasta").split("_")[1:]) for mg in fns]
+    mgenomes = ["_".join(mg[:-13].split("_")[1:]) for mg in fns]
 
     for key in Counter(mgenomes).keys():
         num = Counter(mgenomes)[key]
@@ -50,8 +55,11 @@ def maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS)
         logging.debug(f"Processing {region}")
         os.chdir(FASTQ_DIR)
         fastq = (glob.glob(f"{sample_ID}_{region}-XA*.fq.gz"))
-        if len(fastq) != 2:
-            raise ValueError(f"More than 2 fastq files found for region {region}")
+        if len(fastq) > 2:
+            raise ValueError(f"More than 2 fastq files found for region {region}. ")
+        elif len(fastq) == 0:
+            logging.warning(f"No FASTQ files for region {region}. ")
+            continue
         fastq = sorted([os.path.join(FASTQ_DIR, f) for f in fastq])
 
         # Check for multi-aligned reads first
@@ -151,6 +159,7 @@ def multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS
                     f"""--max-unpruned-variants 100 """ \
                     f"""--min-assembly-region-size 20 """ \
                     f"""--soft-clip-low-quality-ends """ \
+                    f"""--native-pair-hmm-threads {NTHREADS} """ \
                     f"""--enable-dynamic-read-disqualification-for-genotyping """ \
                     f"""-DF WellformedReadFilter """ \
                     f"""-DF GoodCigarReadFilter """ \

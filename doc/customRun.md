@@ -1,48 +1,67 @@
 ## Custom Run
-### 0. Prepare SD regions (BED format)
-#### 0.1. Download reference files
-##### Reference genome (hg19)
-Current algorithm only supports hg19 build. Users can acquire UCSC reference genome (hg19) [here](https://github.com/creggian/ucsc-hg19-fasta).
 
-##### Gene annotation file
-Users are expected to provide a gene annotation file with the following format.
-```
-| Chrom | cdsStart | cdsEnd |   gene   | feature | strand | length |
-| ----- | -------- | ------ |   ----   | ------- | ------ | ------ |
-| chr1  |  11868   | 12227  | DDX11L17 | exon_1  |    +   |   359  |
-```
-Alternatively, follow the steps below to download from [NCBI RefSeq FTP server](ftp://ftp.ebi.ac.uk/pub/databases/genenames/new/tsv/locus_groups/protein-coding_gene.txt).
+Note: All commands described in this documentation should be executed from the top directory of git repository. (eg. ~/SDrecall)
+
+### 0. Reference files
+#### Reference genome
+
+Depending on different genomic assembly, users have to provide a reference genome file (fasta). For testing, users may download hg19 reference genome [here](https://github.com/creggian/ucsc-hg19-fasta).
+
+#### Annotation table
+
+Gene annotation data are downloaded from [NCBI RefSeq FTP server](ftp://ftp.ebi.ac.uk/pub/databases/genenames/new/tsv/locus_groups/protein-coding_gene.txt) with `0_geneAnnotation.py`.
+
 ```{bash}
-./geneAnnotation.py -om <merged output path> -oe <exon output path> -oi <intron output path>
+usage: 0_geneAnnotation.py [-h] -om OUTPUT_MERGED -oe OUTPUT_EXON -oi OUTPUT_INTRON [-v VERBOSE]
+                           [-tg TARGET_GENES]
+
+optional arguments:
+  -h, --help            show this help message and exit
+  -om OUTPUT_MERGED, --output_merged OUTPUT_MERGED
+                        Output path of merged annotation table (exon & intron)
+  -oe OUTPUT_EXON, --output_exon OUTPUT_EXON
+                        Output path of exon annotation table
+  -oi OUTPUT_INTRON, --output_intron OUTPUT_INTRON
+                        Output path of intron annotation table
+  -v VERBOSE, --verbose VERBOSE
+                        Verbosity level
+  -tg TARGET_GENES, --target_genes TARGET_GENES
+                        Target gene list (one gene per row)
 ```
-Available options:
-`-om`: combined exon & intron annotation table
-`-oe`: exon annotation table
-`-oi`: intron annotation table
 
-Please specify the **full paths** (directory + file name) for all 3 arguments.
+### 1. Get relevant SD regions
 
-#### 0.2. Extract SD regions by BISER
+Segmental duplication (SD) regions are first ascertained with BISER, then trimmed by their CIGAR strings (see Trimming logic below). The trimmed SD regions are annotated with the annotation table described in section 0. Homologous region (all SD pairs) and principal component (SD within gene) coordinates are extracted to the specified output directory in BED format (in `out/homologous_regions` and `out/principal_components`). Only genes in the given `genelist.txt` will be included.
+
 ```{bash}
-./1_biserFetch.sh [-h] --ref-genome REF_GENOME --out OUTPUT_PATH [--thread THREAD=8]
-```
-Available options:
-* `--ref-genome|-r`: path of reference genome (hg19)
-* `--out|-o`: output path, file is written to OUTPUT_PATH/SD_hg19.bed
-* `--thread|-t`: number of threads (Recommended: 6-10)
+usage: 1_getTrimmedSD.py [-h] -r REF_GENOME -o OUTPUT -b BUILD -l LIST -a TABLE [-t THREAD]
+                         [-f FRAGLEN] [-g GAPLEN] [--keep_trimmed] [-v VERBOSE]
 
-#### 0.3. Trim CIGAR strings of BISER output
-```{bash}
-./2_trimCIGAR.py [-h] -i INPUT_FN -o OUTPUT_FN [--fraglen | -f  FRAGLEN=300] [--gaplen | -g GAPLEN=10] [--verbose | -v VERBOSE=INFO]
-```
-Available options:
-* `--input|-i`: input path of BED files
-* `--output|-o`: output directory
-* `--fraglen|-f`: fragment length cutoff (Default: 300)
-* `--gaplen|-g`: small gap cutoff (Default: 10)
-* `--verbose|-v`: verbosity level (any logging level stipulated in [python's logging module](https://docs.python.org/3/library/logging.html#logging-levels))
+Extract trimmed SD regions from reference genome.
 
-##### 0.3.1. Trimming logic
+Options:
+  -h, --help            show this help message and exit
+  -r REF_GENOME, --ref_genome REF_GENOME
+                        reference genome to extract SD regions
+  -o OUTPUT, --output OUTPUT
+                        output directory of resulting BED files
+  -b BUILD, --build BUILD
+                        reference genome assembly
+  -l LIST, --list LIST  customized gene list
+  -a TABLE, --table TABLE
+                        gene annotation table
+  -t THREAD, --thread THREAD
+                        number of threads used with BISER (default = 8)
+  -f FRAGLEN, --fraglen FRAGLEN
+                        expected fragment length (default: 300)
+  -g GAPLEN, --gaplen GAPLEN
+                        small gap cutoff value (default: 10)
+  --keep_trimmed        keep trimmed SD BED file for debugging
+  -v VERBOSE, --verbose VERBOSE
+                        verbosity level (default: INFO)
+```
+
+##### 1.1. Trimming logic
 Each CIGAR string is interpreted as a list of tuples `(A, B)`, where `A` represents fragment length (FRAGLEN) and `B` describes the nature of the fragment (e.g. insertion, deletion, clipped sequence, etc.), abbreviated as (D, I, N, S, M). We extract 1) contiguous blocks of match/mismatch (M) with fragment length >= FRAGLEN, and 2) discontinuous blocks with total gap length <= GAPLEN. If no M block with fragment length >= FRAGLEN is found, we only consider the latter discontinuous blocks. In case of ambiguity, the blocks with the longest fragment length (sum of INT when LABEL == M) is reported. Results are saved to an BED file.
 
 Example: (FRAGLEN = 300; GAPLEN = 10)
@@ -56,128 +75,135 @@ CIGAR = [ (2, M), (1, D), (5, M), (6, I), (7, M), (1, S), (2, D), (292, M), (5, 
 extracted_block = [ (7, M), (1, S), (2, D), (292, M), (5, D), (30, M) ]
 ```
 
-#### 0.4. Annotate and extract regions of interest 
+### 2. Preparation
+
+Multi-aligned reads with mapping quality lower than the specified threshold (default: 30; specified via `-mq`) mapped to gene-related homologous regions (BED files in the directory `ref/homologous_regions`) are extracted from the input BAM file for each gene and output in BAM and FASTQ format. Reference genome is masked against homologous regions within a gene (BED files in the directory `ref/principal_components`) and written to `out/masked_genome` by default. Intrinsic variants are also called from the input BAM file for downstream comparison.
+
 ```{bash}
-./3_annotateExtract.py [-h] -i INPUT -r REF -o OUTPATH [-l LIST] [-v VERBOSE=INFO]
+usage: 2_preparation.py [-h] --input_bam INPUT_BAM --ref_genome REF_GENOME --outpath OUTPATH [--homo_dir HOMO_DIR] [--pc_dir PC_DIR] 
+                        [-mq MAPPING_QUALITY] [--length LENGTH] [--thread THREAD] [-v VERBOSE]
+
+Preparation for masked alignment.
+
+Options:
+  -h, --help            show this help message and exit
+  --input_bam INPUT_BAM
+                        input BAM file
+  --homo_dir HOMO_DIR   directory of BED files of homologous regions
+  --pc_dir PC_DIR       directory of BED files of principal components
+  -mq MAPPING_QUALITY, --mapping_quality MAPPING_QUALITY
+                        MQ threshold
+  --ref_genome REF_GENOME
+                        reference genome
+  --outpath OUTPATH     output directory for FASTQ and masked genomes
+  --length LENGTH       BED window size for extracting reads from homologous regions (default: 250)
+  --thread THREAD       number of threads (default: 8)
+  -v VERBOSE, --verbose VERBOSE
+                        verbosity level (default: INFO)
+
 ```
-Available options:
-* `--input|-i`: input path of trimmed BED file (from previous step)
-* `--out|-o`: output path
-* `--ref|-r`: reference annotation table (tab-separated)
-* `--list|-l`: list of genes of interest (genes not listed will be excluded) (optional)
-* `--verbose|-v`: verbosity level
 
-Users should devise a gene panel from a subset of `genelist.txt` [here](genelist.txt). The gene list should be a column of a table that contains:
-
-| Genetic defect |
-| -------------- |
-| gene_1 |
-| gene_2 |
-| gene_3 |
-| ... |
-
-The following files are written to `OUTPATH/homologous_regions`:
-* `all_homo_regions.bed`: BED containing the coordinates of all genes of interest
-* `<gene>_related_homo_region.bed`: extracted BED with only \<gene\> data
-
-The following files are written to `OUTPATH/principal_components`:
-* `<gene>.bed`: start and end coordinates of \<gene\>
-
-Format:
-
-| chr | start pos | end pos | gene |
-| --- | --------- | ------- | ---- |
-| ... |  ... | ... | ... |
-    
-**WARNING: Users should never attempt to skip `--list` option. The script will run for a total of 5548 genes if unspecified which may take unexpectedly long time.** 
-
-### 1. Preparation
-We first extract fragments that align to extracted SD regions in the input BAM file, then build a masked genome against the region.
-
-For single region analysis,
-```{bash}
-./4_preparation.sh [-h] --input-bam BAM --region-list REGION_BED --ref-genome REF_GENOME --ref-bed REF_BED --out OUTPATH [-mq INT=30] [--thread THREAD=8]
-```
-For multiple regions analysis,
-```{bash}
-find DIR -name "*.bed" | xargs -I{} -P XARGS_THREADS -t bash ./4_preparation.sh --input-bam BAM --region-list {} --ref-genome REF_GENOME --ref-bed REF_BED --out OUTPATH [-mq INT=30] [--thread THREAD=8]
-```
-Available options:
-* `--input-bam|-i`: input path of base quality score recalibrated (BQSR) BAM file
-* `--ref-genome|-r`: path of reference genome
-* `--region-list|-l`: file list of BED files / path of BED file
-* `--ref-bed|-rb`: BED of reference genome (3 columns (in order): chromosome name, start position and length of chromosome (in bp)
-* `--mq-threshold|-mq`: mapping quality (MQ) threshold (Default: 30)
-* `--out|-o`: output path
-* `--thread|-t`: number of threads (Default: 8) (For multiple regions analysis, total number of threads used = XARGS_THREADS $\times$ THREAD
-
-In this step, we extract regions in REGION_BED from BAM and prepare masked genomes for each of the regions. A table of all files related to a certain region is also created. In the extraction step, we extract reads tagged with XA (multi-aligned) or with mapping quality MQ < _&alpha;_ where _&alpha;_ is the mapping quality threshold specified by `-mq`, which holds a default value of 30. Masked genomes are written to `OUTPATH/masked_genome/` and indexed.
-
-**WARNING: This step may create extremely large FASTA files. Please ensure disk availability before running 4_preparation.sh.**
-
-Note: More threads (>10) should be used for WGS data.
-
-### 2. Masked alignment and polyploid variant calling
-```{bash}
-./5_maskedAlignPolyVarCall.sh [-h] --input-bam BAM_PATH --data DATAPATH --region-bed BED --ref-genome REF_GENOME [--thread INT=10]
-```
-Available options:
-* `--input-bam`: input BQSR BAM file
-* `--data`: parent directory of `masked_genome` and `fastq`
-* `--region-bed`: BED file of selected SD regions
-* `--thread|-t`: number of threads (Default: 10)
-
-Note: The script only handles ONE BED file each time. To analyse multiple regions, users can iterate over each BED file:
-```{bash}
-for region in $(find BED_DIR -name "*.bed" -type f | sort)
-do
-    ${ROOT}/5_maskedAlignPolyVarCall.sh --input-bam BAM_PATH --data DATAPATH --region-bed $region --ref-genome ${REF_GENOME} [--thread INT=10]
-done
-```
-    
-#### 2.1. Realign against masked genome
-Paired-end FASTQs generated from BAM_PATH (stored in `fastq/`) are realigned to respective masked genomes stored in `masked_genome/`. Ploidy is estimated as follows. 
-
-Depth_1 = Average depth of all reads in input BAM file
-    
-Depth_2 = Average depth of high-quality reads in input BAM file
-    
-Depth_3 = Average depth of all reads in the extracted BAM file
-    
-Depth_4 = Depth_3 - Depth_2
-    
-Ploidy = 2 $\times$ Depth_4 / Depth_1
-    
-Variants are called if and only if ploidy >= 2. Regions are omitted if otherwise.
-    
-#### 2.2. Variant calling
-Variants are first called with the assumption of possible multiploidy cases, genotyped, left-aligned and trimmed. If polyploidy is detected, it is converted to diploid VCF(s). Variants are first called with the assumption of possible multiploidy events. The called variants are then genotyped and cleaned to generate a VCF file. Variants called are filtered by coverage, only those with low coverage are retained (<=15).
-    
-### 3. Compare with intrinsic VCFs
-#### 3.1 Call intrinsic variants
-```{bash}
-./6_makeIntrinsicVCF.sh [-h] --bed-dir BED_DIR --ref-genome REF_GENOME --ref-bed BED --read-length LEN [--thread INT]
-```
-Available options:
-* `--bed-dir | -b`: parent directory of `homologous_regions/` and `principal_components/`
-* `--ref-genome | -r`: reference genome (hg19)
-* `--ref-bed | -rb`: BED of reference genome
-* `--thread | -t`: number of threads
-
-Output:
-* `BED_DIR/all_pc.realign.LEN.trim.vcf.gz`: trimmed VCF of intrinsic variants
+#### 2.1. Intrinsic VCF generation
 
 Homologous regions are first broken down into smaller regions with size <= LEN. For each block with LEN >= 100, its sequence is extracted from FASTA of reference genome and then converted to FASTQ format. A masked genome is prepared against all principal components (i.e. gene regions, including 5'-UTR and 3'-UTR), that is masking regions other than principal components. FASTQ files are realigned to the masked genome and intrinsic variants are called.
 
-#### 3.2 Filter out intrinsic variants
+### 3. Masked (re-)alignment and multiploid variant calling
+
+Input BAM is first re-aligned against respective masked genomes. Ploidy status is deduced by average read depths (see Ploidy estimation). Variants are called from the realigned BAM files with GATK, corrected for their ploidy status such that the resulting VCF is diploid (see Ploidy correction), and filtered by coverage such that low coverage variants (<=15) are retained. The resulting VCF is then compared against its intrinsic counterpart generated from the same input BAM file (see intrinsic variant labelling).  
+
 ```{bash}
-./7_postProcessing.sh [-h] --vcfpath VCF_DIR --regions REGIONS_DIR --intrin INTRIN_VCF
+usage: 3_maskedAlignPolyVar.py [-h] --input_bam INPUT_BAM [--bed_dir BED_DIR] --intrinsic_vcf INTRINSIC_VCF
+                               [--lower LOWER] [--masked_genomes MASKED_GENOMES] [--fastq_dir FASTQ_DIR]
+                               [--ref_genome REF_GENOME] [--output_vcf OUTPUT_VCF] [--thread THREAD] [--keep_vcf]
+                               [-v VERBOSE]
+
+Masked alignment and multi-ploidy variant calling.
+
+Options:
+  -h, --help            show this help message and exit
+  --input_bam INPUT_BAM
+                        input BAM file
+  --bed_dir BED_DIR     directory of BED files
+  --intrinsic_vcf INTRINSIC_VCF
+                        path of intrinsic VCF
+  --lower LOWER         lower bound for unlikely intrinsic variants
+  --masked_genomes MASKED_GENOMES
+                        directory of masked genomes
+  --fastq_dir FASTQ_DIR
+                        directory of FASTQ files
+  --ref_genome REF_GENOME
+                        path of reference genome
+  --output_vcf OUTPUT_VCF
+                        directory to write VCF
+  --thread THREAD       number of threads
+  --keep_vcf            keep intermediate VCFs
+  -v VERBOSE, --verbose VERBOSE
+                        verbosity level (default: INFO)
 ```
-Available option:
-* `--vcfpath | -p`: directory of VCFs in poor coverage regions (the one generated in step 2)
-* `--regions | -r`: directory of all BED files
-* `--intrin | -iv`: path of intrinsic VCF
 
-For variants called from poor coverage regions, they are compared to intrinsic VCF. Cleaned VCF is written to `VCF_DIR/*.homo_region.filtered.vcf.gz`.
+#### 3.1. Ploidy estimation
 
-By default, `masked_genome/` and VCFs in `vcf/` are deleted to save space.
+```
+Depth_1 $=$ Average depth of all reads in input BAM file
+    
+Depth_2 $=$ Average depth of high-quality reads in input BAM file
+    
+Depth_3 $=$ Average depth of all reads in the extracted BAM file
+    
+Depth_4 $=$ Depth_3 - Depth_2
+    
+Ploidy $=$ 2 $\times$ Depth_4 / Depth_1
+```
+
+Note: Variants are called if and only if ploidy >= 2. Regions are omitted if otherwise.
+
+#### 3.2. Ploidy correction 
+
+For each variant with ploidy > 2, if the called genotype:
+* has more than 2 ALT alleles: changed to `1/1`
+* has only 1 ALT allele: changed to `0/1`
+* is missing and has no ALT allele: changed to `.`
+* not missing and has no ALT allele: changed to `0/0`.
+
+For each haploid variant, if the called genotype is:
+* `1`: changed to `1/1`
+* `0`: changed to `0/0`
+* `.`: no change
+
+#### 3.3. Intrinsic variant labelling 
+
+For each variant, we compare the query VCF (Query) to the intrinsic VCF (Intrinsic) and determine from VCFs the allelic depth (AD) of reference allele (REF) and alternate allele (ALT). From the allelic depths, we compute two ratios, `qra_ratio` and `ira_ratio`.
+
+```
+qra_ratio $=$ $\frac{Query REF AD}{Query ALT AD}$
+
+ira_ratio $=$ $\frac{Intrinsic REF AD + 1}{Intrinsic ALT AD}$
+
+```
+
+If `ira_ratio` equals 0, the variant is considered unlikely intrinsic. If `$\frac{qra_ratio}{ira-ratio} <= $` lower limit specified via `--lower`, the variant is regarded as likely intrinsic. All other variants are labelled as unlikely intrinsic.
+
+### 4. Merge with prioritized VCF (optional)
+
+Users may compare the resulting VCF from step 3 (original VCF) with another VCF (prioritized VCF). Variants found in original VCF will be tagged with `ov_tag` in the FITLER field whereas variants found in prioritized VCF will be tagged with `pv_tag`. Variants found in both VCFs will be tagged twice.
+
+```{bash}
+usage: 4_mergePVCF.py [-h] --pvcf PVCF --ovcf OVCF --pv_tag PV_TAG --ov_tag OV_TAG --outpath OUTPATH
+                      [--thread THREAD] [-v VERBOSE]
+
+Merge prioritized VCF and original VCF.
+
+Options:
+  -h, --help            show this help message and exit
+  --pvcf PVCF           prioritized VCF (gz)
+  --ovcf OVCF           original VCF (gz)
+  --pv_tag PV_TAG       tag used for variants from prioritized VCF
+  --ov_tag OV_TAG       tag used for variants from original VCF
+  --outpath OUTPATH     absolute output path of merged VCF (gz)
+  --thread THREAD       number of threads (default: 8)
+  -v VERBOSE, --verbose VERBOSE
+                        verbosity level (default: INFO)
+
+```
+
+

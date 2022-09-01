@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 
+# 2_preparation.py
+# Description: Preparation for masked re-alignment.
+# Author: Yang XT, She CH (2022)
+# Contact: Xingtian Yang (u3005579@connect.hku.hk), Louis She (snakesch@connect.hku.hk)
+
 import subprocess
 import os
 import logging
@@ -16,7 +21,7 @@ def getHomoRelatedBam(infile, all_homo_bed, thread):
     """
     This function extracts reads mapped to any homologous regions and outputs a BAM.
     """
-    
+
     homorelated_out = infile + ".homorelated"
     _qname = infile + ".qname"
     cmd = f"samtools view -@ {thread} -L {all_homo_bed} {infile} | awk -F'\t' '{{print $1;}}' | sort -u > {_qname} "
@@ -24,7 +29,7 @@ def getHomoRelatedBam(infile, all_homo_bed, thread):
     cmd = f"gatk FilterSamReads -I {infile} -O {homorelated_out} --FILTER includeReadList -RLF {_qname} -SO coordinate "
     executeCmd(cmd)
     os.remove(_qname)
-    if subprocess.run(f"samtools view -c {homorelated_out}", shell=True, text=True, 
+    if subprocess.run(f"samtools view -c {homorelated_out}", shell=True, text=True,
                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout == '0':
         raise ValueError(f"No reads mapped to homologous regions in {infile}. ")
     logging.debug(f"Selected reads mapped to homologous regions in {infile}.")
@@ -33,27 +38,27 @@ def getHomoRelatedBam(infile, all_homo_bed, thread):
     cmd = f"samtools sort -n -O bam -o {_sorted_bam} {homorelated_out}"
     executeCmd(cmd)
     os.remove(homorelated_out)
-    
+
     return _sorted_bam
 
-def extractFASTQ(infile, region_bed, outpath):
+def extractFASTQ(infile, region_bed, outpath, mq):
     """
     This function extracts multi-aligned reads mapped to a given region and outputs reads in FASTQ format.
-    
+
     infile should be in BAM format and only contain reads mapped to homologous regions and sorted by QNAME.
-    
+
     It is designated for multithreading.
-    
+
     """
     region_name = os.path.basename(region_bed).split("_r")[0]
     logging.debug(f"Detected region {region_name}. ")
-    
+
     tmp_bed = region_bed + ".tmp"
     cmd = f"bedtools sort -i {region_bed} | bedtools merge -i - > {tmp_bed}"
     executeCmd(cmd)
-    
+
     tmp_qname = infile + "_" + region_name + ".qname"
-    cmd = f"samtools view -L {tmp_bed} {infile} | awk -F '\t' '$0 ~ /XA:Z:/ || $5 < 30 {{print $1;}}' | sort -u > {tmp_qname}"
+    cmd = f"samtools view -L {tmp_bed} {infile} | awk -F '\t' '$0 ~ /XA:Z:/ || $5 < {mq} {{print $1;}}' | sort -u > {tmp_qname}"
     executeCmd(cmd)
 
     os.remove(tmp_bed)
@@ -62,36 +67,35 @@ def extractFASTQ(infile, region_bed, outpath):
         os.remove(tmp_qname)
         logging.warning(f"No multi-aligned reads with MQ < 30 in {region_name}")
         return
-        
+
     _extracted_bam = infile + "_only_" + region_name + ".bam"
     cmd = f"samtools view -N {tmp_qname} -o {_extracted_bam} {infile} "
     executeCmd(cmd)
-    
+
     out_1 = os.path.join(outpath, os.path.basename(infile).split(".")[0] + "_" + region_name + "-XA_1.fq")
     out_2 = os.path.join(outpath, os.path.basename(infile).split(".")[0] + "_" + region_name + "-XA_2.fq")
     cmd = f"bedtools bamtofastq -i {_extracted_bam} -fq {out_1} -fq2 {out_2} && gzip -f {out_1} && gzip -f {out_2} "
     executeCmd(cmd)
-    
+
     os.remove(_extracted_bam)
     os.remove(tmp_qname)
-    
+
 def mask_genome(bedf, ref_genome: str, outpath: str):
-    
+
     rg = Genome(ref_genome)
     masked_genome = rg.mask(bedf)
     out = os.path.join(outpath, "masked_genome")
-    os.makedirs(outpath, exist_ok=True) 
     cmd = f"mv {masked_genome} {out} "
     executeCmd(cmd)
 
 def isMerged(df):
     """
     Equivalent to `bedtools merge -d 0`
-    
-    Returns: 
+
+    Returns:
     True if the regions are merged by coordinates.
     False if otherwise.
-    
+
     """
     start = df.iloc[:, 1].tolist()
     end = df.iloc[:, 2].tolist()
@@ -103,9 +107,9 @@ def isMerged(df):
 def makeWindows(df, length):
     """
     This function takes a BED-like dataframe and makes windows of size LENGTH.
-    
+
     Regions with length of trailing block < 100 are appended to the previous block.
-    
+
     """
     start = df.iloc[:, 1].tolist()
     end = df.iloc[:, 2].tolist()
@@ -139,7 +143,7 @@ def getSubseq(bedf_path: str, fastq_path: str, length: int, ref_genome: str) -> 
 
     if length <= 100:
         raise ValueError(f"Read length {length} is too small (<100). ")
-    
+
     bedf = pd.read_csv(bedf_path, sep="\t", header=None)
     if not bedf.groupby(by=0).apply(isMerged).all():
         raise ValueError(f"Input BED file {bedf_path} is not sorted / merged. ")
@@ -159,13 +163,13 @@ def getSubseq(bedf_path: str, fastq_path: str, length: int, ref_genome: str) -> 
     executeCmd(cmd)
     logging.debug(f"Subsequence written to {fq_out}. ")
     os.remove(window_out)
-    
+
     return
 
 def sortBed(bedf):
-    
+
     bed = pd.read_csv(bedf, sep="\t", header=None, usecols=[0,1,2]).sort_values(by=[0, 1]).drop_duplicates()
-    
+
     # Check if the file is already merged
     if not bed.groupby(0).apply(isMerged).all():
         _bedf = bedf + ".tmp"
@@ -176,11 +180,11 @@ def sortBed(bedf):
     else:
         os.remove(bedf)
         bed.to_csv(bedf, sep="\t", header=False, index=False)
-        
+
     return bedf
 
 def getIntrinsicVcf(all_pc_fp, all_homo_regions_fp, fastq_dir, ref_genome, vcf_dir, length, nthreads):
-    
+
     # Genome masking
     all_pc_fp = sortBed(all_pc_fp)
     rg = Genome(ref_genome)
@@ -216,16 +220,16 @@ def getIntrinsicVcf(all_pc_fp, all_homo_regions_fp, fastq_dir, ref_genome, vcf_d
           f"""samtools index {realigned_bam_out} """
     executeCmd(cmd)
 
-    os.makedirs(vcf_dir, exist_ok=True)                                 
+    os.makedirs(vcf_dir, exist_ok=True)
     tmp_vcf = os.path.join(vcf_dir, os.path.basename(realigned_bam_out)[:-3] + "vcf.gz")
     cmd = f"bcftools mpileup -a FORMAT/AD,FORMAT/DP -f {ref_genome} {realigned_bam_out} |  " \
           f"bcftools call -mv -Oz -o {tmp_vcf} && tabix -p vcf {tmp_vcf} "
     executeCmd(cmd)
-    vcf_out = os.path.join(vcf_dir, os.path.basename(realigned_bam_out)[:-3] + "trim.vcf.gz")                              
-    cmd = f"gatk LeftAlignAndTrimVariants -V {tmp_vcf} -R {ref_genome} --split-multi-allelics -O {vcf_out} "    
+    vcf_out = os.path.join(vcf_dir, os.path.basename(realigned_bam_out)[:-3] + "trim.vcf.gz")
+    cmd = f"gatk LeftAlignAndTrimVariants -V {tmp_vcf} -R {ref_genome} --split-multi-allelics -O {vcf_out} "
     executeCmd(cmd)
-    os.remove(realigned_bam_out)            
-    os.remove(tmp_vcf)     
+    os.remove(realigned_bam_out)
+    os.remove(tmp_vcf)
     logging.info(f"Writing intrinsic VCF to {vcf_out}")
 
     return
@@ -233,12 +237,13 @@ def getIntrinsicVcf(all_pc_fp, all_homo_regions_fp, fastq_dir, ref_genome, vcf_d
 if __name__ == "__main__":
 
     # Argparse setup
-    parser = argparse.ArgumentParser(description = "Preparation for masked alignment.")
+    parser = argparse.ArgumentParser(description = "Preparation for masked re-alignment.")
     parser._optionals.title = "Options"
     ROOT = os.path.dirname(__file__)
     parser.add_argument("--input_bam", type = str, help = "input BAM file", required = True)
     parser.add_argument("--homo_dir", type = str, help = "directory of BED files of homologous regions", default = f"{ROOT}/ref/homologous_regions")
     parser.add_argument("--pc_dir", type = str, help = "directory of BED files of principal components", default = f"{ROOT}/ref/principal_components")
+    parser.add_argument("-mq", "--mapping_quality", type = int, help = "MQ threshold", default = 30)
     parser.add_argument("--ref_genome", type = str, help = "reference genome", required = True)
     parser.add_argument("--outpath", type = str, help = "output directory for FASTQ and masked genomes", required = True)
     parser.add_argument("--length", type = int, help = "BED window size for extracting reads from homologous regions (default: 250)", default = 250)
@@ -247,52 +252,44 @@ if __name__ == "__main__":
     args = parser.parse_args()
     logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%a %b-%m %I:%M:%S%P',
                         level = args.verbose.upper())
-    logging.debug(f"Working in {ROOT}")  
-    
+    logging.debug(f"Working in {ROOT}")
+
     # File paths
     fq_out = os.path.join(args.outpath, "fastq")
     vcf_out = os.path.join(args.outpath, "vcf")
-    os.makedirs(vcf_out, exist_ok=True)    
+    os.makedirs(fq_out, exist_ok=True)
+    os.makedirs(vcf_out, exist_ok=True)
+    os.makedirs(os.path.join(args.outpath, "masked_genome"), exist_ok=True)
     all_homo_bed = os.path.join(args.homo_dir, "all_homo_regions.bed")
     all_pc_bed = os.path.join(args.pc_dir, "all_pc.bed")
     if not os.path.exists(all_homo_bed):
         raise FileNotFoundError(f"{os.path.join(args.homo_dir, 'all_homo_regions.bed')} not found. ")
     if not os.path.exists(all_pc_bed):
         raise FileNotFoundError(f"{os.path.join(args.pc_dir, 'all_pc.bed')} not found. ")
-    
+
     start = time.time()
-#     # Extract homologous region reads from BAM
-    _sorted_bam = getHomoRelatedBam(args.input_bam, all_homo_bed, args.thread)
+    # Extract homologous region reads from BAM
+   # _sorted_bam = getHomoRelatedBam(args.input_bam, all_homo_bed, args.thread)
     logging.info(f"****************** BAM preprocessing completed in {time.time() - start:.2f} seconds ******************")
-    
-#     # Extract reads from homologous regions
+
+    # Extract reads from homologous regions
     start = time.time()
-    region_beds = glob.glob(os.path.join(args.homo_dir, "*_related_homo_regions.bed"))
+   # region_beds = glob.glob(os.path.join(args.homo_dir, "*_related_homo_regions.bed"))
     freeze_support()
-    with Pool(args.thread) as p:
-        p.starmap(extractFASTQ, zip(repeat(_sorted_bam), region_beds, repeat(fq_out)))
+   # with Pool(args.thread) as p:
+   #     p.starmap(extractFASTQ, zip(repeat(_sorted_bam), region_beds, repeat(fq_out), repeat(args.mapping_quality)))
     logging.info(f"****************** FASTQ extraction completed in {time.time() - start:.2f} seconds ******************")
-    os.remove(_sorted_bam)
-    
+   # os.remove(_sorted_bam)
+
     start = time.time()
-    overlap_bedfs = []
-    os.makedirs(os.path.join(args.homo_dir, "gene_overlap"), exist_ok=True)
-    for file in region_beds:
-        gene_bed = os.path.join(args.pc_dir, os.path.basename(file)[:-25] + ".bed")
-        out_bed = os.path.join(args.homo_dir, "gene_overlap", os.path.basename(gene_bed))
-        cmd = f"bedtools intersect -a {file} -b {gene_bed} > {out_bed} "
-        executeCmd(cmd)
-        if os.path.getsize(out_bed) == 0:
-            os.remove(out_bed)
-        else:
-            overlap_bedfs.append(out_bed)
+    overlap_bedfs = glob.glob(os.path.join(args.pc_dir, "[A-Z0-9]*.bed"))
     with Pool(args.thread) as p:
         p.starmap(mask_genome, zip(overlap_bedfs, repeat(args.ref_genome), repeat(args.outpath)))
     logging.info(f"****************** Genome masking completed in {time.time() - start:.2f} seconds ******************")
- 
+
     # Get intrinsic VCF for selecting unlikely intrinsic variants
     start = time.time()
     getIntrinsicVcf(all_pc_bed, all_homo_bed, fq_out, args.ref_genome, vcf_out, args.length, args.thread)
     logging.info(f"****************** Intrinsic VCF acquired in {time.time() - start:.2f} seconds ******************")
-    
-    
+
+
