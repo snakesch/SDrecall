@@ -37,7 +37,7 @@ conda activate SDrecall
 ## Input files
 ### Required
 * Base Quality Score Recalibrated (BQSR) BAM file
-* A panel of genes of interest ([step 1](https://github.com/snakesch/SDrecall/blob/main/doc/customRun.md))
+* A panel of genes of interest ([step 1](https://github.com/snakesch/SDrecall/blob/main/doc/customRun.md#1-get-relevant-sd-regions))
 * A prioritized VCF (v4.2) (optional)
 
 ## Quick run
