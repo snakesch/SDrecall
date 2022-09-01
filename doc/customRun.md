@@ -143,7 +143,6 @@ Options:
 
 #### 3.1. Ploidy estimation
 
-```
 Depth_1 $=$ Average depth of all reads in input BAM file
     
 Depth_2 $=$ Average depth of high-quality reads in input BAM file
@@ -153,7 +152,6 @@ Depth_3 $=$ Average depth of all reads in the extracted BAM file
 Depth_4 $=$ Depth_3 - Depth_2
     
 Ploidy $=$ 2 $\times$ Depth_4 / Depth_1
-```
 
 Note: Variants are called if and only if ploidy >= 2. Regions are omitted if otherwise.
 
@@ -174,11 +172,9 @@ For each haploid variant, if the called genotype is:
 
 For each variant, we compare the query VCF (Query) to the intrinsic VCF (Intrinsic) and determine from VCFs the allelic depth (AD) of reference allele (REF) and alternate allele (ALT). From the allelic depths, we compute two ratios, `qra_ratio` and `ira_ratio`.
 
-```
-qra_ratio $=$ $\frac{Query REF AD}{Query ALT AD}$
+$\text{qra ratio} = \frac{\text{Query REF AD}}{\text{Query ALT AD}}$
 
-ira_ratio $=$ $\frac{Intrinsic REF AD + 1}{Intrinsic ALT AD}$
-
+$\text{ira ratio} = \frac{\text{Intrinsic REF AD + 1}}{\text{Intrinsic ALT AD}}$
 ```
 
 If `ira_ratio` equals 0, the variant is considered unlikely intrinsic. If `$\frac{qra_ratio}{ira-ratio} <= $` lower limit specified via `--lower`, the variant is regarded as likely intrinsic. All other variants are labelled as unlikely intrinsic.
@@ -203,7 +199,6 @@ Options:
   --thread THREAD       number of threads (default: 8)
   -v VERBOSE, --verbose VERBOSE
                         verbosity level (default: INFO)
-
 ```
 
 
