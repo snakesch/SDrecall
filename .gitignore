@@ -1,10 +1,7 @@
 ref
-tmp
 data
 out
+log
 archive
 *.pbs
-.ipynb_checkpoints
-__pycache__
-*.log
 setup/*.sif
