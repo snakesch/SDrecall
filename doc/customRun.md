@@ -184,8 +184,7 @@ If `ira_ratio` equals 0, the variant is considered unlikely intrinsic. If `$\fra
 Users may compare the resulting VCF from step 3 (original VCF) with another VCF (prioritized VCF). Variants found in original VCF will be tagged with `ov_tag` in the FITLER field whereas variants found in prioritized VCF will be tagged with `pv_tag`. Variants found in both VCFs will be tagged twice.
 
 ```{bash}
-usage: 4_mergePVCF.py [-h] --pvcf PVCF --ovcf OVCF --pv_tag PV_TAG --ov_tag OV_TAG --outpath OUTPATH
-                      [--thread THREAD] [-v VERBOSE]
+usage: 4_mergePVCF.py [-h] --pvcf PVCF --ovcf OVCF --pv_tag PV_TAG --ov_tag OV_TAG --outpath OUTPATH [-v VERBOSE]
 
 Merge prioritized VCF and original VCF.
 
@@ -196,7 +195,6 @@ Options:
   --pv_tag PV_TAG       tag used for variants from prioritized VCF
   --ov_tag OV_TAG       tag used for variants from original VCF
   --outpath OUTPATH     absolute output path of merged VCF (gz)
-  --thread THREAD       number of threads (default: 8)
   -v VERBOSE, --verbose VERBOSE
                         verbosity level (default: INFO)
 ```

@@ -28,4 +28,3 @@ dependencies:
     - biser==1.1
     - pandas==1.4.3
     - python-dateutil==2.8.2
-    - pandarallel==1.6.3

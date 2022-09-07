@@ -14,7 +14,6 @@ SDrecall is the prototype of a tool for calling short variants that may be misse
 * [HTSlib](http://www.htslib.org/download/) v1.14
 * [mosdepth](https://github.com/brentp/mosdepth) v0.3.3
 * [bcftools](http://www.htslib.org/download/) v1.14
-* [pandarallel](https://pypi.org/project/pandarallel/) v1.6.3 (required in step 4)
 
 Note: We do not guarantee compatibility for softwares of more updated versions.
 
