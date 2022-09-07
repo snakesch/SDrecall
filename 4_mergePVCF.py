@@ -11,7 +11,6 @@ import logging
 import argparse
 import gzip
 from src.utils import *
-from pandarallel import pandarallel as pa
 import time
 
 class Variant:
@@ -25,7 +24,7 @@ class Variant:
     import pandas as pd
     from difflib import SequenceMatcher
 
-    def __init__(self, row, idx):
+    def __init__(self, row):
 
         """
         Variant constructor based on a pandas dataframe
@@ -112,11 +111,9 @@ class Variant:
     def addFilter(self, *tag):
 
         tags = list(tag)
-        if self.FILTER == "PASS":
-            self.FILTER = ";".join(tags)
-        else:
-            of = self.FILTER.split(";") + tags
-            self.FILTER = ";".join(of)
+
+        of = self.FILTER.split(";") + tags
+        self.FILTER = ";".join(of)
 
     def isAdjacent(self, other):
 
@@ -179,7 +176,7 @@ class Variant:
 
 def bsearch(var, low, high, x) -> tuple:
     """
-    Binary search function for finding SDrecall variants.
+    A modified binary search function for finding SDrecall variants.
 
     Return:
     -------
@@ -193,34 +190,53 @@ def bsearch(var, low, high, x) -> tuple:
             return var[mid], mid
         elif var[mid] > x:
             return bsearch(var, low, mid - 1, x)
-        else:
+        elif var[mid] < x:
             return bsearch(var, mid + 1, high, x)
+        else: # Case: Multiple variants with same POS (Look for variants in proximity)
+            if not var[mid+1] > var[mid]:
+                return bsearch(var, mid + 1, high, x)
+            elif not var[mid-1] < var[mid]:
+                return bsearch(var, 0, mid - 1, x)
+            else:
+                return None, None
     else:
         return None, None
+
+def inList(row, dup_ov_vars: list[tuple]):
+
+    for tup in dup_ov_vars:
+        if (row["POS"] == tup[0]) and (row["REF"] == tup[1]) and (row["ALT"] == tup[2]):
+            return True
+    return False
 
 def pick_rep_rec(row, ov_vars, pv_tag, ov_tag) -> pd.Series:
     """
     This function processes variants which are found in both VCFs.
     """
-    pv_var = Variant(row, row.name)
+    pv_var = Variant(row)
     ov_var, idx = bsearch(ov_vars, 0, len(ov_vars) - 1, pv_var)
     if ov_var:
-        dup_ov_vars.append(idx) # Keep indices of found items
+        _tup_key = (ov_var.START, ov_var.REF, ov_var.ALT)
+        dup_ov_vars.append(_tup_key) # Keep indices of found items
         if pv_var.GT == ov_var.GT:
             pv_var.addFilter(ov_tag, pv_tag)
             return pv_var.getSeries()
-        elif "0" in pv_var.GT or "." in pv_var.GT:
+        elif pv_var.GT == "0/0" or pv_var.GT == "0|0" or "." in pv_var.GT:
             ov_var.addFilter(ov_tag, pv_tag)
             return ov_var.getSeries()
-        elif "0" in ov_var.GT or "." in ov_var.GT:
+        elif ov_var.GT == "0/0" or ov_var.GT == "0|0"  or "." in ov_var.GT:
             pv_var.addFilter(ov_tag, pv_tag)
             return pv_var.getSeries()
         else:
             pv_var.addFilter(ov_tag, pv_tag)
             return pv_var.getSeries()
     else: # Not found in SDrecall VCF
-        if "0" in pv_var.GT or "." in pv_var.GT:
-            return None
+        logging.debug(f"The row is not found : {pv_var.CHROM}:{pv_var.START} with GT {pv_var.GT}. ")
+        if pv_var.GT == "0/0" or pv_var.GT == "0|0"  or "." in pv_var.GT:
+            logging.debug(f"Removed row {pv_var.CHROM}:{pv_var.START} with GT {pv_var.GT}. ")
+            row["#CHROM"] = None # Returning None will cause incompatibility in series/dataframe output
+            row["POS"] = None # Returning None will cause incompatibility in series/dataframe output
+            return row
         else:
             pv_var.addFilter(pv_tag)
             return pv_var.getSeries()
@@ -239,46 +255,54 @@ def concat_headers(header_1, header_2) -> list[str]:
 
     return merged_header
 
-def merge(pv_vcf, ov_vcf, pv_tag, ov_tag):
+def merge(pv_vcf, ov_vcf, pv_tag, ov_tag) -> pd.DataFrame:
     """
-    This function merges prioritized VCF with original VCF on a chromosome-wise basis.
+    This function merges prioritized VCF with original VCF.
+
+    Arguments:
+    ----------
+    pv_vcf: path of prioritized VCF
+    ov_vcf: path of original VCF
+    pv_tag: FILTER tag for pv_vcf
+    ov_tag: FILTER tag for ov_vcf
+
     """
+    # Load VCF data
     ov_header, ov_subjects, ov_df = loadVCF(ov_vcf)
-    pv_header, pv_subjects = loadVCF(pv_vcf, omit_record=True)
+    pv_header, pv_subjects, pv_df = loadVCF(pv_vcf)
 
-    # Get chromosome number
-    chrom = pv_vcf.split(".")[-1]
-    logging.info(f"Processing chromosome {chrom} ... ")
+    # Initialize an empty dataframe
+    pv_ov = pd.DataFrame()
 
-    # Prepare ov variants
-    ov_vars = []
-    global dup_ov_vars
-    dup_ov_vars = []
-    for idx, row in ov_df[ov_df["#CHROM"] == chrom].iterrows():
-        ov_vars.append(Variant(row, idx))
-    ov_vars = sorted(ov_vars)
+    pgroups = pv_df.groupby("#CHROM")
+    for pgroup in pgroups:
+        chrom = pgroup[0] # only process one chr at a time
+        precs = pgroup[1].sort_values(by=["POS"])
+        
+        # Initialize an empty list for storing START coordinate, REF and ALT of found variants
+        global dup_ov_vars
+        dup_ov_vars = []
+        
+        logging.info(f"Processing chromosome {chrom} ...  ")
+        ov_slice = ov_df[ov_df["#CHROM"] == chrom]
+        ov_vars = sorted([ Variant(orec) for idx, orec in ov_slice.iterrows()])
+        from_pv = precs.apply(pick_rep_rec, axis=1, args=(ov_vars, pv_tag, ov_tag)).dropna()
+        _filter = ov_slice.apply(inList, axis=1, args=(dup_ov_vars, ))
+        from_ov = ov_slice[~_filter]
+        if from_ov.shape[0] == 0:
+            merged = from_pv
+        else:
+            from_ov["FILTER"] = from_ov["FILTER"].apply(lambda x: f";{ov_tag}" if len(x) != 0 else ov_tag)
+            merged = pd.concat([from_pv, from_ov], axis=0)
+        if merged.shape[0] != 0:
+            pv_ov = pd.concat([pv_ov, merged], axis=0).reset_index(drop=True)
+    
+    # Avoid decimals in POS
+    pv_ov["POS"] = pv_ov["POS"].astype(int)
+        
+    return pv_ov.drop_duplicates()
 
-    header = ov_df.columns
-    processed = 0
-    from_pv = pd.DataFrame()
-    with pd.read_csv(pv_vcf, sep="\t", na_filter=False, engine="c",
-                     comment="#", header=None, names=header, compression="gzip",
-                     skiprows=32959110, chunksize=500000) as reader:
-        for pv_chunk in reader:
-            if pv_chunk.shape[0] == 0 and processed == 0:
-                return
-            processed += 500000
-            from_pv_tmp = pv_chunk.parallel_apply(pick_rep_rec, axis=1, args=(ov_vars, pv_tag, ov_tag,)).dropna()
-            if from_pv_tmp.shape[0] != 0:
-                from_pv = pd.concat([from_pv, from_pv_tmp], axis=0)
-            logging.info(f"Processed {processed} variants. ")
-
-    from_ov = ov_df[~ov_df.index.isin(dup_ov_vars)]
-    pv_ov = pd.concat([from_pv, from_ov], axis=0).reset_index(drop=True)
-
-    return pv_ov
-
-def main(pvcf, ov_vcf, outpath, pv_tag, ov_tag, workers):
+def main(pvcf, ovcf, outpath, pv_tag, ov_tag, workers):
     """
     Main function for merging prioritized variants and original variants.
 
@@ -293,22 +317,12 @@ def main(pvcf, ov_vcf, outpath, pv_tag, ov_tag, workers):
 
     """
     start = time.time()
-    # Load prioritized VCF and original VCF (as file streams)
     os.chdir(os.path.dirname(pvcf))
-    os.makedirs("tmp", exist_ok=True)
 
-    ov_header, ov_subjects, ov_df = loadVCF(ov_vcf)
+    ov_header, ov_subjects, ov_df = loadVCF(ovcf)
     pv_header, pv_subjects = loadVCF(pvcf, omit_record=True)
-    all_chr = [ pcontig[13:].split(",")[0] for pcontig in pv_header if pcontig.startswith("##contig") ]
-
-    for contig in all_chr:
-        cmd = f"bcftools filter -r {contig} -Oz -o {os.path.join('tmp/', os.path.basename(pvcf) + '.') + str(contig)} {pvcf} "
-#         executeCmd(cmd)
-    logging.info(f"****************** VCF splitting completed in {time.time() - start:.2f} seconds ******************")
 
     start = time.time()
-    os.chdir("tmp/") # Descend into tmp/
-    pv_vcfs = [pv_vcf for pv_vcf in os.listdir()]
 
     # Write new VCF header
     ov_filter_head = f"##FILTER=<ID={ov_tag},Description='variants called from {ov_tag}'>"
@@ -316,6 +330,8 @@ def main(pvcf, ov_vcf, outpath, pv_tag, ov_tag, workers):
     ov_header.append(ov_filter_head)
     ov_header.append(pv_filter_head)
     merged_header = concat_headers(pv_header, ov_header)
+    if os.path.exists(outpath):
+        os.remove(outpath)
     with gzip.open(outpath, "wb") as f:
         f.write("\n".join(merged_header).encode())
         f.write("\n".encode())
@@ -323,20 +339,15 @@ def main(pvcf, ov_vcf, outpath, pv_tag, ov_tag, workers):
         f.write("\n".encode())
 
     # Process prioritized variants
-    pa.initialize(progress_bar=False, verbose=0, nb_workers=workers)
+    merged_df = merge(pvcf, ovcf, pv_tag, ov_tag)
 
-    for pv_vcf in pv_vcfs:
-        merged_df = merge(pv_vcf, ov_vcf, pv_tag, ov_tag)
-        try:
-            if merged_df.shape[0] == 0:
-                continue
-        except AttributeError: # Case: merged_df == None
-            continue
-        merged_df.to_csv(outpath, sep="\t", index=False, header=False, mode="a", compression="gzip")
+    try:
+        if merged_df.shape[0] != 0:
+            merged_df.to_csv(outpath, sep="\t", index=False, header=False, mode="a", compression="gzip")
+    except AttributeError: # Case: merged_df == None
+        raise ValueError("No variants in the VCFs! ")
+   
     logging.info(f"****************** VCF merged in {time.time() - start:.2f} seconds ******************")
-    # Cleanup
-    os.chdir(os.path.dirname(pvcf))
-    os.remove("tmp/")
 
 if __name__ == "__main__":
 
@@ -349,7 +360,7 @@ if __name__ == "__main__":
     parser.add_argument("--pv_tag", type = str, help = "tag used for variants from prioritized VCF", required = True)
     parser.add_argument("--ov_tag", type = str, help = "tag used for variants from original VCF", required = True)
     parser.add_argument("--outpath", type = str, help = "absolute output path of merged VCF (gz)", required = True)
-    parser.add_argument("--thread", type = int, help = "number of threads (default: 8)", default = 8)
+#     parser.add_argument("--thread", type = int, help = "number of threads (default: 8)", default = 8)
     parser.add_argument("-v", "--verbose", type = str, default = "INFO", help = "verbosity level (default: INFO)")
     args = parser.parse_args()
     logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%a %b-%m %I:%M:%S%P',

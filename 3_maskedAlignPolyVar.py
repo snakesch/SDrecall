@@ -118,6 +118,12 @@ def multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS
         # Get path of masked genome
         os.chdir(MGENOME_DIR)
         mg = glob.glob(f"*{region}_masked.fasta")[0]
+        # Get dict index
+        cmd = f"gatk CreateSequenceDictionary -R {mg} -O {mg[:-5] + 'dict'} "
+        executeCmd(cmd)
+        # Get fai index 
+        cmd = f"samtools faidx {mg} "
+        executeCmd(cmd)
         
         # Get path of masked alignment BAM file
         masked_bamf = os.path.join(os.path.dirname(BAM_FILE), sample_ID + "_only_" + region + ".bam")
@@ -189,6 +195,7 @@ def multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS
                     f"""-R {REF_GENOME} """ \
                     f"""-V {HC_out} """ \
                     f"""-O {gvcf_out} """ \
+                    f"""--force-output-intervals {HC_out} """ \
                     f"""-G StandardAnnotation """ \
                     f"""-G AS_StandardAnnotation """
         executeCmd(cmd)
@@ -458,11 +465,11 @@ if __name__ == "__main__":
     
     start = time.time()
     high_ploidy = maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS)
-    logging.info(f"****************** Masked alignment completed in {time.time() - start:.2f}******************")
+    logging.info(f"****************** Masked alignment completed in {time.time() - start:.2f} seconds ******************")
     
     start = time.time()
-    multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS, VCF_DIR, high_ploidy, keep = args.keep_vcf)
-    logging.info(f"****************** Multiploid variant calling completed in {time.time() - start:.2f}******************")
+    multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS, VCF_DIR, high_ploidy, keep_vcf = args.keep_vcf)
+    logging.info(f"****************** Multiploid variant calling completed in {time.time() - start:.2f} seconds ******************")
     
     start = time.time()
     if not os.path.exists(args.intrinsic_vcf):

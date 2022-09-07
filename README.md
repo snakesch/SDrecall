@@ -35,7 +35,7 @@ conda activate SDrecall
 ```
 
 ## Input files
-### Required
+
 * Base Quality Score Recalibrated (BQSR) BAM file
 * A panel of genes of interest ([step 1](https://github.com/snakesch/SDrecall/blob/main/doc/customRun.md#1-get-relevant-sd-regions))
 * A prioritized VCF (v4.2) (optional)
@@ -59,8 +59,6 @@ Options:
   -b BUILD, --build BUILD
                         reference genome assembly
   -l LIST, --list LIST  customized gene list
-  -a TABLE, --table TABLE
-                        gene annotation table
   -t THREAD, --thread THREAD
                         number of threads used with BISER (default = 8)
   --length LENGTH       BED window size for extracting reads from homologous regions (default: 250)

@@ -76,6 +76,7 @@ class Genome:
         masked_genome_tmp = ".".join(self.path.split(".")[:-1]) + "_" + region + "_masked.fasta.tmp"
         masked_genome = ".".join(self.path.split(".")[:-1]) + "_" + region + "_masked.fasta"
         cbed = complement_bed(bedf, self)
+        print("cbed path is : ", cbed)
         cmd = f"seqtk subseq -l 60 {self.path} {contig_out} > {masked_genome_tmp} "
         executeCmd(cmd)
 

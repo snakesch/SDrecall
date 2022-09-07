@@ -30,7 +30,7 @@ def main():
     # Step 1: Get homologous region and principal component coordinates
     cmd = f"python3 1_getTrimmedSD.py --ref_genome {args.ref_genome} " \
           f"--output {args.output} --build {args.build} --list {args.list} " \
-          f"--table {args.table} --thread {args.thread} --fraglen {args.fraglen} " \
+          f"--table {os.path.join('ref', 'refgene_latest_anno.bed')} --thread {args.thread} --fraglen {args.fraglen} " \
           f"--gaplen {args.gaplen} --verbose {args.verbose} "
     if args.keep_trimmed:
         cmd += "--keep_trimmed "
@@ -47,7 +47,7 @@ def main():
 #     executeCmd(cmd)
 
     # Step 3: Masked re-alignment and variant calling of multiploid records
-    cmd = f"python3 3_maskedAlignPolyVar.py --input-bam {args.input_bam} " \
+    cmd = f"python3 3_maskedAlignPolyVar.py --input_bam {args.input_bam} " \
           f"--bed_dir {os.path.join(ROOT, 'ref')} " \
           f"--intrinsic_vcf {os.path.join(args.output, 'vcf', 'all_pc.realign.' + str(args.length) + '.trim.vcf.gz')} " \
           f"--lower {args.lower} " \
@@ -60,6 +60,9 @@ def main():
     executeCmd(cmd)
 
     # Step 4: Merge with prioritized VCF
+    if not args.pvcf:
+        return
+    
     if not os.path.exists(args.pvcf):
         raise FileNotFoundError(f"Prioritized VCF not found {args.pvcf}. ")
 
@@ -89,7 +92,6 @@ if __name__ == "__main__":
     parser.add_argument("-o", "--output", type = str, required = True, help = "output directory of resulting BED files")
     parser.add_argument("-b", "--build", type = str, required = True, help = "reference genome assembly")
     parser.add_argument("-l", "--list", type = str, required = True, help = "customized gene list")
-    parser.add_argument("-a", "--table", type = str, required = True, help = "gene annotation table")
     parser.add_argument("-t", "--thread", type = int, default = 8, help = "number of threads used with BISER (default = 8)")
     parser.add_argument("--length", type = int, default = 250, help = "BED window size for extracting reads from homologous regions (default: 250)")
     parser.add_argument("--lower", type = float, default = 1.1, help = "lower bound for unlikely intrinsic variants")
