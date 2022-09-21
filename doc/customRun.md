@@ -141,6 +141,8 @@ Options:
                         verbosity level (default: INFO)
 ```
 
+Note: Specifying DEBUG in `--verbose` will skip the cleanup step and retain all intermediate files.
+
 #### 3.1. Ploidy estimation
 
 Depth_1 $=$ Average depth of all reads in input BAM file
@@ -181,7 +183,9 @@ If `ira_ratio` equals 0, the variant is considered unlikely intrinsic. If `$\fra
 
 ### 4. Merge with prioritized VCF (optional)
 
-Users may compare the resulting VCF from step 3 (original VCF) with another VCF (prioritized VCF). Variants found in original VCF will be tagged with `ov_tag` in the FITLER field whereas variants found in prioritized VCF will be tagged with `pv_tag`. Variants found in both VCFs will be tagged twice.
+Users may compare the resulting VCF from step 3 (original VCF) with another VCF (prioritized VCF). Variants found in original VCF will be tagged with `ov_tag` in the FITLER field whereas variants found in prioritized VCF will be tagged with `pv_tag`. Variants found in both VCFs will be tagged twice. For the purpose of benchmarking, users may specify `--keep_both` to keep variants from original VCF **and** prioritized VCF if the variants:
+* have the same POS, REF and ALT but different GT (eg. 0/1 vs 1/1)
+* did not pass any of the filters in either VCF
 
 ```{bash}
 usage: 4_mergePVCF.py [-h] --pvcf PVCF --ovcf OVCF --pv_tag PV_TAG --ov_tag OV_TAG --outpath OUTPATH [-v VERBOSE]
@@ -195,6 +199,7 @@ Options:
   --pv_tag PV_TAG       tag used for variants from prioritized VCF
   --ov_tag OV_TAG       tag used for variants from original VCF
   --outpath OUTPATH     absolute output path of merged VCF (gz)
+  --keep_both           keep both records in the merged output
   -v VERBOSE, --verbose VERBOSE
                         verbosity level (default: INFO)
 ```

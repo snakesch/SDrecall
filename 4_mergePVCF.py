@@ -113,7 +113,7 @@ class Variant:
         tags = list(tag)
 
         of = self.FILTER.split(";") + tags
-        self.FILTER = ";".join(of)
+        self.FILTER = ";".join(filter(lambda x: x, of))
 
     def isAdjacent(self, other):
 
@@ -209,7 +209,7 @@ def inList(row, dup_ov_vars: list[tuple]):
             return True
     return False
 
-def pick_rep_rec(row, ov_vars, pv_tag, ov_tag) -> pd.Series:
+def pick_rep_rec(row, ov_vars, pv_tag, ov_tag, keep_both) -> pd.Series:
     """
     This function processes variants which are found in both VCFs.
     """
@@ -218,6 +218,11 @@ def pick_rep_rec(row, ov_vars, pv_tag, ov_tag) -> pd.Series:
     if ov_var:
         _tup_key = (ov_var.START, ov_var.REF, ov_var.ALT)
         dup_ov_vars.append(_tup_key) # Keep indices of found items
+        if keep_both: # Keep both records if specified
+            if ov_var.GT[::2] != pv_var.GT[::2]: # Ignore phasing status 
+                dup_ov_vars.remove(_tup_key) # Keep records: Do not drop
+            elif pv_var.FILTER != "PASS":
+                dup_ov_vars.remove(_tup_key) # Keep records: Do not drop
         if pv_var.GT == ov_var.GT:
             pv_var.addFilter(ov_tag, pv_tag)
             return pv_var.getSeries()
@@ -255,7 +260,7 @@ def concat_headers(header_1, header_2) -> list[str]:
 
     return merged_header
 
-def merge(pv_vcf, ov_vcf, pv_tag, ov_tag) -> pd.DataFrame:
+def merge(pv_vcf, ov_vcf, pv_tag, ov_tag, keep_both) -> pd.DataFrame:
     """
     This function merges prioritized VCF with original VCF.
 
@@ -265,6 +270,7 @@ def merge(pv_vcf, ov_vcf, pv_tag, ov_tag) -> pd.DataFrame:
     ov_vcf: path of original VCF
     pv_tag: FILTER tag for pv_vcf
     ov_tag: FILTER tag for ov_vcf
+    keep_both: keep both records in merged output
 
     """
     # Load VCF data
@@ -278,31 +284,31 @@ def merge(pv_vcf, ov_vcf, pv_tag, ov_tag) -> pd.DataFrame:
     for pgroup in pgroups:
         chrom = pgroup[0] # only process one chr at a time
         precs = pgroup[1].sort_values(by=["POS"])
-        
+
         # Initialize an empty list for storing START coordinate, REF and ALT of found variants
         global dup_ov_vars
         dup_ov_vars = []
-        
+
         logging.info(f"Processing chromosome {chrom} ...  ")
         ov_slice = ov_df[ov_df["#CHROM"] == chrom]
         ov_vars = sorted([ Variant(orec) for idx, orec in ov_slice.iterrows()])
-        from_pv = precs.apply(pick_rep_rec, axis=1, args=(ov_vars, pv_tag, ov_tag)).dropna()
+        from_pv = precs.apply(pick_rep_rec, axis=1, args=(ov_vars, pv_tag, ov_tag, keep_both)).dropna()
         _filter = ov_slice.apply(inList, axis=1, args=(dup_ov_vars, ))
         from_ov = ov_slice[~_filter]
         if from_ov.shape[0] == 0:
             merged = from_pv
         else:
-            from_ov["FILTER"] = from_ov["FILTER"].apply(lambda x: f";{ov_tag}" if len(x) != 0 else ov_tag)
+            from_ov["FILTER"] = from_ov["FILTER"].apply(lambda x: f"{x};{ov_tag}" if len(x) > 1 else ov_tag)
             merged = pd.concat([from_pv, from_ov], axis=0)
         if merged.shape[0] != 0:
             pv_ov = pd.concat([pv_ov, merged], axis=0).reset_index(drop=True)
-    
+
     # Avoid decimals in POS
     pv_ov["POS"] = pv_ov["POS"].astype(int)
-        
+
     return pv_ov.drop_duplicates()
 
-def main(pvcf, ovcf, outpath, pv_tag, ov_tag, workers):
+def main(pvcf, ovcf, outpath, pv_tag, ov_tag, keep_both):
     """
     Main function for merging prioritized variants and original variants.
 
@@ -313,7 +319,7 @@ def main(pvcf, ovcf, outpath, pv_tag, ov_tag, workers):
     ov_tag: tag used for variants called from ov_vcf
     pv_tag: tag used for variants called from pvcf
     outpath: absolute path of output VCF (gzipped)
-    workers: number of cores to use
+    keep_both: keep both records in merged output (BOOL)
 
     """
     start = time.time()
@@ -321,8 +327,6 @@ def main(pvcf, ovcf, outpath, pv_tag, ov_tag, workers):
 
     ov_header, ov_subjects, ov_df = loadVCF(ovcf)
     pv_header, pv_subjects = loadVCF(pvcf, omit_record=True)
-
-    start = time.time()
 
     # Write new VCF header
     ov_filter_head = f"##FILTER=<ID={ov_tag},Description='variants called from {ov_tag}'>"
@@ -339,14 +343,14 @@ def main(pvcf, ovcf, outpath, pv_tag, ov_tag, workers):
         f.write("\n".encode())
 
     # Process prioritized variants
-    merged_df = merge(pvcf, ovcf, pv_tag, ov_tag)
+    merged_df = merge(pvcf, ovcf, pv_tag, ov_tag, keep_both)
 
     try:
         if merged_df.shape[0] != 0:
             merged_df.to_csv(outpath, sep="\t", index=False, header=False, mode="a", compression="gzip")
     except AttributeError: # Case: merged_df == None
         raise ValueError("No variants in the VCFs! ")
-   
+
     logging.info(f"****************** VCF merged in {time.time() - start:.2f} seconds ******************")
 
 if __name__ == "__main__":
@@ -360,11 +364,11 @@ if __name__ == "__main__":
     parser.add_argument("--pv_tag", type = str, help = "tag used for variants from prioritized VCF", required = True)
     parser.add_argument("--ov_tag", type = str, help = "tag used for variants from original VCF", required = True)
     parser.add_argument("--outpath", type = str, help = "absolute output path of merged VCF (gz)", required = True)
-#     parser.add_argument("--thread", type = int, help = "number of threads (default: 8)", default = 8)
+    parser.add_argument("--keep_both", action = "store_true", help = "keep both records in the merged output")
     parser.add_argument("-v", "--verbose", type = str, default = "INFO", help = "verbosity level (default: INFO)")
     args = parser.parse_args()
     logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%a %b-%m %I:%M:%S%P',
                         level = args.verbose.upper())
     logging.debug(f"Working in {ROOT}")
 
-    main(args.pvcf, args.ovcf, args.outpath, args.pv_tag, args.ov_tag, args.thread)
+    main(args.pvcf, args.ovcf, args.outpath, args.pv_tag, args.ov_tag, args.keep_both)

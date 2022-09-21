@@ -16,10 +16,10 @@ from src.utils import *
 import logging
 
 def maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS):
-    
+
     logging.info(f"Taking up {NTHREADS} threads.")
     sample_ID = os.path.basename(BAM_FILE).split(".")[0]
-    
+
     # Available homologous regions coordinates
     os.chdir(os.path.join(BED_DIR, "homologous_regions"))
     bed_fns = (glob.glob("*_related_homo_regions.bed"))
@@ -102,29 +102,32 @@ def maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS)
             high_ploidy[region] = ploidy
 
     logging.info(f"Regions with ploidy >= 2 : {list(high_ploidy.keys())}")
-    
+
     return high_ploidy
 
 def multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS, VCF_DIR, high_ploidy: dict, keep_vcf = False):
-    
+
     # Create VCF directory for storing GATK outputs
     os.makedirs(VCF_DIR, exist_ok=True)
 
     sample_ID = os.path.basename(BAM_FILE).split(".")[0]
-    
+
     processed = []
     for region, ploidy in high_ploidy.items():
 
         # Get path of masked genome
         os.chdir(MGENOME_DIR)
         mg = glob.glob(f"*{region}_masked.fasta")[0]
-        # Get dict index
-        cmd = f"gatk CreateSequenceDictionary -R {mg} -O {mg[:-5] + 'dict'} "
-        executeCmd(cmd)
-        # Get fai index 
-        cmd = f"samtools faidx {mg} "
-        executeCmd(cmd)
-        
+        # Get dict index if not found
+        if not os.path.exists(mg[:-5] + 'dict'):
+            cmd = f"gatk CreateSequenceDictionary -R {mg} -O {mg[:-5] + 'dict'} "
+            executeCmd(cmd)
+
+        # Get fai index if not found
+        if not os.path.exists(mg + '.fai'):
+            cmd = f"samtools faidx {mg} "
+            executeCmd(cmd)
+
         # Get path of masked alignment BAM file
         masked_bamf = os.path.join(os.path.dirname(BAM_FILE), sample_ID + "_only_" + region + ".bam")
 
@@ -132,10 +135,10 @@ def multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS
         if not os.path.exists(masked_bamf + ".bai"):
             cmd = f"samtools index {masked_bamf} "
             executeCmd(cmd)
-            
+
         # Get BED path
         bedf = os.path.join(BED_DIR, "homologous_regions", f"{region}_related_homo_regions.bed")
-        
+
         # Get principal component region
         pcbedf = os.path.join(BED_DIR, "principal_components", region + ".bed")
 
@@ -147,7 +150,7 @@ def multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS
                     f"""-R {mg} """ \
                     f"""-I {masked_bamf} """ \
                     f"""-O {HC_out} """ \
-                    f"""-L {bedf} """ \
+                    f"""-L {pcbedf} """ \
                     f"""--ploidy {round(ploidy)} """ \
                     f"""--min-base-quality-score 15 """ \
                     f"""--force-active """ \
@@ -205,11 +208,17 @@ def multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS
             os.remove(gvcf_out)
             logging.warning(f"No variants remained after GATK GenotypeGVCFs for region {region}")
             continue
-            
+
         _filter = records.apply(checkDP, axis=1, threshold=0)
         records = records[_filter]
         os.remove(gvcf_out)
         writeVCF(vcf_header, records, gvcf_out)
+
+        # GenotypeGVCF gives malformed VCF files (Need to recompress)
+        if os.path.exists(gvcf_out + '.tbi'):
+            os.remove(gvcf_out + '.tbi')
+        cmd = f"gunzip {gvcf_out} && bgzip {gvcf_out[:-3]} && tabix -f -p vcf {gvcf_out} "
+        executeCmd(cmd)
 
         # LeftAlignAndTrimVariants
         vcf_out = os.path.join(VCF_DIR, sample_ID + "_only_" + region + ".vcf.gz")
@@ -238,10 +247,10 @@ def multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS
         os.remove(vcf_out)
         records = records.apply(convert_ploidy, axis=1)
         _filter = records.apply(checkDP, axis=1, threshold=5, how="first")
-        records = records[_filter]        
-        
+        records = records[_filter]
+
         dip_vcf_out = os.path.join(VCF_DIR, sample_ID + "_only_" + region + ".dip.vcf.gz")
-        
+
         writeVCF(header, records, dip_vcf_out)
         logging.info(f"Written {region} VCF to {dip_vcf_out}")
 
@@ -276,13 +285,13 @@ def multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS
         # Extract low coverage regions from VCF
         final_vcf_out = os.path.join(VCF_DIR, sample_ID + "_only_" + region + "_extracted.vcf.gz")
         _final_vcf_out = final_vcf_out + ".tmp"
-        
+
         dip_vcf_out_bgz = os.path.join(VCF_DIR, sample_ID + "_only_" + region + ".dip.vcf.bgz")
         cmd = f"gunzip -c {dip_vcf_out} | bgzip > {dip_vcf_out_bgz} "
         executeCmd(cmd)
         cmd = f"tabix -p vcf {dip_vcf_out_bgz} "
         executeCmd(cmd)
-        
+
         cmd = f"bcftools view -R {low_coverage_fn} -Oz -o {_final_vcf_out} {dip_vcf_out_bgz}"
         executeCmd(cmd)
         cmd = f"bcftools sort -Oz -o {final_vcf_out} {_final_vcf_out}"
@@ -290,10 +299,13 @@ def multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS
         os.remove(_final_vcf_out)
         os.remove(low_coverage_fn)
         os.remove(dip_vcf_out)
-        
+
+        cmd = f"tabix -p vcf {final_vcf_out} "
+        executeCmd(cmd)
+
         if not keep_vcf:
             os.remove(HC_out)
-            os.remove(HC_out + ".tbi") 
+            os.remove(HC_out + ".tbi")
             os.remove(gvcf_out)
             os.remove(gvcf_out + ".tbi")
             os.remove(dip_vcf_out_bgz)
@@ -306,55 +318,58 @@ def multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS
             logging.info(f"Multiploid variant calling completed for {region}")
             processed.append(region)
     logging.info(f"Processed regions : {processed}")
-    
+
 def getRegions(BED_DIR, VCF_DIR) -> str:
-    
+
     """
     This function determines from VCF_DIR analytic regions to compare with intrinsic VCF.
-    
+
     Analytic VCFs are concatenated and sorted.
-    
+
     """
     # Get analytic regions for comparison
     bed_fns = (glob.glob(os.path.join(BED_DIR, "homologous_regions", "[A-Z0-9]*.bed")))
-    vcf_fns = (glob.glob(VCF_DIR + "*_extracted.vcf.gz"))
+    vcf_fns = (glob.glob(os.path.join(VCF_DIR, "*_extracted.vcf.gz")))
 
-    all_regions = {os.path.basename(f).split("_related")[0] for f in bed_fns}
+    all_regions = {os.path.basename(f).split("_")[0] for f in bed_fns}
     logging.debug(f"All regions with BED coordinates : {all_regions}")
 
-    vcf_regions = {os.path.basename(f).rstrip("_extracted.vcf.gz").split("only_")[-1] for f in vcf_fns}
+    vcf_regions = {os.path.basename(f)[:-17].split("_")[-1] for f in vcf_fns}
     logging.info(f"Regions with valid VCF : {vcf_regions}")
-    sample_ID = os.path.basename(vcf_fns[0]).split(".")[0]
+    sample_ID = os.path.basename(vcf_fns[0]).split("_")[0]
 
-    with open(os.path.join(VCF_DIR, "region_filelist.tmp"), "w") as f:
+    if len(vcf_regions) == 0:
+        raise ValueError("No valid regions extracted! ")
+    vcf_fl = os.path.join(VCF_DIR, "region_filelist.tmp")
+
+    with open(vcf_fl, "w") as f:
         for region in vcf_fns:
             f.write(region)
             f.write("\n")
 
-    vcf_fl = os.path.join(VCF_DIR, "region_filelist.tmp")
     total_vcf = os.path.join(VCF_DIR, sample_ID + "_homo_regions.vcf.gz")
-    cmd = f"bcftools concat -a --no-version -Oz -f {vcf_fl} -o {total_vcf}"
+    cmd = f"bcftools concat -a --no-version -Oz -f {vcf_fl} -o {total_vcf} >/dev/null 2>&1 "
     executeCmd(cmd)
 
     vcf_header, subject_IDs, records = loadVCF(total_vcf)
     if records.shape[0] == 0:
         raise ValueError(f"No variants found in all VCFs! Check file list {vcf_fl}")
 
-    query_vcf = os.path.join(VCF_DIR, sample_ID + "_homo_regions.vcf.gz")    
-    cmd = f"bcftools sort -Oz {total_vcf} -o {query_vcf}"
+    query_vcf = os.path.join(VCF_DIR, sample_ID + "_extracted_homo_regions.vcf.gz")
+    cmd = f"bcftools sort -Oz {total_vcf} -o {query_vcf} >/dev/null 2>&1 && tabix -f -p vcf {query_vcf} "
     executeCmd(cmd)
 
     os.remove(vcf_fl)
     os.remove(total_vcf)
-    
+
     return query_vcf
 
 def compareIntrinsic(query_vcf, intrinsic_vcf, lower_limit=1.1):
     """
     This function compares query VCF with intrinsic VCF to determine likely intrinsic and unlikely intrinsic variants.
-    
+
     A lower limit can be specified to control variant filtering.
-    
+
     """
     # Load query VCF and intrinsic VCF
     qvcf_header, qsubject_IDs, qrecords = loadVCF(query_vcf)
@@ -378,17 +393,17 @@ def compareIntrinsic(query_vcf, intrinsic_vcf, lower_limit=1.1):
     non_overlap_rec = _all_ret.loc[_all_ret.isnull().any(axis=1), :]
     overlap_rec = _all_ret.loc[~_all_ret.isnull().any(axis=1), :] # Likely intrinsic variants
     non_overlap_rec = non_overlap_rec.dropna(axis=1)
-    overlap_rec["ID"] = "hom_intrinsic"
+    overlap_rec.loc[:, "ID"] = "hom_intrinsic"
 
     # Intrinsic variant filter
     overlap_rec = overlap_rec.apply(intrinsicFilter, axis=1, args=(_nsubjs, lower_limit))
-    final_rec = overlap_rec + non_overlap_rec
-    final_vcf_out_tmp = query_vcf.rstrip("vcf.gz") + "filtered.tmp.vcf.gz"
-    final_vcf_out = query_vcf.rstrip("vcf.gz") + "filtered.vcf.gz"
+    final_rec = pd.concat([overlap_rec, non_overlap_rec], axis=0)
+    final_vcf_out_tmp = query_vcf[:-6] + "filtered.tmp.vcf.gz"
+    final_vcf_out = query_vcf[:-6] + "filtered.vcf.gz"
     writeVCF(qvcf_header, final_rec, final_vcf_out_tmp)
 
     # Output
-    cmd = f"bcftools sort -Oz {final_vcf_out_tmp} -o {final_vcf_out} && tabix -p vcf {final_vcf_out}"
+    cmd = f"bcftools sort -Oz {final_vcf_out_tmp} -o {final_vcf_out} >/dev/null 2>&1  && tabix -p vcf {final_vcf_out} "
     executeCmd(cmd)
     os.remove(final_vcf_out_tmp)
     logging.info(f"Filtered VCF written to {final_vcf_out}")
@@ -396,16 +411,16 @@ def compareIntrinsic(query_vcf, intrinsic_vcf, lower_limit=1.1):
 
 def intrinsicFilter(row, nsubjs: int, lower_limit: float):
     """
-    
+
     A pandas apply method that computes qra_ratio and ira_ratio to determine intrinsic variants with a given lower limit.
-    
+
     Input should contain AD values from both query VCF and intrinsic VCF.
-    Output only returns query columns. 
-    
+    Output only returns query columns.
+
     """
     qinfo_lst = [row[8].split(":")] + [row[col].split(":") for col in range(9, nsubjs + 9, 1)]
     qtag = {info[0]: list(info[1:]) for info in zip(*qinfo_lst)}
-    
+
     try:
         ad = list(map(int, qtag["AD"][0].split(","))) # Only query the first call
     except KeyError:
@@ -414,26 +429,83 @@ def intrinsicFilter(row, nsubjs: int, lower_limit: float):
     qra_ratio = ref_dp / alt_dp if alt_dp > 0 else 0
     if alt_dp == 0:
         logging.warning(f"Record {record} has 0 read with ALT allele.")
-        
+
     iinfo_lst = [row["FORMAT_i"].split(":")] + [row[col].split(":") for col in range(row.index.get_loc("FORMAT_i") + 1, row.shape[0], 1)]
     itag = {info[0]: list(info[1:]) for info in zip(*iinfo_lst)}
-    
+
     iad = list(map(int, itag["AD"][0].split(","))) # Only query the first call
     iref_dp = iad[0] + 1
     ialt_dp = iad[1]
     ira_ratio = iref_dp / ialt_dp if alt_dp > 0 else 0
-        
+
     if ira_ratio == 0:
         row["FILTER"] = "UNLIKELY_INTRINSIC"
     elif qra_ratio / ira_ratio <= lower_limit:
         row["FILTER"] = "LIKELY_INTRINSIC"
     else:
         row["FILTER"] = "UNLIKELY_INTRINSIC"
-        
+
     return row[:nsubjs + 9]
 
+def cleanup(bamfp, outpath, vcfp="", refp=""):
+
+    """
+    This function takes multiple inputs of directories and clean up intermediate files generated in SDrecall. vcfp and refp are optional as out/vcf/ and out/ref/ by default.)
+    """
+    import shutil
+
+    # Descend to BAM path
+    os.chdir(os.path.dirname(bamfp))
+
+    # Remove temporary masked alignment files
+    for tmp_bamf in glob.glob("*_only_*"):
+        os.remove(tmp_bamf)
+
+    # Descend to out/
+    os.chdir(outpath)
+
+    # Remove multi-aligned reads
+    if os.path.isdir("fastq"):
+        shutil.rmtree("fastq")
+
+    # Remove large masked genomes
+    if os.path.isdir("masked_genome"):
+        shutil.rmtree("masked_genome")
+
+    # Remove VCFs if specified (Not recommended; currently not implemented)
+    if vcfp and os.path.isdir(vcfp):
+
+        # Descend to VCF directory
+        os.chdir(vcfp)
+
+        # Remove VCFs of individual regions
+        for regionf in glob.glob("*_only_*"):
+            os.remove(regionf)
+
+        # Remove intrinic VCFs
+        for ivcf in glob.glob("all_pc*"):
+            os.remove(ivcf)
+
+        # Remove raw extracted VCF
+        for rawf in glob.glob("*extracted_homo_regions.vcf.gz*"):
+            os.remove(rawf)
+
+    # Remove reference files
+    if refp and os.path.isdir(refp):
+
+        # Descend to ref directory
+        os.chdir(refp)
+
+        # Remove homologous region BED files
+        if os.path.isdir("homologous_regions"):
+            shutil.rmtree("homologous_regions")
+
+        # Remove principal component BED files
+        if os.path.isdir("principal_components"):
+            shutil.rmtree("principal_components")
+
 if __name__ == "__main__":
-    
+
     # Argparse setup
     parser = argparse.ArgumentParser(description = "Masked alignment and multi-ploidy variant calling.")
     parser._optionals.title = "Options"
@@ -454,31 +526,33 @@ if __name__ == "__main__":
     logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%a %b-%m %I:%M:%S%P',
                         level = args.verbose.upper())
     logging.debug(f"Working in {ROOT}")
-    
+
     BAM_FILE = args.input_bam
-    BED_DIR = args.bed_dir or f"{ROOT}/ref/" # homologous_regions / principal_components 
+    BED_DIR = args.bed_dir or f"{ROOT}/ref/" # homologous_regions / principal_components
     MGENOME_DIR = args.masked_genomes or f"{ROOT}/out/masked_genome/"
     FASTQ_DIR = args.fastq_dir or f"{ROOT}/out/fastq/"
     REF_GENOME = args.ref_genome or f"{ROOT}/ref/ucsc.hg19.fasta"
     VCF_DIR = args.output_vcf or f"{ROOT}/out/vcf"
     NTHREADS = args.thread
-    
+
     start = time.time()
     high_ploidy = maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS)
     logging.info(f"****************** Masked alignment completed in {time.time() - start:.2f} seconds ******************")
-    
+
     start = time.time()
     multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS, VCF_DIR, high_ploidy, keep_vcf = args.keep_vcf)
     logging.info(f"****************** Multiploid variant calling completed in {time.time() - start:.2f} seconds ******************")
-    
+
     start = time.time()
     if not os.path.exists(args.intrinsic_vcf):
         raise FileNotFoundError(f"Intrinsic VCF not found in path {args.intrinsic_vcf}")
     else:
         logging.info(f"Detected intrinsic VCF : {args.intrinsic_vcf}")
-    
-    query_vcf = getRegions(args.bed_dir, args.vcf_dir)
+
+    query_vcf = getRegions(args.bed_dir, VCF_DIR)
     compareIntrinsic(query_vcf, args.intrinsic_vcf, lower_limit=args.lower)
-    logging.info(f"****************** Comparison with intrinsic VCF completed in {time.time() - start:.2f}******************")
-    
-    
+    logging.info(f"****************** Comparison with intrinsic VCF completed in {time.time() - start:.2f} seconds ******************")
+    if args.verbose.upper() != "DEBUG":
+        logging.info("Cleaning up ... ")
+        cleanup(BAM_FILE, os.path.dirname(VCF_DIR), refp=os.path.dirname(REF_GENOME))
+

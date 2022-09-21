@@ -18,6 +18,8 @@ SDrecall is the prototype of a tool for calling short variants that may be misse
 Note: We do not guarantee compatibility for softwares of more updated versions.
 
 ## Installation
+Users should first clone this repository to a local directory.
+
 For conda users, create an environment from YAML.
 ```{bash}
 conda env create -f ./setup/environment.yml
@@ -71,6 +73,8 @@ Options:
                         verbosity level (default: INFO)
 
 ```
+Note: If `--verbose` is specified as DEBUG, all intermediate files will be retained.
+
 ## Custom run
 Users may run individual steps separately with script indexed 0-4. Although quick run is recommended for most use cases, custom run is helpful for debugging. Users can also allocate different number of threads for each step. Details of individual steps are described [here](doc/customRun.md).
 
