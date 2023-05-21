@@ -2,6 +2,7 @@ def annotate_from_ref(INPATH: str, REF_REGIONS: str, OUTPATH: str, logLevel="INF
     
     import subprocess
     import logging
+    import sys
     logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%a %b-%m %I:%M:%S%P', level = logLevel.upper())
 
     if subprocess.run("which bedtools", shell=True, capture_output=True).returncode != 0:

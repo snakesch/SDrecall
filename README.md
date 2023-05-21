@@ -34,12 +34,13 @@ singularity shell svsd.sif # Create a Singularity shell
 conda init && source ~/.bashrc
 conda activate SDrecall
 ```
+Note: Please use singularity version 3.8+.
 
 ## Input files
 
 * Base Quality Score Recalibrated (BQSR) BAM file
 * A panel of genes of interest ([step 1](https://github.com/snakesch/SDrecall/blob/main/doc/customRun.md#1-get-relevant-sd-regions))
-* A prioritized VCF (v4.2) (optional)
+* A prioritized VCF (v4.2; from other variant callers) (optional)
 
 ## Quick run
 ```{bash}

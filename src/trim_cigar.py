@@ -99,8 +99,8 @@ def getBlockFromCigar(cigar: list, frag_len = 300, small_gap_cutoff = 10, logLev
     for tgt in scoreBlock(cigar_arr, intersect):
         blocks.append(tgt)
     
-    logging.info("{} long fragments detected.".format(long_match_blocks.shape[0]))
-    logging.info("{} consecutive small indels detected.".format(small_indels.shape[0]))
+    logging.debug("{} long fragments detected.".format(long_match_blocks.shape[0]))
+    logging.debug("{} consecutive small indels detected.".format(small_indels.shape[0]))
     
     return sorted(blocks) if blocks != None else None
 
@@ -128,7 +128,7 @@ def trim(raw_df, frag_len = 300, small_gap_cutoff = 10, logLevel="INFO"):
         blocks = getBlockFromCigar(cigar, frag_len = frag_len, small_gap_cutoff = small_gap_cutoff, logLevel=logLevel)
         logging.debug("Extracted block indices : {}".format(blocks))
         if blocks is None:
-            logging.warning("No blocks extracted!")
+            logging.debug("No blocks extracted!")
             continue
         all_coord = list(trimCigarCoord(cigar, blocks, ref_start, ref_end, query_start, query_end, ref_strand, query_strand))
         

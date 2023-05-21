@@ -12,40 +12,48 @@ import logging
 import glob
 import time
 from src.utils import executeCmd
+from src.geneAnnotation import *
 
 def main():
 
-    all_start = time.time()
-
+    logger = logging.getLogger("root")
+    start = time.time()
+    
     # Check if we are in the correct directory
     if "1_getTrimmedSD.py" not in os.listdir():
-        raise FileNotFoundError(f"Main scripts are not found in the current directory. Please run again in the correct directory. ")
+        raise FileNotFoundError(f"Source scripts are not found. ")
 
     # Step 0: Get gene annotation table
-    cmd = f"python3 0_geneAnnotation.py -om {os.path.join('ref', 'refgene_latest_anno.bed')} " \
-          f"-oe {os.path.join('ref', 'refgene_latest_anno_exon.bed')} " \
-          f"-oi {os.path.join('ref', 'refgene_latest_anno_intron.bed')} "
-#     executeCmd(cmd)
-    
-    # Step 1: Get homologous region and principal component coordinates
-    cmd = f"python3 1_getTrimmedSD.py --ref_genome {args.ref_genome} " \
-          f"--output {args.output} --build {args.build} --list {args.list} " \
-          f"--table {os.path.join('ref', 'refgene_latest_anno.bed')} --thread {args.thread} --fraglen {args.fraglen} " \
-          f"--gaplen {args.gaplen} --verbose {args.verbose} "
-    if args.keep_trimmed:
-        cmd += "--keep_trimmed "
-#     executeCmd(cmd)
+#     if not os.path.exists(os.path.join(ROOT, 'ref', 'refgene_latest_anno.bed')):
+#         report_coor(os.path.join(ROOT, 'ref'), genePanel_fp=args.list)
+#         logger.info(f"****************** Step 0 completed in {(time.time() - start) / 60} minutes. ******************")
+#     else:
+#         logger.info(f"Found gene element coordinates BED in {os.path.join(ROOT, 'ref')}")
 
-    # Step 2: Preparation step for masked alignment
-    cmd = f"python3 2_preparation.py --input_bam {args.input_bam} --homo_dir {os.path.join(ROOT, 'ref/homologous_regions')} " \
-          f"--pc_dir {os.path.join(ROOT, 'ref/principal_components')} " \
-          f"--outpath {args.output} " \
-          f"--ref_genome {args.ref_genome} " \
-          f"--length {args.length} " \
-          f"--thread {args.thread} " \
-          f"--verbose {args.verbose} "
+#     start = time.time()
+#     # Step 1: Get homologous region and principal component coordinates
+#     cmd = f"python3 1_getTrimmedSD.py --ref_genome {args.ref_genome} " \
+#           f"--output {os.path.dirname(args.ref_genome)} --build {args.build} --list {args.list} " \
+#           f"--table {os.path.join('ref', 'refgene_latest_anno.bed')} --thread {args.thread} --fraglen {args.fraglen} " \
+#           f"--gaplen {args.gaplen} --verbose {args.verbose} "
+#     if args.keep_trimmed:
+#         cmd += "--keep_trimmed "
 #     executeCmd(cmd)
+#     logger.info(f"****************** Step 1 completed in {(time.time() - start) / 60} minutes. ******************")
 
+#     start = time.time()
+#     # Step 2: Preparation step for masked alignment
+#     cmd = f"python3 2_preparation.py --input_bam {args.input_bam} --homo_dir {os.path.join(ROOT, 'ref/homologous_regions')} " \
+#           f"--pc_dir {os.path.join(ROOT, 'ref/principal_components')} " \
+#           f"--outpath {args.output} " \
+#           f"--ref_genome {args.ref_genome} " \
+#           f"--length {args.length} " \
+#           f"--thread {args.thread} " \
+#           f"--verbose {args.verbose} "
+#     executeCmd(cmd)
+#     logger.info(f"****************** Step 2 completed in {(time.time() - start) / 60} minutes. ******************")
+
+    start = time.time()
     # Step 3: Masked re-alignment and variant calling of multiploid records
     cmd = f"python3 3_maskedAlignPolyVar.py --input_bam {args.input_bam} " \
           f"--bed_dir {os.path.join(ROOT, 'ref')} " \
@@ -56,19 +64,21 @@ def main():
           f"--ref_genome {args.ref_genome} " \
           f"--output_vcf {os.path.join(args.output, 'vcf')} " \
           f"--thread {args.thread} " \
-          f"--verbose {args.verbose} " 
+          f"--verbose {args.verbose} "
     executeCmd(cmd)
+    logger.info(f"****************** Step 3 completed in {(time.time() - start) / 60} minutes. ******************")
 
+    start = time.time()
     # Step 4: Merge with prioritized VCF
     if not args.pvcf:
         return
-    
+
     if not os.path.exists(args.pvcf):
         raise FileNotFoundError(f"Prioritized VCF not found {args.pvcf}. ")
 
     ovcf = glob.glob(os.path.join(args.output, 'vcf', '*filtered.vcf.gz'))
     if not ovcf:
-        raise RuntimeError("Error in comparing wit intrinsic VCF. ")
+        raise RuntimeError("Error in comparing with intrinsic VCF. ")
 
     cmd = f"python3 4_mergePVCF.py --pvcf {args.pvcf} " \
           f"--ovcf {ovcf[0]} " \
@@ -78,11 +88,11 @@ def main():
           f"--verbose {args.verbose} "
     executeCmd(cmd)
 
-    logging.info(f"****************** All processes completed in {time.time() - start:.2f // 60} minutes. ******************")
+    logger.info(f"****************** All processes completed in {time.time() - start // 60} minutes. ******************")
 
 if __name__ == "__main__":
-    
-    # Argparse setup 
+
+    # Argparse setup
     parser = argparse.ArgumentParser(description = "SDrecall wrapper.")
     parser._optionals.title = "Options"
     ROOT = os.path.dirname(__file__)
@@ -100,6 +110,9 @@ if __name__ == "__main__":
     parser.add_argument("--keep_trimmed", action = "store_true", help = "keep trimmed SD BED file for debugging")
     parser.add_argument("-v", "--verbose", type = str, default = "INFO", help = "verbosity level (default: INFO)")
     args = parser.parse_args()
-    logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%a %b-%m %I:%M:%S%P', level = args.verbose.upper())
     
+    os.chdir(ROOT)
+    logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%a %b-%m %I:%M:%S%P', level = args.verbose.upper())
+    logger = logging.getLogger("root")
+    logger.info(f"Working directory: {ROOT}")
     main()

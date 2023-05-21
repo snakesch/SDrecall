@@ -107,17 +107,17 @@ def getDepth(bamf, target_bed, nthreads, mode="normal"):
         raise ValueError(f"Unknown mode - {mode}. Please select from normal / HQ.")
         
     if mode == "normal":
-        cmd = f"""source ~/.bashrc && samtools depth -@ {nthreads} -a -b {target_bed} """\
+        cmd = f"""samtools depth -@ {nthreads} -a -b {target_bed} """\
                f"""-g DUP,UNMAP,QCFAIL,SECONDARY {bamf} | """\
                """awk '{sum+=$3} END{ if (NR != 0) { printf "%s",sum/NR;} else {print 0;}}'"""
     else:
-        cmd = f"""source ~/.bashrc && samtools view -h -@ {nthreads} {bamf} | grep -v XA:Z | """\
+        cmd = f"""samtools view -h -@ {nthreads} {bamf} | grep -v XA:Z | """\
                f"""samtools depth -@ {nthreads} -a -b {target_bed} -Q 30 """\
                """-g DUP,UNMAP,QCFAIL,SECONDARY - | """\
                """awk '{sum+=$3} END{ if (NR != 0) {printf "%s",sum/NR;} else {print 0;}}'"""
-    depth = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout
+    p = subprocess.run([cmd], shell=True, capture_output = True)
     
-    return float(depth)
+    return float(p.stdout)
 
 def convert_ploidy(row):
     """

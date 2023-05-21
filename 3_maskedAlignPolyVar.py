@@ -552,7 +552,7 @@ if __name__ == "__main__":
     query_vcf = getRegions(args.bed_dir, VCF_DIR)
     compareIntrinsic(query_vcf, args.intrinsic_vcf, lower_limit=args.lower)
     logging.info(f"****************** Comparison with intrinsic VCF completed in {time.time() - start:.2f} seconds ******************")
-    if args.verbose.upper() != "DEBUG":
-        logging.info("Cleaning up ... ")
-        cleanup(BAM_FILE, os.path.dirname(VCF_DIR), refp=os.path.dirname(REF_GENOME))
+#     if args.verbose.upper() != "DEBUG":
+#         logging.info("Cleaning up ... ")
+#         cleanup(BAM_FILE, os.path.dirname(VCF_DIR), refp=os.path.dirname(REF_GENOME))
 

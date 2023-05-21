@@ -269,17 +269,17 @@ if __name__ == "__main__":
 
     start = time.time()
     # Extract homologous region reads from BAM
-   # _sorted_bam = getHomoRelatedBam(args.input_bam, all_homo_bed, args.thread)
+    _sorted_bam = getHomoRelatedBam(args.input_bam, all_homo_bed, args.thread)
     logging.info(f"****************** BAM preprocessing completed in {time.time() - start:.2f} seconds ******************")
 
     # Extract reads from homologous regions
     start = time.time()
-   # region_beds = glob.glob(os.path.join(args.homo_dir, "*_related_homo_regions.bed"))
+    region_beds = glob.glob(os.path.join(args.homo_dir, "*_related_homo_regions.bed"))
     freeze_support()
-   # with Pool(args.thread) as p:
-   #     p.starmap(extractFASTQ, zip(repeat(_sorted_bam), region_beds, repeat(fq_out), repeat(args.mapping_quality)))
+    with Pool(args.thread) as p:
+        p.starmap(extractFASTQ, zip(repeat(_sorted_bam), region_beds, repeat(fq_out), repeat(args.mapping_quality)))
     logging.info(f"****************** FASTQ extraction completed in {time.time() - start:.2f} seconds ******************")
-   # os.remove(_sorted_bam)
+    os.remove(_sorted_bam)
 
     start = time.time()
     overlap_bedfs = glob.glob(os.path.join(args.pc_dir, "[A-Z0-9]*.bed"))

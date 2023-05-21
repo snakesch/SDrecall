@@ -2,10 +2,10 @@ Bootstrap: docker
 From: continuumio/miniconda3
 
 %files
-    environment.yml
+    environment.yml /mnt/data/environment.yml
 
 %post
-    /opt/conda/bin/conda env create -f environment.yml
+    /opt/conda/bin/conda env create -f /mnt/data/environment.yml
 
 %runscript
     exec /opt/conda/envs/SDrecall/bin/"$@"
