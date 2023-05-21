@@ -256,8 +256,7 @@ def multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS
 
         # Extract low coverage regions from VCF
         logging.debug(f"Processing BAM for {region} ...")
-        cmd = "module load samtools; "
-        cmd = cmd + f"samtools view -c -@ {NTHREADS} -L {bedf} "
+        cmd = f"samtools view -c -@ {NTHREADS} -L {bedf} "
         _cnt = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout
 
         if _cnt == 0:
