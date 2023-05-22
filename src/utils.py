@@ -1,3 +1,21 @@
+def timing(f):
+    
+    from functools import wraps
+    from time import time
+    import logging
+    
+    logger = logging.getLogger("root")
+    
+    @wraps(f)
+    def wrap(*args, **kw):
+        ts = time()
+        result = f(*args, **kw)
+        te = time()
+        logger.info('Process :%r (args:[%r, %r]) completed in %2.2f min' % \
+          (f.__name__, args, kw, (te-ts)/60))
+        return result
+    return wrap
+
 def getIntersect(all_blocks: list):
     '''
     This function takes in a list of lists and groups sub-lists if their intersects is not NULL.
@@ -82,7 +100,7 @@ def executeCmd(cmd) -> None:
     
     import subprocess
     
-    code = subprocess.run(cmd, shell=True).returncode
+    code = subprocess.run(cmd, shell=True, capture_output=False).returncode
     cmd_lst = cmd.split(" ")   
     if code != 0:
         if cmd_lst[1][0] != "-":
@@ -238,3 +256,59 @@ def checkDP(record, threshold=0, how="all"):
         return False if int(tag["DP"][0]) < threshold else True
 
         
+def cleanup(bamfp, outpath, vcfp="", refp=""):
+
+    """
+    This function takes multiple inputs of directories and clean up intermediate files generated in SDrecall. vcfp and refp are optional as out/vcf/ and out/ref/ by default.)
+    """
+    import shutil
+
+    # Descend to BAM path
+    os.chdir(os.path.dirname(bamfp))
+
+    # Remove temporary masked alignment files
+    for tmp_bamf in glob.glob("*_only_*"):
+        os.remove(tmp_bamf)
+
+    # Descend to out/
+    os.chdir(outpath)
+
+    # Remove multi-aligned reads
+    if os.path.isdir("fastq"):
+        shutil.rmtree("fastq")
+
+    # Remove large masked genomes
+    if os.path.isdir("masked_genome"):
+        shutil.rmtree("masked_genome")
+
+    # Remove VCFs if specified (Not recommended; currently not implemented)
+    if vcfp and os.path.isdir(vcfp):
+
+        # Descend to VCF directory
+        os.chdir(vcfp)
+
+        # Remove VCFs of individual regions
+        for regionf in glob.glob("*_only_*"):
+            os.remove(regionf)
+
+        # Remove intrinic VCFs
+        for ivcf in glob.glob("all_pc*"):
+            os.remove(ivcf)
+
+        # Remove raw extracted VCF
+        for rawf in glob.glob("*extracted_homo_regions.vcf.gz*"):
+            os.remove(rawf)
+
+    # Remove reference files
+    if refp and os.path.isdir(refp):
+
+        # Descend to ref directory
+        os.chdir(refp)
+
+        # Remove homologous region BED files
+        if os.path.isdir("homologous_regions"):
+            shutil.rmtree("homologous_regions")
+
+        # Remove principal component BED files
+        if os.path.isdir("principal_components"):
+            shutil.rmtree("principal_components")

@@ -15,6 +15,10 @@ import time
 from src.utils import *
 import logging
 
+from pandarallel import pandarallel as pa
+pa.initialize(progress_bar=False, verbose=0)
+
+@timing
 def maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS):
 
     logging.info(f"Taking up {NTHREADS} threads.")
@@ -50,9 +54,16 @@ def maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS)
 
     # Masked alignment for each region
     high_ploidy = {}
-    for region in regions:
+    n_region = len(regions)
+    for idx, region in enumerate(regions):
+
+        output_fn = os.path.join(os.path.dirname(BAM_FILE), sample_ID + "_only_" + region + ".bam")
+        if os.path.exists(output_fn):
+            logging.info(f"Masked alignment BAM found. Skipping ... ")
+            continue
+
         # Check if we have precisely 2 fastq files
-        logging.debug(f"Processing {region}")
+        logging.info(f"Processing {region} ({idx+1} out of {n_region})")
         os.chdir(FASTQ_DIR)
         fastq = (glob.glob(f"{sample_ID}_{region}-XA*.fq.gz"))
         if len(fastq) > 2:
@@ -64,11 +75,6 @@ def maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS)
 
         # Check for multi-aligned reads first
         bedf = os.path.join(BED_DIR, "homologous_regions", f"{region}_related_homo_regions.bed")
-        original_hq_depth = getDepth(BAM_FILE, bedf, NTHREADS, mode="HQ")
-        logging.debug(f"Average depth before realignment (without multi-aligned reads): {original_hq_depth}")
-        if original_hq_depth == 0.0:
-            logging.info(f"No high-quality reads in {region}")
-            continue
 
         # Calculate sequence depth
         original_depth = getDepth(BAM_FILE, bedf, NTHREADS)
@@ -79,25 +85,24 @@ def maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS)
 
         os.chdir(MGENOME_DIR)
         mg = (glob.glob(f"*{region}_masked.fasta"))[0]
-        cmd = f"bwa index {mg}"
-        executeCmd(cmd)
+        if not os.path.exists(mg + '.bwt'):
+            cmd = f"bwa index {mg}"
+            executeCmd(cmd)
 
         output_fn = os.path.join(os.path.dirname(BAM_FILE), sample_ID + "_only_" + region + ".bam")
-        cmd = fr"bwa mem -t {NTHREADS} -M -R '@RG\tID:{sample_ID}\tLB:SureSelectXT Library Prep Kit\tPL:ILLUMINA\tPU:1064\tSM:{sample_ID}' {mg} {fastq[0]} {fastq[1]} | samtools sort -o bam -@ {NTHREADS} -o {output_fn}"
-        executeCmd(cmd)
+        if not os.path.exists(output_fn):
+            cmd = fr"bwa mem -t {NTHREADS} -M -R '@RG\tID:{sample_ID}\tLB:SureSelectXT Library Prep Kit\tPL:ILLUMINA\tPU:1064\tSM:{sample_ID}' {mg} {fastq[0]} {fastq[1]} | samtools sort -o bam -@ {NTHREADS} -o {output_fn}"
+            executeCmd(cmd)
 
-        XA_depth = getDepth(output_fn, bedf, NTHREADS)
-        logging.debug(f"XA_depth = {XA_depth}")
-        if XA_depth == 0.0:
-            continue
+        post_depth = getDepth(output_fn, bedf, NTHREADS)
 
-        post_depth = XA_depth - original_hq_depth
         ploidy = 2*post_depth / original_depth
-        logging.info(f"Read depth of {region} increased by {post_depth/original_hq_depth} fold.")
-        logging.info(f"Estimated ploidy for region {region} : {ploidy}")
+        logging.debug(f"Read depth of {region} increased by {post_depth/original_depth:.2f} fold.")
+        logging.debug(f"Estimated ploidy for region {region} : {ploidy:.2f}")
 
         if ploidy < 2.0:
             os.remove(output_fn)
+            logging.debug(f"Low ploidy region {region} : ploidy {ploidy}")
         else:
             high_ploidy[region] = ploidy
 
@@ -105,6 +110,7 @@ def maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS)
 
     return high_ploidy
 
+@timing
 def multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS, VCF_DIR, high_ploidy: dict, keep_vcf = False):
 
     # Create VCF directory for storing GATK outputs
@@ -114,6 +120,17 @@ def multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS
 
     processed = []
     for region, ploidy in high_ploidy.items():
+
+        # Required data paths
+        bedf = os.path.join(BED_DIR, "homologous_regions", f"{region}_related_homo_regions.bed")
+        pcbedf = os.path.join(BED_DIR, "principal_components", region + ".bed")
+        HC_out = os.path.join(VCF_DIR, sample_ID + "_only_" + region + ".HC.g.vcf.gz")
+
+        # Proceed to next region if no reads are mapped to this region
+        _cnt = subprocess.run(f"samtools view -c -@ {NTHREADS} -L {bedf} {BAM_FILE} ", shell=True, capture_output=True).stdout
+        if int(_cnt) == 0:
+            logging.warning(f"No reads in {region}. Skipping ... ")
+            continue
 
         # Get path of masked genome
         os.chdir(MGENOME_DIR)
@@ -135,15 +152,6 @@ def multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS
         if not os.path.exists(masked_bamf + ".bai"):
             cmd = f"samtools index {masked_bamf} "
             executeCmd(cmd)
-
-        # Get BED path
-        bedf = os.path.join(BED_DIR, "homologous_regions", f"{region}_related_homo_regions.bed")
-
-        # Get principal component region
-        pcbedf = os.path.join(BED_DIR, "principal_components", region + ".bed")
-
-        # Output path
-        HC_out = os.path.join(VCF_DIR, sample_ID + "_only_" + region + ".HC.g.vcf.gz")
 
         # HaplotypeCaller (Add --bamout for debugging)
         cmd = f"""gatk --java-options \"-Xmx8G\" HaplotypeCaller """ \
@@ -256,12 +264,6 @@ def multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS
 
         # Extract low coverage regions from VCF
         logging.debug(f"Processing BAM for {region} ...")
-        cmd = f"samtools view -c -@ {NTHREADS} -L {bedf} "
-        _cnt = subprocess.run(cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout
-
-        if _cnt == 0:
-            logging.warning(f"No reads in {region}.")
-            continue
 
         # Descend to BAM directory
         os.chdir(os.path.dirname(BAM_FILE))
@@ -363,6 +365,7 @@ def getRegions(BED_DIR, VCF_DIR) -> str:
 
     return query_vcf
 
+@timing
 def compareIntrinsic(query_vcf, intrinsic_vcf, lower_limit=1.1):
     """
     This function compares query VCF with intrinsic VCF to determine likely intrinsic and unlikely intrinsic variants.
@@ -395,7 +398,7 @@ def compareIntrinsic(query_vcf, intrinsic_vcf, lower_limit=1.1):
     overlap_rec.loc[:, "ID"] = "hom_intrinsic"
 
     # Intrinsic variant filter
-    overlap_rec = overlap_rec.apply(intrinsicFilter, axis=1, args=(_nsubjs, lower_limit))
+    overlap_rec = overlap_rec.parallel_apply(intrinsicFilter, axis=1, args=(_nsubjs, lower_limit))
     final_rec = pd.concat([overlap_rec, non_overlap_rec], axis=0)
     final_vcf_out_tmp = query_vcf[:-6] + "filtered.tmp.vcf.gz"
     final_vcf_out = query_vcf[:-6] + "filtered.vcf.gz"
@@ -446,63 +449,6 @@ def intrinsicFilter(row, nsubjs: int, lower_limit: float):
 
     return row[:nsubjs + 9]
 
-def cleanup(bamfp, outpath, vcfp="", refp=""):
-
-    """
-    This function takes multiple inputs of directories and clean up intermediate files generated in SDrecall. vcfp and refp are optional as out/vcf/ and out/ref/ by default.)
-    """
-    import shutil
-
-    # Descend to BAM path
-    os.chdir(os.path.dirname(bamfp))
-
-    # Remove temporary masked alignment files
-    for tmp_bamf in glob.glob("*_only_*"):
-        os.remove(tmp_bamf)
-
-    # Descend to out/
-    os.chdir(outpath)
-
-    # Remove multi-aligned reads
-    if os.path.isdir("fastq"):
-        shutil.rmtree("fastq")
-
-    # Remove large masked genomes
-    if os.path.isdir("masked_genome"):
-        shutil.rmtree("masked_genome")
-
-    # Remove VCFs if specified (Not recommended; currently not implemented)
-    if vcfp and os.path.isdir(vcfp):
-
-        # Descend to VCF directory
-        os.chdir(vcfp)
-
-        # Remove VCFs of individual regions
-        for regionf in glob.glob("*_only_*"):
-            os.remove(regionf)
-
-        # Remove intrinic VCFs
-        for ivcf in glob.glob("all_pc*"):
-            os.remove(ivcf)
-
-        # Remove raw extracted VCF
-        for rawf in glob.glob("*extracted_homo_regions.vcf.gz*"):
-            os.remove(rawf)
-
-    # Remove reference files
-    if refp and os.path.isdir(refp):
-
-        # Descend to ref directory
-        os.chdir(refp)
-
-        # Remove homologous region BED files
-        if os.path.isdir("homologous_regions"):
-            shutil.rmtree("homologous_regions")
-
-        # Remove principal component BED files
-        if os.path.isdir("principal_components"):
-            shutil.rmtree("principal_components")
-
 if __name__ == "__main__":
 
     # Argparse setup
@@ -512,7 +458,6 @@ if __name__ == "__main__":
     parser.add_argument("--input_bam", type = str, help = "input BAM file", required = True)
     parser.add_argument("--bed_dir", type = str, help = "directory of BED files", default = None)
     parser.add_argument("--intrinsic_vcf", type = str, help = "path of intrinsic VCF", required = True)
-                        # default = f"{ROOT}/ref/all_pc.realign.250.trim.vcf.gz")
     parser.add_argument("--lower", type = float, help = "lower bound for unlikely intrinsic variants", default = 1.1)
     parser.add_argument("--masked_genomes", type = str, help = "directory of masked genomes", default = None)
     parser.add_argument("--fastq_dir", type = str, help = "directory of FASTQ files", default = None)
@@ -534,15 +479,11 @@ if __name__ == "__main__":
     VCF_DIR = args.output_vcf or f"{ROOT}/out/vcf"
     NTHREADS = args.thread
 
-    start = time.time()
+    print("Masked alignment ... ")
     high_ploidy = maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS)
-    logging.info(f"****************** Masked alignment completed in {time.time() - start:.2f} seconds ******************")
 
-    start = time.time()
     multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS, VCF_DIR, high_ploidy, keep_vcf = args.keep_vcf)
-    logging.info(f"****************** Multiploid variant calling completed in {time.time() - start:.2f} seconds ******************")
 
-    start = time.time()
     if not os.path.exists(args.intrinsic_vcf):
         raise FileNotFoundError(f"Intrinsic VCF not found in path {args.intrinsic_vcf}")
     else:
@@ -550,8 +491,5 @@ if __name__ == "__main__":
 
     query_vcf = getRegions(args.bed_dir, VCF_DIR)
     compareIntrinsic(query_vcf, args.intrinsic_vcf, lower_limit=args.lower)
-    logging.info(f"****************** Comparison with intrinsic VCF completed in {time.time() - start:.2f} seconds ******************")
-#     if args.verbose.upper() != "DEBUG":
-#         logging.info("Cleaning up ... ")
-#         cleanup(BAM_FILE, os.path.dirname(VCF_DIR), refp=os.path.dirname(REF_GENOME))
+
 

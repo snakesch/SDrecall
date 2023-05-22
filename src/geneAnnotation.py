@@ -3,6 +3,7 @@ import pandas as pd
 from pandarallel import pandarallel as pa
 import argparse as ap
 import logging
+from .utils import timing
 
 logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s',
                     datefmt='%a %b-%m %I:%M:%S%P', level = "INFO")
@@ -87,6 +88,7 @@ def get_coor(row):
 
     return pd.DataFrame(combined_dict)
 
+@timing
 def merge_ncbi_id(df):
     
     dfs = []
@@ -108,6 +110,7 @@ def merge_ncbi_id(df):
 
     return pd.DataFrame.from_records(dfs)
 
+@timing
 def update_hgnc(df, url = "http://ftp.ebi.ac.uk/pub/databases/genenames/hgnc/tsv/non_alt_loci_set.txt"):
 
     logger = logging.getLogger("root")
@@ -165,12 +168,18 @@ def write_regions(df, outd):
 
     return
 
-def report_coor(outd, genePanel_fp=None):
+@timing
+def report_coor(outd, build, genePanel_fp=None):
 
+    from urllib.error import HTTPError
+    
     ### Fetch exon coordinates from RefGene
-    refGene_url = "http://api.genome.ucsc.edu/getData/track?genome=hg19;track=refGene"
+    refGene_url = "http://api.genome.ucsc.edu/getData/track?genome=" + build + ";track=refGene"
     logger.info(f"Fetching exon coordinates from {refGene_url}")
-    dict_lists = pd.read_json(refGene_url, orient='records')['refGene'].tolist()
+    try:
+        dict_lists = pd.read_json(refGene_url, orient='records')['refGene'].tolist()
+    except HTTPError:
+        raise HTTPError("No genome coordinates for {build}. ")
     df_list = [ pd.DataFrame.from_records(dict_list) for dict_list in dict_lists ]
     refGene_anno_df = pd.concat(df_list, ignore_index=True)
 
@@ -199,9 +208,10 @@ if __name__ == "__main__":
     parser = ap.ArgumentParser()
     parser.add_argument("-o", "--outdir", type=str, help="Output directory", required=True)
     parser.add_argument("-v", "--verbose", type=str, default="INFO", help="Verbosity level")
+    parser.add_argument("-b", "--build", choices = ["hg19", "hg38"], help = "genome assembly")
     parser.add_argument("-l", "--target_genes", type=str, help="Target gene list (one gene per row)", default=None)
     args = parser.parse_args()
 
-    report_coor(args.outdir, genePanel_fp=args.target_genes)
+    report_coor(args.outdir, args.build, genePanel_fp=args.target_genes)
 
 

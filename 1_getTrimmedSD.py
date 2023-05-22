@@ -12,10 +12,11 @@ import shutil
 import subprocess
 import pandas as pd
 
-from src.utils import executeCmd
+from src.utils import executeCmd, timing
 from src.trim_cigar import *
 from src.annotate_from_ref import *
 
+@timing
 def biser(ref_genome: str, build: str, thread: int, output: str):
     """
     This function extracts SD regions from given reference genome using BISER.   
@@ -38,8 +39,9 @@ def biser(ref_genome: str, build: str, thread: int, output: str):
         executeCmd(f"biser -o {output} -t {thread} --no-decomposition {ref_genome}")
     else:
         raise RuntimeError("BISER not found. ")
-          
-def main_trim(infile: str, outfile: str, fraglen=300, gaplen=10, logLevel="INFO"):
+
+@timing       
+def cigar_trim(infile: str, outfile: str, fraglen=300, gaplen=10, logLevel="INFO"):
     """
     This function implements trimming of CIGAR strings and creates a trimmed BED file.
     """
@@ -49,8 +51,9 @@ def main_trim(infile: str, outfile: str, fraglen=300, gaplen=10, logLevel="INFO"
     logger.info("Total number of reads before trimming = {}".format(raw_df.shape[0]))
     ret = trim(raw_df, frag_len = fraglen, small_gap_cutoff = gaplen, logLevel = logLevel)
     ret.to_csv(outfile, sep = "\t", index = False, header = None, mode = 'w')
-    logger.info("****************** CIGAR trimming completed ******************")
-    
+    logger.info("CIGAR trimming completed")
+
+@timing
 def annotate_from_refgene(infile, outpath, anno_table: str, genelist: str, keep=False, genecol=16):
     """
     This function annotates trimmed SD regions and extracts gene regions in gene list.
@@ -162,7 +165,7 @@ if __name__ == "__main__":
     
     # Trim SD regions
     trimmed_out = os.path.join(args.output, "SD_" + args.build + "_trimmed.bed")
-    main_trim(biser_out, trimmed_out, fraglen=args.fraglen, gaplen=args.gaplen, logLevel=args.verbose.upper())
+    cigar_trim(biser_out, trimmed_out, fraglen=args.fraglen, gaplen=args.gaplen, logLevel=args.verbose.upper())
     os.remove(biser_out)
     
     annotate_from_refgene(trimmed_out, args.output, args.table, args.list, args.keep_trimmed, genecol=16)
