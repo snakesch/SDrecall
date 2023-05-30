@@ -11,38 +11,10 @@ def timing(f):
         ts = time()
         result = f(*args, **kw)
         te = time()
-        logger.info('Process :%r (args:[%r, %r]) completed in %2.2f min' % \
-          (f.__name__, args, kw, (te-ts)/60))
+        logger.info('Process :%r  completed in %2.2f min' % \
+          (f.__name__, (te-ts)/60))
         return result
     return wrap
-
-def getIntersect(all_blocks: list):
-    '''
-    This function takes in a list of lists and groups sub-lists if their intersects is not NULL.
-    '''
-    # Base case
-    if len(all_blocks) == 0:
-        return None
-    
-    intersect = []
-    tmp = []
-    base = set()
-    for cur in range(len(all_blocks)):
-        # Does it intersect?
-        if base.intersection(all_blocks[cur]) == set() and cur != 0:
-            intersect.append(tuple(tmp))
-            tmp.clear()
-            tmp.append(all_blocks[cur])
-            base = set(all_blocks[cur])
-        else:
-            tmp.append(all_blocks[cur])
-            # Find new members
-            for _idx in all_blocks[cur]:
-                if _idx not in base:
-                    base.add(_idx)
-    intersect.append(tuple(tmp))
-    
-    return intersect
 
 def loadVCF(path, omit_record=False):
     """
@@ -96,6 +68,46 @@ def writeVCF(header, records, outpath) -> None:
     
     return
 
+def setup(outd, refd, ref_genome, sample_id=None):
+    
+    ### Check if all reference files were built
+    outd, refd = os.path.abspath(outd), os.path.abspath(refd)
+    os.chdir(outd)
+    
+    ivcf = ""
+    for file in os.listdir("vcf/"):
+        if file.endswith(".trim.vcf.gz"):
+            ivcf = os.path.join(outd, "vcf", file)
+            break
+    if not ivcf:
+        raise FileNotFoundError("Intrinsic VCF not found. ")
+    
+    masked_genomes = [ os.path.join(outd, "masked_genome", file) for file in os.listdir("masked_genome/") if file.endswith("_masked.fasta") ]
+    fastqs = [ os.path.join(outd, "fastq", file) for file in os.listdir("fastq/") if file.endswith(".fq.gz") ] if sample_id == None else [ os.path.join(outd, "fastq", file) for file in os.listdir("fastq/") if file.endswith(".fq.gz") and sample_id in file ]
+    if len(masked_genomes) < 1:
+        raise FileNotFoundError("Masked genomes not found. ")
+    if len(fastqs) < 2:
+        raise FileNotFoundError("FASTQs not found. ")
+
+    os.chdir(refd)
+    homo_regions = [ os.path.join(refd, "homologous_regions", file) for file in os.listdir("homologous_regions/") if file.endswith("_related_homo_regions.bed") ]
+    pc_regions = [ os.path.join(refd, "principal_components", file) for file in os.listdir("principal_components/") 
+                    if file.endswith(".bed") and "merged" not in file ]
+    
+    if len(homo_regions) < 1 or len(pc_regions) < 1:
+        raise FileNotFoundError("Coordinates file not found. ")
+    
+    if len(masked_genomes) != len(homo_regions):
+        raise FileNotFoundError("Inconsistent number of masked genomes and homologous regions!")
+        
+    ### Build index files if not found
+    if not os.path.exists(".".join(ref_genome.split(".")[:-1]) + ".dict"):
+        subprocess.run(f"gatk CreateSequenceDictionary -R {ref_genome}", shell=True)
+    if not os.path.exists(ref_genome + ".fai"):
+        subprocess.run(f"samtools faidx {ref_genome}", shell=True)
+    
+    return ivcf, masked_genomes, fastqs, homo_regions, pc_regions
+
 def executeCmd(cmd) -> None:
     
     import subprocess
@@ -109,30 +121,26 @@ def executeCmd(cmd) -> None:
             raise RuntimeError("Error in {}".format(cmd_lst[0]))
     return
 
-def getDepth(bamf, target_bed, nthreads, mode="normal"):
-    """
-    Utility to compute average read depth for a given alignment file
+def get_gene_bed_fn(fd):
     
-    Recommend to use nthreads = 8 to enhance speed.
+    '''Return a list of BED files of all gene regions in the given dir'''
     
-    """
+    import os
+    
+    return [ os.path.join(fd, file) for file in os.listdir(fd) if file[:-4].isupper() ]
+
+def getDepth(bamf, target_bed, nthreads):
+
     import subprocess, os
+    
     if not os.path.exists(bamf):
         raise FileNotFoundError(f"File not found - {bamf}")
     elif not os.path.exists(target_bed):
         raise FileNotFoundError(f"File not found - {target_bed}")
-    elif mode not in ["normal", "HQ"]:
-        raise ValueError(f"Unknown mode - {mode}. Please select from normal / HQ.")
-        
-    if mode == "normal":
-        cmd = f"""samtools depth -@ {nthreads} -a -b {target_bed} """\
-               f"""-g DUP,UNMAP,QCFAIL,SECONDARY {bamf} | """\
-               """awk '{sum+=$3} END{ if (NR != 0) { printf "%s",sum/NR;} else {print 0;}}'"""
-    else:
-        cmd = f"""samtools view -h -@ {nthreads} {bamf} | grep -v XA:Z | """\
-               f"""samtools depth -@ {nthreads} -a -b {target_bed} -Q 30 """\
-               """-g DUP,UNMAP,QCFAIL,SECONDARY - | """\
-               """awk '{sum+=$3} END{ if (NR != 0) {printf "%s",sum/NR;} else {print 0;}}'"""
+
+    cmd = f"""samtools depth -@ {nthreads} -a -b {target_bed} -g DUP,SECONDARY {bamf} | """\
+           """awk '{sum+=$3} END{ if (NR != 0) { printf "%s",sum/NR;} else {print 0;}}'"""
+
     p = subprocess.run([cmd], shell=True, capture_output = True)
     
     return float(p.stdout)

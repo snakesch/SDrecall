@@ -57,11 +57,6 @@ def maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS)
     n_region = len(regions)
     for idx, region in enumerate(regions):
 
-        output_fn = os.path.join(os.path.dirname(BAM_FILE), sample_ID + "_only_" + region + ".bam")
-        if os.path.exists(output_fn):
-            logging.info(f"Masked alignment BAM found. Skipping ... ")
-            continue
-
         # Check if we have precisely 2 fastq files
         logging.info(f"Processing {region} ({idx+1} out of {n_region})")
         os.chdir(FASTQ_DIR)
@@ -91,23 +86,23 @@ def maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS)
 
         output_fn = os.path.join(os.path.dirname(BAM_FILE), sample_ID + "_only_" + region + ".bam")
         if not os.path.exists(output_fn):
-            cmd = fr"bwa mem -t {NTHREADS} -M -R '@RG\tID:{sample_ID}\tLB:SureSelectXT Library Prep Kit\tPL:ILLUMINA\tPU:1064\tSM:{sample_ID}' {mg} {fastq[0]} {fastq[1]} | samtools sort -o bam -@ {NTHREADS} -o {output_fn}"
+            cmd = fr"bwa mem -t {NTHREADS} -M -R '@RG\tID:{sample_ID}\tLB:SureSelectXT Library Prep Kit\tPL:ILLUMINA\tPU:1064\tSM:{sample_ID}' {mg} {fastq[0]} {fastq[1]} | samtools sort -O bam -@ {NTHREADS} -o {output_fn}"
             executeCmd(cmd)
 
         post_depth = getDepth(output_fn, bedf, NTHREADS)
 
-        ploidy = 2*post_depth / original_depth
-        logging.debug(f"Read depth of {region} increased by {post_depth/original_depth:.2f} fold.")
-        logging.debug(f"Estimated ploidy for region {region} : {ploidy:.2f}")
+        ploidy = 2 * post_depth / original_depth
+        logging.info(f"Read depth of {region} increased by {post_depth/original_depth:.2f} fold.")
+        logging.info(f"Estimated ploidy for region {region} : {ploidy:.2f}")
 
         if ploidy < 2.0:
             os.remove(output_fn)
-            logging.debug(f"Low ploidy region {region} : ploidy {ploidy}")
+            logging.info(f"{region} is excluded for low ploidy - {ploidy:.2f}")
         else:
             high_ploidy[region] = ploidy
 
     logging.info(f"Regions with ploidy >= 2 : {list(high_ploidy.keys())}")
-
+    sys.exit()
     return high_ploidy
 
 @timing
@@ -479,7 +474,6 @@ if __name__ == "__main__":
     VCF_DIR = args.output_vcf or f"{ROOT}/out/vcf"
     NTHREADS = args.thread
 
-    print("Masked alignment ... ")
     high_ploidy = maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS)
 
     multiploidVariantCaller(BAM_FILE, BED_DIR, MGENOME_DIR, REF_GENOME, NTHREADS, VCF_DIR, high_ploidy, keep_vcf = args.keep_vcf)

@@ -52,6 +52,7 @@ class Genome:
     def mask(self, bedf: str):
 
         import os
+        import math
         import pandas as pd
         from .utils import executeCmd
 
@@ -63,31 +64,32 @@ class Genome:
 
         _base_fn = os.path.basename(bedf)
         if "_related_homo_regions" in _base_fn:
-            region = _base_fn.split("_r")[0]
+            region = _base_fn.split("_")[0]
         else:
             region = _base_fn.split(".")[0] # We assume the format is REGION.bed
 
         # Get target contigs
-        contig_out = bedf + ".contig"
-        df = pd.read_csv(bedf, sep="\t", header=None).iloc[:, 0]
-        df.drop_duplicates().to_csv(contig_out, index=False, header=False)
-
+        contig_out = bedf + ".contig" ## ABC1.bed.contig
+        df = pd.read_csv(bedf, sep="\t", header=None)
+        end_coor = math.ceil(df.iloc[-1, 2] + 1)
+        if not os.path.exists(contig_out):
+            df.iloc[:, 0].drop_duplicates().to_csv(contig_out, index=False, header=False)
+        
         # Create complementary BED file
         masked_genome_tmp = ".".join(self.path.split(".")[:-1]) + "_" + region + "_masked.fasta.tmp"
         masked_genome = ".".join(self.path.split(".")[:-1]) + "_" + region + "_masked.fasta"
         cbed = complement_bed(bedf, self)
-        # print("cbed path is : ", cbed)
         cmd = f"seqtk subseq -l 60 {self.path} {contig_out} > {masked_genome_tmp} "
         executeCmd(cmd)
 
-        cmd = f"seqtk seq -l 60 -M {cbed} -n N {masked_genome_tmp} > {masked_genome} "
+        cmd = f"seqtk seq -l 60 -M {cbed} -n N {masked_genome_tmp} | head -n {end_coor} > {masked_genome} "
         executeCmd(cmd)
 
         os.remove(masked_genome_tmp)
         os.remove(contig_out)
         if os.path.exists(self.path + ".seqkit.fai"):
             os.remove(self.path + ".seqkit.fai")
-
+            
         return masked_genome
 
 def complement_bed(bedf: str, rg: Genome) -> str:
@@ -98,16 +100,25 @@ def complement_bed(bedf: str, rg: Genome) -> str:
     """
 
     import os
+    import logging
+    
     from .utils import executeCmd
+    
+    logger = logging.getLogger("root")
 
+    _merged_out = bedf[:-3] + "merged.bed.tmp"
+    merged_out = bedf[:-3] + "merged.bed"
+    
+    if "merged" in bedf:
+        logger.debug(f"Complementary BED files found - {bedf}. Skipping ... ")
+        return bedf
+    
     contig_genome = ".".join(rg.path.split(".")[:-1]) + ".contigsize.genome"
     if not os.path.exists(contig_genome):
         rg.getContigGenome()
 
-    _merged_out = bedf[:-3] + "merged.bed.tmp"
     executeCmd(f"bedtools slop -b 100 -g {contig_genome} -i {bedf} | bedtools merge -d 150 -i - > {_merged_out} ")
 
-    merged_out = bedf[:-3] + "merged.bed"
     cmd = f"bedtools subtract -a {rg.total_bed()} -b {_merged_out} | sort -k1,1 -k2,2n -k3,3n | bedtools merge -i - > {merged_out} "
     executeCmd(cmd)
 

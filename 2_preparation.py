@@ -9,12 +9,12 @@ import subprocess
 import os
 import logging
 import pandas as pd
-from multiprocessing import Pool, freeze_support
+from multiprocessing import Pool
 from itertools import repeat
 import glob
 import time
 import argparse
-from src.utils import executeCmd
+from src.utils import executeCmd, get_gene_bed_fn
 from src.maskGenome import *
 
 def getHomoRelatedBam(infile, all_homo_bed, thread):
@@ -22,20 +22,26 @@ def getHomoRelatedBam(infile, all_homo_bed, thread):
     This function extracts reads mapped to any homologous regions and outputs a BAM.
     """
 
+    logger = logging.getLogger("root")
+    
     homorelated_out = infile + ".homorelated"
     _qname = infile + ".qname"
-    cmd = f"samtools view -@ {thread} -L {all_homo_bed} {infile} | awk -F'\t' '{{print $1;}}' | sort -u > {_qname} "
-    executeCmd(cmd)
-    cmd = f"gatk FilterSamReads -I {infile} -O {homorelated_out} --FILTER includeReadList -RLF {_qname} -SO coordinate "
-    executeCmd(cmd)
-    os.remove(_qname)
-    if subprocess.run(f"samtools view -c {homorelated_out}", shell=True, text=True,
-                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout == '0':
-        raise ValueError(f"No reads mapped to homologous regions in {infile}. ")
-    logging.debug(f"Selected reads mapped to homologous regions in {infile}.")
-
     _sorted_bam = infile + ".homorelated_sorted"
-    cmd = f"samtools sort -n -O bam -o {_sorted_bam} {homorelated_out}"
+    
+    if os.path.exists(_sorted_bam):
+        return _sorted_bam
+    
+    if not os.path.exists(homorelated_out):
+        cmd = f"samtools view -@ {thread} -L {all_homo_bed} {infile} | awk -F'\t' '{{print $1;}}' | sort -u > {_qname} "
+        executeCmd(cmd)
+        cmd = f"gatk FilterSamReads -I {infile} -O {homorelated_out} --FILTER includeReadList -RLF {_qname} -SO coordinate "
+        executeCmd(cmd)
+        os.remove(_qname)
+        if subprocess.run(f"samtools view -c {homorelated_out}", shell=True, capture_output=True).stdout == '0':
+            raise ValueError(f"No reads mapped to homologous regions in {infile}. ")
+        logger.debug(f"Selected reads mapped to homologous regions in {infile}.")
+
+    cmd = f"samtools sort -n -O bam -o {_sorted_bam} {homorelated_out} "
     executeCmd(cmd)
     os.remove(homorelated_out)
 
@@ -51,30 +57,34 @@ def extractFASTQ(infile, region_bed, outpath, mq):
 
     """
     region_name = os.path.basename(region_bed).split("_r")[0]
-    logging.debug(f"Detected region {region_name}. ")
+    logger.debug(f"Detected region {region_name}. ")
+    
+    out_1 = os.path.join(outpath, os.path.basename(infile).split(".")[0] + "_" + region_name + "-XA_1.fq")
+    out_2 = os.path.join(outpath, os.path.basename(infile).split(".")[0] + "_" + region_name + "-XA_2.fq")
+    
+    if os.path.exists(out_1) and os.path.exists(out_2):
+        return
 
     tmp_bed = region_bed + ".tmp"
     cmd = f"bedtools sort -i {region_bed} | bedtools merge -i - > {tmp_bed}"
     executeCmd(cmd)
 
     tmp_qname = infile + "_" + region_name + ".qname"
-    cmd = f"samtools view -L {tmp_bed} {infile} | awk -F '\t' '$0 ~ /XA:Z:/ || $5 < {mq} {{print $1;}}' | sort -u > {tmp_qname}"
+    cmd = f"samtools view -L {tmp_bed} {infile} | sort -u > {tmp_qname} "
     executeCmd(cmd)
 
     os.remove(tmp_bed)
 
     if os.path.getsize(tmp_qname) == 0:
         os.remove(tmp_qname)
-        logging.warning(f"No multi-aligned reads with MQ < 30 in {region_name}")
+        logger.debug(f"No multi-aligned reads with MQ < 30 in {region_name}")
         return
 
     _extracted_bam = infile + "_only_" + region_name + ".bam"
     cmd = f"samtools view -N {tmp_qname} -o {_extracted_bam} {infile} "
     executeCmd(cmd)
 
-    out_1 = os.path.join(outpath, os.path.basename(infile).split(".")[0] + "_" + region_name + "-XA_1.fq")
-    out_2 = os.path.join(outpath, os.path.basename(infile).split(".")[0] + "_" + region_name + "-XA_2.fq")
-    cmd = f"bedtools bamtofastq -i {_extracted_bam} -fq {out_1} -fq2 {out_2} && gzip -f {out_1} && gzip -f {out_2} "
+    cmd = f"bedtools bamtofastq -i {_extracted_bam} -fq {out_1} -fq2 {out_2} >/dev/null 2>&1 && gzip -f {out_1} && gzip -f {out_2} "
     executeCmd(cmd)
 
     os.remove(_extracted_bam)
@@ -93,8 +103,8 @@ def isMerged(df):
     Equivalent to `bedtools merge -d 0`
 
     Returns:
-    True if the regions are merged by coordinates.
-    False if otherwise.
+    ---------
+    Bool: True if the regions are merged by coordinates.
 
     """
     start = df.iloc[:, 1].tolist()
@@ -148,7 +158,7 @@ def getSubseq(bedf_path: str, fastq_path: str, length: int, ref_genome: str) -> 
     if not bedf.groupby(by=0).apply(isMerged).all():
         raise ValueError(f"Input BED file {bedf_path} is not sorted / merged. ")
 
-    window_df = bedf.groupby(by=0).apply(lambda x: makeWindows(x, 250)).reset_index(level=0, drop=True)
+    window_df = bedf.groupby(by=0, group_keys=False).apply(lambda x: makeWindows(x, 250)).reset_index(level=0, drop=True)
     window_df["Length"] = window_df.iloc[:, 2] - window_df.iloc[:, 1]
     bedf[3] = bedf[2] - bedf[1]
     if window_df.Length.sum() != bedf[3].sum():
@@ -156,53 +166,52 @@ def getSubseq(bedf_path: str, fastq_path: str, length: int, ref_genome: str) -> 
     window_out = bedf_path + ".preproc"
     window_df.to_csv(window_out, sep="\t", index=False, header=False)
 
-    # seqtk
     os.makedirs(fastq_path, exist_ok=True)
     fq_out = os.path.join(fastq_path, os.path.basename(bedf_path)[:-3] + str(length) + ".fastq")
     cmd = f"seqtk subseq {ref_genome} {window_out} | seqtk seq -F 'F' - > {fq_out} "
     executeCmd(cmd)
-    logging.debug(f"Subsequence written to {fq_out}. ")
+    logger.debug(f"Subsequence written to {fq_out}. ")
     os.remove(window_out)
 
     return
 
 def sortBed(bedf):
 
-    bed = pd.read_csv(bedf, sep="\t", header=None, usecols=[0,1,2]).sort_values(by=[0, 1]).drop_duplicates()
-
-    # Check if the file is already merged
-    if not bed.groupby(0).apply(isMerged).all():
-        _bedf = bedf + ".tmp"
-        cmd = f"sort -k1,1 -k2,2n {bedf} | cut -f1-3 | bedtools merge -i - > {_bedf} "
-        executeCmd(cmd)
-        cmd = f"mv {_bedf} {bedf} "
-        executeCmd(cmd)
-    else:
-        os.remove(bedf)
-        bed.to_csv(bedf, sep="\t", header=False, index=False)
+    p = subprocess.run(f"cut -f1-3 {bedf} | sort -u -V -k1 -k2,2n | bedtools merge -i - > {bedf + '.tmp'} && mv {bedf + '.tmp'} {bedf} ", shell=True, capture_output=True)
+    
+    if p.returncode != 0:
+        raise ValueError("BEDTools merge failed. Something wrong in the BED file?")
 
     return bedf
 
 def getIntrinsicVcf(all_pc_fp, all_homo_regions_fp, fastq_dir, ref_genome, vcf_dir, length, nthreads):
 
+    logger = logging.getLogger("root")
+    
     # Genome masking
     all_pc_fp = sortBed(all_pc_fp)
     rg = Genome(ref_genome)
     pc_masked = rg.mask(all_pc_fp)
-    cmd = f"bwa index {pc_masked} "
-    executeCmd(cmd)
 
+    if not os.path.exists(pc_masked + ".bwt"):
+        cmd = f"bwa index {pc_masked} "
+        executeCmd(cmd)
+    else:
+        logger.info(f"All priority component-masked genome index detected - {pc_masked + '.bwt'}")
+
+    homo_sd = os.path.dirname(all_homo_regions_fp)
+        
     # Get analytic regions BED
-    pc_genes = (x.split("/")[-1].split(".")[0] for x in glob.glob(os.path.dirname(all_pc_fp) + "/[A-Z0-9]*.bed"))
-    sd_genes = (x.split("/")[-1].split("_")[0] for x in glob.glob(os.path.dirname(all_homo_regions_fp) + "/[A-Z0-9]*.bed"))
+    pc_genes = (x.split("/")[-1].split(".")[0] for x in get_gene_bed_fn(os.path.dirname(all_pc_fp)))
+    sd_genes = ( fn.split("_")[0] for fn in os.listdir(homo_sd) )
     analytic_genes = list(set(sd_genes) & set(pc_genes))
-    fp = [ os.path.join(os.path.dirname(all_homo_regions_fp), region + "_related_homo_regions.bed") for region in analytic_genes ]
-    freeze_support()
+    fp = [ os.path.join(homo_sd, region + "_related_homo_regions.bed") for region in analytic_genes ]
+
     with Pool(nthreads) as p:
         p.starmap(getSubseq, zip(fp, repeat(fastq_dir), repeat(length), repeat(ref_genome)))
 
     out_seq = 0
-    _out = os.path.join(os.path.dirname(all_pc_fp), "all_pc.reseq." + str(length) + ".fastq")
+    _out = os.path.join(homo_sd, "all_pc.reseq." + str(length) + ".fastq")
     with open(_out, "w") as ofs:
         for inf in glob.glob(os.path.join(fastq_dir, f"*.{length}.fastq")):
             with open(inf, "r") as ifs:
@@ -214,11 +223,12 @@ def getIntrinsicVcf(all_pc_fp, all_homo_regions_fp, fastq_dir, ref_genome, vcf_d
     if out_seq <= 1:
         raise ValueError(f"Number of FASTQ files {out_seq} is fewer than expected. ")
 
-    realigned_bam_out = os.path.join(os.path.dirname(all_homo_regions_fp), "all_pc.realign." + str(length) + ".bam")
-    cmd = f"""bwa mem -t {nthreads} -M -R """ + r"""'@RG\tID:all_pc\tLB:SureSelectXT Library Prep Kit\tPL:ILLUMINA\tPU:1064\tSM:all_pc' """ \
-          f"""{pc_masked} {_out} | samtools view -@ {nthreads} -uSh - | samtools sort -O bam -@ {nthreads} -o {realigned_bam_out} && """ \
-          f"""samtools index {realigned_bam_out} """
-    executeCmd(cmd)
+    realigned_bam_out = os.path.join(vcf_dir, "all_pc.realign." + str(length) + ".bam")
+    if not os.path.exists(realigned_bam_out):
+        cmd = f"""bwa mem -t {nthreads} -M -R """ + r"""'@RG\tID:all_pc\tLB:SureSelectXT Library Prep Kit\tPL:ILLUMINA\tPU:1064\tSM:all_pc' """ \
+              f"""{pc_masked} {_out} | samtools view -@ {nthreads} -uSh - | samtools sort -O bam -@ {nthreads} -o {realigned_bam_out} && """ \
+              f"""samtools index {realigned_bam_out} """
+        executeCmd(cmd)
 
     os.makedirs(vcf_dir, exist_ok=True)
     tmp_vcf = os.path.join(vcf_dir, os.path.basename(realigned_bam_out)[:-3] + "vcf.gz")
@@ -228,11 +238,12 @@ def getIntrinsicVcf(all_pc_fp, all_homo_regions_fp, fastq_dir, ref_genome, vcf_d
     vcf_out = os.path.join(vcf_dir, os.path.basename(realigned_bam_out)[:-3] + "trim.vcf.gz")
     cmd = f"gatk LeftAlignAndTrimVariants -V {tmp_vcf} -R {ref_genome} --split-multi-allelics -O {vcf_out} "
     executeCmd(cmd)
+    
+    logger.info(f"Writing intrinsic VCF to {vcf_out}")
+    
     os.remove(realigned_bam_out)
     os.remove(tmp_vcf)
-    logging.info(f"Writing intrinsic VCF to {vcf_out}")
-
-    return
+    os.remove(_out)
 
 if __name__ == "__main__":
 
@@ -252,9 +263,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
     logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%a %b-%m %I:%M:%S%P',
                         level = args.verbose.upper())
-    logging.debug(f"Working in {ROOT}")
+    
+    logger = logging.getLogger("root")
+    logger.debug(f"Working in {os.getcwd()}")
 
-    # File paths
     fq_out = os.path.join(args.outpath, "fastq")
     vcf_out = os.path.join(args.outpath, "vcf")
     os.makedirs(fq_out, exist_ok=True)
@@ -270,26 +282,27 @@ if __name__ == "__main__":
     start = time.time()
     # Extract homologous region reads from BAM
     _sorted_bam = getHomoRelatedBam(args.input_bam, all_homo_bed, args.thread)
-    logging.info(f"****************** BAM preprocessing completed in {time.time() - start:.2f} seconds ******************")
+    logger.info(f"****************** BAM preprocessing completed in {time.time() - start:.2f} seconds ******************")
 
     # Extract reads from homologous regions
     start = time.time()
     region_beds = glob.glob(os.path.join(args.homo_dir, "*_related_homo_regions.bed"))
-    freeze_support()
+
     with Pool(args.thread) as p:
         p.starmap(extractFASTQ, zip(repeat(_sorted_bam), region_beds, repeat(fq_out), repeat(args.mapping_quality)))
-    logging.info(f"****************** FASTQ extraction completed in {time.time() - start:.2f} seconds ******************")
-    os.remove(_sorted_bam)
+    logger.info(f"****************** FASTQ extraction completed in {time.time() - start:.2f} seconds ******************")
 
     start = time.time()
-    overlap_bedfs = glob.glob(os.path.join(args.pc_dir, "[A-Z0-9]*.bed"))
+    overlap_bedfs = get_gene_bed_fn(args.pc_dir)
     with Pool(args.thread) as p:
         p.starmap(mask_genome, zip(overlap_bedfs, repeat(args.ref_genome), repeat(args.outpath)))
-    logging.info(f"****************** Genome masking completed in {time.time() - start:.2f} seconds ******************")
+    logger.info(f"****************** Genome masking completed in {time.time() - start:.2f} seconds ******************")
 
     # Get intrinsic VCF for selecting unlikely intrinsic variants
     start = time.time()
     getIntrinsicVcf(all_pc_bed, all_homo_bed, fq_out, args.ref_genome, vcf_out, args.length, args.thread)
-    logging.info(f"****************** Intrinsic VCF acquired in {time.time() - start:.2f} seconds ******************")
+    logger.info(f"****************** Intrinsic VCF acquired in {time.time() - start:.2f} seconds ******************")
+
+    os.remove(_sorted_bam)
 
 

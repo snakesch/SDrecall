@@ -36,18 +36,26 @@ def biser(ref_genome: str, build: str, thread: int, output: str):
         executeCmd(f"samtools faidx {ref_genome}")
     
     if shutil.which("biser"):
-        executeCmd(f"biser -o {output} -t {thread} --no-decomposition {ref_genome}")
+        executeCmd(f"biser -o {output} -t {thread} {ref_genome}")
     else:
         raise RuntimeError("BISER not found. ")
 
 @timing       
-def cigar_trim(infile: str, outfile: str, fraglen=300, gaplen=10, trace_trim=False):
+def cigar_trim(infile: str, outfile: str, mismatch_rate=5, fraglen=300, gaplen=10, trace_trim=False):
     """
     This function implements trimming of CIGAR strings and creates a trimmed BED file.
     """
+    import re
+    
     logger = logging.getLogger("root")
     
     raw_df = pd.read_csv(infile, sep = "\t", header = None)
+    
+    # Filter SD regions with mismatch rate X < mismatch_rate
+    raw_df = raw_df[raw_df.iloc[:, 13].apply(lambda x: float(re.split("\=|\;", x)[1]) < mismatch_rate)]
+    raw_df = raw_df.reset_index(drop = True)
+    logger.info(f"Selecting SD regions with mismatch rate X<{mismatch_rate}. ")
+    
     logger.info("Total number of reads before trimming = {}".format(raw_df.shape[0]))
     ret = trim(raw_df, frag_len = fraglen, small_gap_cutoff = gaplen, trace=trace_trim)
     ret.to_csv(outfile, sep = "\t", index = False, header = None, mode = 'w')
@@ -151,6 +159,7 @@ if __name__ == "__main__":
     parser.add_argument("-a", "--table", type = str, required = True, help = "RefGene annotated table")
     parser.add_argument("-t", "--thread", type = int, default = 8, help = "number of threads used with BISER (default = 8)")
     parser.add_argument("-f", "--fraglen", type = int, default = 300, help = "expected fragment length (default: 300)")
+    parser.add_argument("-m", "--mismatch_rate", type = int, default = 5, help = "mismatch rate threshold (default: 5)")
     parser.add_argument("-g", "--gaplen", type = int, default = 10, help = "small gap cutoff value (default: 10)")
     parser.add_argument("-v", "--verbose", type = str, default = "INFO", help = "verbosity level (default: INFO)")
     
@@ -169,12 +178,12 @@ if __name__ == "__main__":
         logger.info("Trimmed output detected. ")
     elif os.path.exists(biser_out): 
         logger.info(f"BISER output detected. Using {biser_out}")
-        cigar_trim(biser_out, trimmed_out, fraglen=args.fraglen, gaplen=args.gaplen, trace_trim=args.trace_trim)
+        cigar_trim(biser_out, trimmed_out, mismatch_rate=args.mismatch_rate, fraglen=args.fraglen, gaplen=args.gaplen, trace_trim=args.trace_trim)
         os.remove(biser_out)
     else:
         biser(args.ref_genome, args.build, args.thread, biser_out)
-        cigar_trim(biser_out, trimmed_out, fraglen=args.fraglen, gaplen=args.gaplen, trace_trim=args.trace_trim)
+        cigar_trim(biser_out, trimmed_out, mismatch_rate=args.mismatch_rate, fraglen=args.fraglen, gaplen=args.gaplen, trace_trim=args.trace_trim)
         os.remove(biser_out)
-    logger.info("Building coodinates ... ")
+    logger.info("Building coordinates ... ")
     build_regions(trimmed_out, args.output, args.table, args.keep_trimmed)
     

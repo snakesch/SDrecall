@@ -11,6 +11,7 @@ import os
 import logging
 import glob
 import time
+
 from src.utils import executeCmd
 from src.geneAnnotation import *
 
@@ -20,38 +21,39 @@ def main():
     start0 = time.time()
     
     # Check if we are in the correct directory
-    if "1_getTrimmedSD.py" not in os.listdir():
+    if "1_build_regions.py" not in os.listdir():
         raise FileNotFoundError(f"Source scripts are not found. ")
 
     # Step 0: Get gene annotation table
-#     if not os.path.exists(os.path.join(ROOT, 'ref', 'refgene_latest_anno.bed')):
-#         report_coor(os.path.join(ROOT, 'ref'), genePanel_fp=args.list)
-#         logger.info(f"****************** Step 0 completed in {(time.time() - start0) / 60} minutes. ******************")
-#     else:
-#         logger.info(f"Found gene element coordinates BED in {os.path.join(ROOT, 'ref')}")
+    if not os.path.exists(os.path.join(ROOT, 'ref', 'refgene_latest_anno.bed')):
+        report_coor(os.path.join(ROOT, 'ref'), genePanel_fp=args.list)
+        logger.info(f"****************** Step 0 completed in {(time.time() - start0) / 60} minutes. ******************")
+    else:
+        logger.info(f"Found gene element coordinates BED in {os.path.join(ROOT, 'ref')}")
 
-#     start1 = time.time()
-#     # Step 1: Get homologous region and principal component coordinates
-#     cmd = f"python3 1_getTrimmedSD.py --ref_genome {args.ref_genome} " \
-#           f"--output {os.path.dirname(args.ref_genome)} --build {args.build} --list {args.list} " \
-#           f"--table {os.path.join('ref', 'refgene_latest_anno.bed')} --thread {args.thread} --fraglen {args.fraglen} " \
-#           f"--gaplen {args.gaplen} --verbose {args.verbose} "
-#     if args.keep_trimmed:
-#         cmd += "--keep_trimmed "
-#     executeCmd(cmd)
-#     logger.info(f"****************** Step 1 completed in {(time.time() - start1) / 60} minutes. ******************")
+    start1 = time.time()
+    # Step 1: Get homologous region and principal component coordinates
+    cmd = f"python3 1_build_regions.py --ref_genome {args.ref_genome} " \
+          f"--output {os.path.dirname(args.ref_genome)} --build {args.build} " \
+          f"--table {os.path.join('ref', 'refgene_latest_anno_exon.bed')} --thread {args.thread} --fraglen {args.fraglen} " \
+          f"--gaplen {args.gaplen} --verbose {args.verbose} " \
+          f"--mismatch_rate {args.mismatch_rate} "
+    if args.keep_trimmed:
+        cmd += "--keep_trimmed "
+    executeCmd(cmd)
+    logger.info(f"****************** Step 1 completed in {(time.time() - start1) / 60:.2f} minutes. ******************")
 
-#     start2 = time.time()
-#     # Step 2: Preparation step for masked alignment
-#     cmd = f"python3 2_preparation.py --input_bam {args.input_bam} --homo_dir {os.path.join(ROOT, 'ref/homologous_regions')} " \
-#           f"--pc_dir {os.path.join(ROOT, 'ref/principal_components')} " \
-#           f"--outpath {args.output} " \
-#           f"--ref_genome {args.ref_genome} " \
-#           f"--length {args.length} " \
-#           f"--thread {args.thread} " \
-#           f"--verbose {args.verbose} "
-#     executeCmd(cmd)
-#     logger.info(f"****************** Step 2 completed in {(time.time() - start2) / 60} minutes. ******************")
+    start2 = time.time()
+    # Step 2: Preparation step for masked alignment
+    cmd = f"python3 2_preparation.py --input_bam {args.input_bam} --homo_dir {os.path.join(ROOT, 'ref/homologous_regions')} " \
+          f"--pc_dir {os.path.join(ROOT, 'ref/principal_components')} " \
+          f"--outpath {args.output} " \
+          f"--ref_genome {args.ref_genome} " \
+          f"--length {args.length} " \
+          f"--thread {args.thread} " \
+          f"--verbose {args.verbose} "
+    executeCmd(cmd)
+    logger.info(f"****************** Step 2 completed in {(time.time() - start2) / 60:.2f} minutes. ******************")
 
     start3 = time.time()
     # Step 3: Masked re-alignment and variant calling of multiploid records
@@ -65,7 +67,6 @@ def main():
           f"--output_vcf {os.path.join(args.output, 'vcf')} " \
           f"--thread {args.thread} " \
           f"--verbose {args.verbose} "
-    print(cmd)
     executeCmd(cmd)
     logger.info(f"****************** Step 3 completed in {(time.time() - start3) / 60} minutes. ******************")
 
@@ -86,7 +87,7 @@ if __name__ == "__main__":
     # Argparse setup
     parser = argparse.ArgumentParser(description = "SDrecall wrapper.")
     parser._optionals.title = "Options"
-    ROOT = os.path.dirname(__file__)
+    ROOT = os.path.dirname(os.path.abspath(__file__))
     parser.add_argument("-i", "--input_bam", type = str, required = True, help = "Input BAM file")
     parser.add_argument("-r", "--ref_genome", type = str, required = True, help = "reference genome to extract SD regions")
     parser.add_argument("-o", "--output", type = str, required = True, help = "output directory of resulting BED files")
@@ -97,8 +98,9 @@ if __name__ == "__main__":
     parser.add_argument("-t", "--thread", type = int, default = 8, help = "number of threads used with BISER (default = 8)")
     parser.add_argument("-p", "--pvcf", type = str, default = None, help = "Path of prioritized VCF")
     parser.add_argument("-pv_tag", type = str, default = "PVCF", help = "pVCF variant identifier")
-    parser.add_argument("--length", type = int, default = 250, help = "BED window size for extracting reads from homologous regions (default: 250)")
+    parser.add_argument("--length", type = int, default = 800, help = "BED window size for extracting reads from homologous regions (default: 250)")
     parser.add_argument("--lower", type = float, default = 1.1, help = "lower bound for unlikely intrinsic variants")
+    parser.add_argument("-m", "--mismatch_rate", type = int, default = 5, help = "mismatch rate threshold (default: 5)")
     parser.add_argument("-f", "--fraglen", type = int, default = 300, help = "expected fragment length (default: 300)")
     parser.add_argument("-g", "--gaplen", type = int, default = 10, help = "small gap cutoff value (default: 10)")
     parser.add_argument("--keep_trimmed", action = "store_true", help = "keep trimmed SD BED file for debugging")
@@ -109,7 +111,7 @@ if __name__ == "__main__":
     logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%a %b-%m %I:%M:%S%P', level = args.verbose.upper())
     logger = logging.getLogger("root")
     logger.info(f"Working directory: {ROOT}")
-    
+
     if args.pvcf:
         from mergePVCF import *
     main()
