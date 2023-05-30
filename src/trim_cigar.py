@@ -1,25 +1,56 @@
-def lr_trim(cigar_arr, blocks, logLevel="INFO"):
+def getIntersect(all_blocks: list):
+    '''
+    This function takes in a list of lists and groups sub-lists if their intersects is not NULL.
+    '''
+    # Base case
+    if len(all_blocks) == 0:
+        return None
+    
+    intersect = []
+    tmp = []
+    base = set()
+    for cur in range(len(all_blocks)):
+        # Does it intersect?
+        if base.intersection(all_blocks[cur]) == set() and cur != 0:
+            intersect.append(tuple(tmp))
+            tmp.clear()
+            tmp.append(all_blocks[cur])
+            base = set(all_blocks[cur])
+        else:
+            tmp.append(all_blocks[cur])
+            # Find new members
+            for _idx in all_blocks[cur]:
+                if _idx not in base:
+                    base.add(_idx)
+    intersect.append(tuple(tmp))
+    
+    return intersect
+
+def lr_trim(cigar_arr, blocks, trace=False):
     '''
     This function trims all leading and trailing indels and returns the modified block by reference.
     '''
     import numpy as np
     import logging
-    logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%a %b-%m %I:%M:%S%P', level = logLevel.upper())
+    
+    logger = logging.getLogger("root")
     
     if blocks == None:
         return
     first = blocks[0]
     last = blocks[-1]
     if cigar_arr[first, 1] != 'M':
-        logging.debug("Removed {}".format(cigar_arr[first]))
+        if trace:
+            logger.debug("Removed {}".format(cigar_arr[first]))
         np.delete(cigar_arr, first)
         blocks.pop(0)
-        lr_trim(cigar_arr, blocks, logLevel=logLevel)
+        lr_trim(cigar_arr, blocks, trace=trace)
     elif cigar_arr[last, 1] != 'M':
-        logging.debug("Removed {}".format(cigar_arr[last]))
+        if trace:
+            logger.debug("Removed {}".format(cigar_arr[last]))
         np.delete(cigar_arr, last)
         blocks.pop(-1)
-        lr_trim(cigar_arr, blocks, logLevel=logLevel)
+        lr_trim(cigar_arr, blocks, trace=trace)
     else:
         return
                 
@@ -61,16 +92,15 @@ def r_extend(cigar_arr, index: int, blocks = [], penalty = 0, small_gap_cutoff =
     elif cur_len >= frag_len and index == len(cigar_arr) - 1:
         return blocks
 
-def getBlockFromCigar(cigar: list, frag_len = 300, small_gap_cutoff = 10, logLevel="INFO"):
+def getBlockFromCigar(cigar: list, frag_len = 300, small_gap_cutoff = 10, trace=False):
     '''
     This function takes CIGAR string and extract blocks (list of tuples) from it.
     Blocks are either long fragments of match / mismatch OR long fragments intercalated with small indels.
     If no valid long fragments / small indels are detected, the function returns None.
     '''
-    from .utils import getIntersect
     import numpy as np
     import logging
-    logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%a %b-%m %I:%M:%S%P', level = logLevel.upper())
+    logger = logging.getLogger("root")
     
     cigar_arr = np.array(cigar)
     long_match_conditions = [ (cigar_arr[:, 1] == 'M') & (cigar_arr[:, 0].astype(int) >= frag_len) ]
@@ -89,28 +119,33 @@ def getBlockFromCigar(cigar: list, frag_len = 300, small_gap_cutoff = 10, logLev
     for start in range(0, len(cigar_arr)):
         raw_block = r_extend(cigar_arr, start, blocks = [])
         if raw_block != None:
-            lr_trim(cigar_arr, raw_block, logLevel=logLevel)
-            logging.debug("Appending {}".format(raw_block))
+            lr_trim(cigar_arr, raw_block, trace=trace)
+            if trace:
+                logger.debug("Appending {}".format(raw_block))
             raw_blocks.append(raw_block)
     intersect = getIntersect(raw_blocks)
     if not intersect:
         return None
     blocks = []
     for tgt in scoreBlock(cigar_arr, intersect):
-        blocks.append(tgt)
+        if isinstance(tgt[0], list):
+            blocks.extend(tgt)
+        else:
+            blocks.append(tgt)
     
-    logging.debug("{} long fragments detected.".format(long_match_blocks.shape[0]))
-    logging.debug("{} consecutive small indels detected.".format(small_indels.shape[0]))
+    if trace:
+        logger.debug("{} long fragments detected.".format(long_match_blocks.shape[0]))
+        logger.debug("{} consecutive small indels detected.".format(small_indels.shape[0]))
     
     return sorted(blocks) if blocks != None else None
 
-def trim(raw_df, frag_len = 300, small_gap_cutoff = 10, logLevel="INFO"):
+def trim(raw_df, frag_len = 300, small_gap_cutoff = 10, trace=False):
     '''
     This is the main driver trimming function.
     '''
     import pandas as pd
     import logging
-    logging.basicConfig(format='[%(asctime)s] %(levelname)s: %(message)s', datefmt='%a %b-%m %I:%M:%S%P', level = logLevel.upper())
+    logger = logging.getLogger("root")
     
     # Extract data from BISER output
     idx_all = raw_df.index
@@ -125,10 +160,12 @@ def trim(raw_df, frag_len = 300, small_gap_cutoff = 10, logLevel="INFO"):
     cur = []
     for idx, ref_start, ref_end, query_start, query_end, ref_strand, query_strand, cigar_string in zip(idx_all, ref_start_all, ref_end_all, query_start_all, query_end_all, ref_strand_all, query_strand_all, cigar_string_all):
         cigar = breakDownCigar(cigar_string)
-        blocks = getBlockFromCigar(cigar, frag_len = frag_len, small_gap_cutoff = small_gap_cutoff, logLevel=logLevel)
-        logging.debug("Extracted block indices : {}".format(blocks))
+        blocks = getBlockFromCigar(cigar, frag_len = frag_len, small_gap_cutoff = small_gap_cutoff, trace=trace)
+        if trace:
+            logger.debug("Extracted block indices : {}".format(blocks))
         if blocks is None:
-            logging.debug("No blocks extracted!")
+            if trace:
+                logger.debug("No blocks extracted!")
             continue
         all_coord = list(trimCigarCoord(cigar, blocks, ref_start, ref_end, query_start, query_end, ref_strand, query_strand))
         
@@ -145,7 +182,6 @@ def trim(raw_df, frag_len = 300, small_gap_cutoff = 10, logLevel="INFO"):
             cur.append(tmp)
     
     ret = pd.DataFrame(cur)
-    logging.info("Total number of regions : {}".format(ret.shape[0]))
     
     return ret
 
@@ -201,4 +237,23 @@ def scoreBlock(cigar_arr, intersectBlock):
                     running_score += cigar_arr[idx, 0].astype(int)
             score.append(running_score)
         target = score.index(max(score))
-        yield block[target]
+        
+        ret = []
+        ret.append(block[target])
+        ret_start = block[target][0]
+
+        remaining_blocks = list(filter(lambda _block: _block[-1] < ret_start, block))
+        while len(remaining_blocks):
+            score.clear()
+            for sub_block in remaining_blocks: 
+                running_score = 0
+                for idx in sub_block:
+                    if cigar_arr[idx, 1] == 'M':
+                        running_score += cigar_arr[idx, 0].astype(int)
+                score.append(running_score)
+            target = score.index(max(score))
+            ret.append(remaining_blocks[target])
+            ret_start = remaining_blocks[target][0]
+            remaining_blocks = list(filter(lambda _block: _block[-1] < ret_start, block))
+
+        yield ret
