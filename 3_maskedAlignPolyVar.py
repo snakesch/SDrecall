@@ -102,7 +102,7 @@ def maskedAlign(BAM_FILE, BED_DIR, MGENOME_DIR, FASTQ_DIR, REF_GENOME, NTHREADS)
             high_ploidy[region] = ploidy
 
     logging.info(f"Regions with ploidy >= 2 : {list(high_ploidy.keys())}")
-    sys.exit()
+
     return high_ploidy
 
 @timing
