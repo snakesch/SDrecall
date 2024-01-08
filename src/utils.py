@@ -1,3 +1,76 @@
+def getInsertDistribution(bamf, nthreads = 4) -> tuple[float]:
+    import pysam
+    import logging
+    logger = logging.getLogger("root")
+    
+    for info in pysam.stats("-@", str(nthreads), bamf).split('\n'):
+        if "insert size" in info and "SN" in info:
+            if "average" in info:
+                avg = info.split('\t')[-1]
+            else:
+                std = info.split('\t')[-1]
+    logger.info(f"Average insert size for {bamf} is {avg}")
+    return float(avg), float(std)
+
+def calculateEndPos(alignment) -> int:
+    
+    ''' This function computes end positions based on POS and PNEXT. '''
+    pstrand, pdown = alignment["pos_strand"], alignment["pnext_downstream"]
+    
+    end_pos = 0
+    if pstrand and pdown:
+        end_pos = alignment["pos"] + abs(alignment["tlen"])
+    elif pstrand and not pdown:
+        end_pos = alignment["pnext"] + abs(alignment["tlen"])
+    elif not pstrand and not pdown:
+        end_pos = alignment["pnext"] + abs(alignment["tlen"])
+    elif not pstrand and pdown:
+        end_pos = alignment["pos"] + abs(alignment["tlen"])
+
+    return int(end_pos) # Floating point values will cause unexpected behaviors with bedtools 
+
+def get_pnorm(val, mean, std_dev) -> float:
+    '''Compute p-value of test statistics under standard normal.'''
+    from scipy.stats import norm
+    z = (val - mean) / std_dev
+    return min(norm.cdf(z), 1 - norm.cdf(z))
+
+def calculate_tlen_per_pair(xa1, xa2):
+    import re
+    # xa1 and xa2 format example: chr12,+125396989,148M,14 (chr, pos, cigar, edit_distance)
+    xa1_list, xa2_list = xa1.strip().split(","), xa2.strip().split(",")
+    chr1, chr2 = xa1_list[0], xa2_list[0]
+    if chr1 != chr2:
+        return 0, ""
+    else:
+        pos1 = int(xa1_list[1])
+        pos2 = int(xa2_list[1])
+        if pos1 * pos2 >= 0:
+            return 0, ""
+        else:
+            region_str = chr1 + ":"
+            if pos1 < pos2:
+                rev_strand_leftmost = - pos1
+                pos_strand_leftmost = pos2
+                if rev_strand_leftmost >= pos_strand_leftmost:
+                    tlen = rev_strand_leftmost - pos_strand_leftmost + sum(int(x) for x in re.findall(r'(\d+)[MDN=X]', xa1_list[2]))
+                    region_str += str(pos_strand_leftmost) + "-" + str(pos_strand_leftmost + tlen)
+                else:
+                    tlen = pos_strand_leftmost - rev_strand_leftmost + sum(int(x) for x in re.findall(r'(\d+)[MDN=X]', xa2_list[2]))
+                    region_str += str(rev_strand_leftmost) + "-" + str(rev_strand_leftmost + tlen)
+            else:
+                rev_strand_leftmost = - pos2
+                pos_strand_leftmost = pos1
+                if rev_strand_leftmost >= pos_strand_leftmost:
+                    tlen = rev_strand_leftmost - pos_strand_leftmost + sum(int(x) for x in re.findall(r'(\d+)[MDN=X]', xa2_list[2]))
+                    region_str += str(pos_strand_leftmost) + "-" + str(pos_strand_leftmost + tlen)
+                else:
+                    tlen = pos_strand_leftmost - rev_strand_leftmost + sum(int(x) for x in re.findall(r'(\d+)[MDN=X]', xa1_list[2]))
+                    region_str += str(rev_strand_leftmost) + "-" + str(rev_strand_leftmost + tlen)
+            return tlen, region_str
+
+### Everything below this line is deprecated.
+
 def timing(f):
     
     from functools import wraps
