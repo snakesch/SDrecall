@@ -1,0 +1,18 @@
+Bootstrap: docker
+From: continuumio/miniconda3
+
+%files
+    environment.yml /mnt/data/environment.yml
+
+%post
+    /opt/conda/bin/conda env create -f /mnt/data/environment.yml
+
+%runscript
+    exec /opt/conda/envs/SDrecall/bin/"$@"
+
+%labels
+    Author louisshe@hku.hk (Louis SHE)
+    Version v0.0.1
+
+%help
+    This is a Singularity definition file for running SDrecall.
