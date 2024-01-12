@@ -32,14 +32,6 @@ import subprocess
 
 bash_utils_hub = "/paedyl01/disk1/yangyxt/ngs_scripts/common_bash_utils.sh"
 
-def init_logger(handler = logging.StreamHandler(), tag = ""):
-    logger = logging.getLogger(f"Process-{tag}")
-    handler.setFormatter(logging.Formatter("%(levelname)s:%(asctime)s:%(module)s:%(funcName)s:%(lineno)s:%(message)s"))
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    return logger
-
-
 def log_decorator(func):
     def wrapper(*args, **kwargs):
         tmp_tag = str(uuid.uuid4())
@@ -53,8 +45,6 @@ def log_decorator(func):
 
         return result, log_contents
     return wrapper
-
-
 
 class HashableGraph:
     def __init__(self, graph):
@@ -92,31 +82,6 @@ def prepare_tmp_file(tmp_dir="/paedyl01/disk1/yangyxt/test_tmp", **kwargs):
         pass
 
     return tempfile.NamedTemporaryFile(dir = "/paedyl01/disk1/yangyxt/test_tmp", delete = False, **kwargs)
-
-
-
-def error_handling_decorator(func):
-    def wrapper(*args, **kwargs):
-        tmp_tag = str(uuid.uuid4())
-        log_stream = StringIO()
-        ch = logging.StreamHandler(log_stream)
-        logger = init_logger(handler = ch, tag = tmp_tag)
-        try:
-            result = func(*args, logger=logger, **kwargs)
-            log_contents = log_stream.getvalue()
-            log_stream.close()
-        except Exception as e:
-            tb_str = traceback.format_exc()
-            log_contents = log_stream.getvalue()
-            log_stream.close()
-            return (False, (e, tb_str), log_contents)
-        else:
-            return (True, result, log_contents)
-
-    return wrapper
-
-
-
 class Genome:
     """
     A class implementation for genome masking.
