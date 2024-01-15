@@ -3,11 +3,14 @@
 # This module consists all different calculations of sequencing coverages
 
 def calculate_inferred_coverage(bam_file, min_mapq = 10, 
-                               filter_tags = [], filter_logic = "and",
-                               genome_file = "ucsc.hg19.contigsize.genome",
-                               target_region = ""):
+                               filter_tags = [], target_region = "", filter_logic = "and",
+                               genome_file = "ucsc.hg19.contigsize.genome"):
     import pybedtools as pb
     import pysam
+    import os
+    import pandas as pd
+    
+    from read_filter import read_evaluator
     
     '''
     This function is intended for identification of candidate realignment regions where template length >> 300bp.
@@ -27,7 +30,7 @@ def calculate_inferred_coverage(bam_file, min_mapq = 10,
     candidate_regions = []
     
     # Case: Valid regions provided
-    if os.path.isfile(target_region):
+    if target_region and os.path.isfile(target_region):
         bed_obj = pb.BedTool(target_region).sort().merge().as_intervalfile()
         next_interval = next(bed_obj)
         try:
@@ -45,7 +48,7 @@ def calculate_inferred_coverage(bam_file, min_mapq = 10,
             candidate_region = read_evaluator(read, filter_tags, filter_logic, min_mapq)
             if candidate_region != None:
                 candidate_regions.append(candidate_region)
-        
+                
     candidate_regions = list(set(candidate_regions))
     bamfp.close()
     
@@ -55,12 +58,14 @@ def calculate_inferred_coverage(bam_file, min_mapq = 10,
     for interval in genome_coverage:
         bases = [(interval.chrom, i, interval.name) for i in range(interval.start, interval.end+1, 1)]
         base_coverages.append(pd.DataFrame.from_records(bases))
-    return pd.concat(base_coverages)   
 
-# Non-inferred depth
+    ret = pd.concat(base_coverages)
+    ret.columns = ["chr", "position", "depth"]
+    ret["depth"] = ret["depth"].astype(int)
+    return ret
+
 def calculate_non_inferred_coverage(bam_file, min_mapq: int = 10,
-                                    filter_tags = [], thread: int = 8,
-                                    target_region = ""):
+                                    filter_tags = [], target_region = "", thread: int = 8):
     '''
     Expected inputs:
     filter_tags: a list of tags to search
@@ -82,12 +87,8 @@ def calculate_non_inferred_coverage(bam_file, min_mapq: int = 10,
     rows = p.stdout.strip().split("\n")
     data = [ row.split("\t") for row in rows ]
     
-    return pd.DataFrame(data, columns = ["chr", "position", "depth"])
-
-
-## Initialization 
-filter_tags = 
-min_mapq = 10
-
-target_region = ""
-target_tag = target_tag or os.path.basename(target_region).split(".")[0]
+    ret = pd.DataFrame(data)
+    ret.columns = ["chr", "position", "depth"]
+    ret["depth"] = ret["depth"].astype(int)
+    
+    return ret

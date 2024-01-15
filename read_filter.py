@@ -25,8 +25,7 @@ def read_evaluator(read, filter_tags, filter_logic, min_mapq):
     filter_pass = filter_pass and True
 
     # Select good reads
-    candidate_reads = not (read.is_duplicate or read.is_unmapped or read.is_secondary or read.is_supplementary or read.is_qcfail or read.mapping_quality >= min_mapq) and filter_pass
-    
+    candidate_reads = not (read.is_duplicate or read.is_unmapped or read.is_secondary or read.is_supplementary or read.is_qcfail or read.mapping_quality < min_mapq) and filter_pass
     if not candidate_reads:
         return
     
