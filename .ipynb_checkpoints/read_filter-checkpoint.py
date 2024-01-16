@@ -44,3 +44,15 @@ def read_evaluator(read, filter_tags, filter_logic, min_mapq):
         return (chrom, start, end, read.query_name)
     elif not read.is_paired:
         return (chrom, start, end, read.query_name)
+    
+def p_value(val, mean, sd):
+    '''
+    This function computes the statistical significance of observing a read with length TLEN given a known read distribution.
+    '''
+    from scipy.stats import norm
+    
+    z = (val - mean)/sd
+    
+    return 2 * (1 - norm.cdf(abs(z)))
+    
+    

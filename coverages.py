@@ -81,7 +81,7 @@ def calculate_non_inferred_coverage(bam_file, min_mapq: int = 10,
         cmd.extend(["|"])
     
     # Do we really need to include bases with zero coverage?
-    cmd.extend(["samtools", "depth", "-J", "-q", "13", "-s", "-Q", str(min_mapq), bam_file])
+    cmd.extend(["samtools", "depth", "-J", "-q", "13", "-s", "-@", thread, "-Q", str(min_mapq), bam_file])
     
     p = subprocess.run(cmd, text=True, capture_output=True)
     rows = p.stdout.strip().split("\n")

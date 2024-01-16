@@ -1,3 +1,6 @@
+import logging
+logger = logging.getLogger("root")
+
 def get_multialign_regions(bam_file, min_mapq: int = 40, min_dp: int = 3, unambiguous_dp: int = 10, multialign_fraction = 0.7, 
                            target_region = None, use_inferred_coverage = True):
     '''
@@ -10,6 +13,7 @@ def get_multialign_regions(bam_file, min_mapq: int = 40, min_dp: int = 3, unambi
     '''
     import multiprocess as mp
     import pandas as pd
+    import pybedtools as pb
     
     if use_inferred_coverage:
         from coverages import calculate_inferred_coverage
@@ -28,16 +32,17 @@ def get_multialign_regions(bam_file, min_mapq: int = 40, min_dp: int = 3, unambi
     params = [(bam_file,        0,          [], target_region), 
               (bam_file, min_mapq,          [], target_region),
               (bam_file,        0,      ["XA"], target_region)]
-    
+    logger.info("Begin depth computation. ")
     with mp.Pool(3) as pool:
         raw_depth, high_mq_depth, raw_xa_depth = pool.starmap(func, params)
 
     raw_depth = raw_depth.rename(columns={"depth": "raw_depth"})
     high_mq_depth = high_mq_depth.rename(columns={"depth": "high_MQ_depth"})
     raw_xa_depth = raw_xa_depth.rename(columns={"depth": "raw_XA_depth"})
- 
+    logger.debug("Completed empirical depth calculations. ")
     merged_depth = raw_depth.merge(high_mq_depth, how="left", on=["chr", "position"]).merge(raw_xa_depth, how="left", on=["chr", "position"]).drop_duplicates()
     merged_depth = merged_depth.fillna(0)
+    logger.info("Depth calculation completed. ")
     
     # Now we filter the bases that do not fulfill the standards below: (AND logic)
     # 1. Has at least 5 reads covered. (no MQ considered)
@@ -86,4 +91,9 @@ def bam_subset(bam_file, mq_cutoff = 20):
         os.remove("selected_regions.qname")
     
     return 
-    
+
+def xa_serialize(xa_string):
+    '''
+    This function takes a long XA string chrX,-1776046,148M,3;chrX,-1776046,148M,3; and serializes it to [('chrX', '-1776046', '148M', '3'), ('chrX', '-1776046', '148M', '3')].
+    '''
+    return [tuple(segment.split(",")) for segment in xa_string.split(";") if segment]
