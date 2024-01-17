@@ -1,50 +1,18 @@
 import networkx as nx
 from intervaltree import Interval, IntervalTree
-from multiprocessing import Pool
 from functools import partial
 from collections import defaultdict
-import pandas as pd
-import numpy as np
-import argparse as ap
 from python_utils import convert_input_value
-from pybedtools import BedTool
-import pybedtools as pb
-from itertools import repeat
 from extract_SD_pairs_from_bam_json import main_parse_json_and_process
 from pick_multialign_region import main_func_pick_region
-from io import StringIO
 from community import community_louvain
 from HashableDict import HashableDict
-import pickle
-import uuid
-import tempfile
-import itertools
-import gc
-import logging
-import os
 import ast
-import sys
-import traceback
 from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
-import subprocess
 
 bash_utils_hub = "/paedyl01/disk1/yangyxt/ngs_scripts/common_bash_utils.sh"
-
-def log_decorator(func):
-    def wrapper(*args, **kwargs):
-        tmp_tag = str(uuid.uuid4())
-        log_stream = StringIO()
-        ch = logging.StreamHandler(log_stream)
-        logger = init_logger(handler = ch, tag = tmp_tag)
-        result = func(*args, logger = logger, **kwargs)
-
-        log_contents = log_stream.getvalue()
-        log_stream.close()
-
-        return result, log_contents
-    return wrapper
 
 class HashableGraph:
     def __init__(self, graph):
@@ -1479,38 +1447,6 @@ def write_pickle_graph(graph_path, graph):
     with open(graph_path, "wb") as f:
         pickle.dump(graph, f)
 
-
-def select_minimal_sd_span(groupdf):
-    groupdf["size"] = groupdf.loc[:, "end_1"].astype(float) - groupdf.loc[:, "start_1"].astype(float)
-    groupdf["bam_region_overlap_frac"] = (np.where(groupdf.loc[:, "end_1"] > groupdf.loc[:, "end_bam1"], groupdf.loc[:, "end_bam1"], groupdf.loc[:, "end_1"]) -
-                                          np.where(groupdf.loc[:, "start_1"] > groupdf.loc[:, "start_bam1"], groupdf.loc[:, "start_1"], groupdf.loc[:, "start_bam1"]))/(groupdf.loc[:, "end_bam1"] - groupdf.loc[:, "start_bam1"])
-
-    # Sort by size
-    groupdf = groupdf.sort_values(by=["bam_region_overlap_frac", "size"], ascending=[False, True])
-    same_strand_df = groupdf.loc[groupdf["strand2"] == groupdf["strand1"], :]
-    diff_strand_df = groupdf.loc[groupdf["strand2"] != groupdf["strand1"], :]
-
-    # return the rows with the minimal interval
-    groupdf = groupdf.drop(columns=["size", "bam_region_overlap_frac"])
-    if len(same_strand_df) == 0 or len(diff_strand_df) == 0:
-        minimal_chr = groupdf.iloc[0, 0]
-        minimal_start = groupdf.iloc[0, 1]
-        minimal_end = groupdf.iloc[0, 2]
-        return groupdf.loc[(groupdf.loc[:, "chr_1"] == minimal_chr) & (groupdf.loc[:, "start_1"] == minimal_start) & (groupdf.loc[:, "end_1"] == minimal_end), :]
-    else:
-        same_minimal_chr = same_strand_df.iloc[0, 0]
-        same_minimal_start = same_strand_df.iloc[0, 1]
-        same_minimal_end = same_strand_df.iloc[0, 2]
-        diff_minimal_chr = diff_strand_df.iloc[0, 0]
-        diff_minimal_start = diff_strand_df.iloc[0, 1]
-        diff_minimal_end = diff_strand_df.iloc[0, 2]
-        minimal_chrs = [same_minimal_chr, diff_minimal_chr]
-        minimal_starts = [same_minimal_start, diff_minimal_start]
-        minimal_ends = [same_minimal_end, diff_minimal_end]
-        return groupdf.loc[(groupdf.loc[:, "chr_1"].isin(minimal_chrs)) & (groupdf.loc[:, "start_1"].isin(minimal_starts)) & (groupdf.loc[:, "end_1"].isin(minimal_ends)), :]
-
-
-
 def extract_FC_NFC_pairs_from_graph(query_nodes, directed_graph, graph_path = "", avg_frag_size = 500, std_frag_size = 150, threads=12):
     # First we need to annotate the graph about which nodes are query_nodes
     # query nodes are dataframe with chr, start, end ,three columns
@@ -2063,24 +1999,3 @@ def deploy_PCs_for_SDrecall_main(ref_genome = "/paedyl01/disk1/yangyxt/indexed_g
                                         std_frag_size = std_frag_size)
 
 
-
-if __name__ == "__main__":
-    parser = ap.ArgumentParser()
-    parser.add_argument("-f", "--function", type=str, help="The function name", required=True)
-    parser.add_argument("-a", "--arguments", type=str, help="The function's input arguments, delimited by semi-colon ;", required=False, default=None)
-    parser.add_argument("-k", "--key_arguments", type=str, help="Keyword arguments for the function, delimited by semi-colon ;", required=False, default=None)
-
-    args = parser.parse_args()
-    try:
-        fargs = [ convert_input_value(a) for a in args.arguments.split(";") ] if type(args.arguments) == str else []
-        fkwargs = { t.split("=")[0]: convert_input_value(t.split("=")[1]) for t in args.key_arguments.split(";") } if type(args.key_arguments) == str else {}
-        logger.info("Running function: {}, input args are {}, input kwargs are {}".format(args.function, fargs, fkwargs))
-    except Exception as e:
-        logger.error("Input argument does not meet the expected format, encounter Parsing error {}, Let's check the input:\n-f {}, -a {}, -k {}".format(
-            e,
-            args.function,
-            args.arguments,
-            args.key_arguments
-        ))
-        raise e
-    globals()[args.function](*fargs, **fkwargs)
