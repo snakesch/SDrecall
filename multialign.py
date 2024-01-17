@@ -73,6 +73,7 @@ def bam_subset(bam_file, mq_cutoff = 20):
     import os
     
     ## sambamba is significantly faster than pysam even without multithreading
+    logger.debug("Begin BAM subsetting. ")
     
     # Step 1: Extract query name file
     cmd = f"module load sambamba; sambamba -q view -L selected_regions.bed -F '[SA] != null and mapping_quality <= {mq_cutoff + 10}' -f sam -t 8 {bam_file} | cut -f1 | sort -u > selected_regions.qname"
@@ -89,6 +90,7 @@ def bam_subset(bam_file, mq_cutoff = 20):
     
     if os.path.isfile("selected_regions.qname"):
         os.remove("selected_regions.qname")
+    logger.debug("Completed BAM subsetting. ")
     
     return 
 

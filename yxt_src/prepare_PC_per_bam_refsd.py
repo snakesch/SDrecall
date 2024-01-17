@@ -1806,13 +1806,6 @@ def traverse_network_to_get_homology_counterparts(qnode, directed_graph, avg_fra
 
     return (qnode, tuple(counterparts_nodes))
 
-
-def is_file_up_to_date(file_to_check, list_of_dependency_files):
-    file_to_check_time = os.path.getmtime(file_to_check)
-    return all(file_to_check_time > os.path.getmtime(dep_file) for dep_file in list_of_dependency_files)
-
-
-
 def deploy_PCs_for_SDrecall_main(ref_genome = "/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta",
                                  base_dir = "/paedyl01/disk1/yangyxt/indexed_genome/HG002_SD_priority_component_pairs",
                                  target_bed = "",
@@ -1869,17 +1862,7 @@ def deploy_PCs_for_SDrecall_main(ref_genome = "/paedyl01/disk1/yangyxt/indexed_g
             sambamba view -q -f json -o {bam_json} -t {threads} /dev/stdin && \
             ls -lh {bam_json}"
 
-    if os.path.exists(bam_json):
-        if os.path.getmtime(bam_json) > os.path.getmtime(input_bam) and \
-           os.path.getmtime(bam_json) > os.path.getmtime(target_bed) and \
-           os.path.getmtime(bam_json) > os.path.getmtime(os.path.abspath(__file__)) and \
-           os.path.getsize(bam_json) > 28:
-            logger.info(f"{bam_json} already exists and updated")
-        else:
-            executeCmd(cmd)
-    else:
-        executeCmd(cmd)
-
+    executeCmd(cmd)
 
     # Step 3: Extract the SD pair table str from the json file
     sd_map_str = main_parse_json_and_process(bam_json,
@@ -1968,17 +1951,7 @@ def deploy_PCs_for_SDrecall_main(ref_genome = "/paedyl01/disk1/yangyxt/indexed_g
 
     # Step 5: Create a graph on the total_bin_sd_df
     graph_path = os.path.join(base_dir, "multiplexed_homologous_sequences.graphml")
-    graph = None
-    if os.path.exists(graph_path):
-        if os.path.getmtime(graph_path) > os.path.getmtime(bam_json) and \
-           os.path.getmtime(graph_path) > os.path.getmtime(target_bed) and \
-           os.path.getmtime(graph_path) > os.path.getmtime(input_bam) and \
-           os.path.getmtime(graph_path) > os.path.getmtime(os.path.abspath(__file__)):
-            graph = read_graphml(graph_path)
-
-
-    if not graph:
-        graph = create_multiplex_graph( total_bin_sd_df, graph_path,
+    graph = create_multiplex_graph( total_bin_sd_df, graph_path,
                                         overlap_frac_min = fraction_cutoff,
                                         avg_frag_size = avg_frag_size,
                                         std_frag_size = std_frag_size,
