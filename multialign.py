@@ -28,32 +28,36 @@ def get_multialign_regions(bam_file, min_mapq: int = 40, min_dp: int = 3, unambi
     #     raw_depth| bam_file,        0,        None, target_region, use_inferred_coverage
     # high_mq_depth| bam_file, min_mapq,        None, target_region, use_inferred_coverage
     #  raw_xa_depth| bam_file,        0,      ["XA"], target_region, use_inferred_coverage
+    #  raw_xs_depth| bam_file,        0,      ["XS"], target_region, use_inferred_coverage
     
     params = [(bam_file,        0,          [], target_region), 
               (bam_file, min_mapq,          [], target_region),
-              (bam_file,        0,      ["XA"], target_region)]
+              (bam_file,        0,      ["XA"], target_region),
+              (bam_file,        0,      ["XS"], target_region)]
     logger.info("Begin depth computation. ")
-    with mp.Pool(3) as pool:
-        raw_depth, high_mq_depth, raw_xa_depth = pool.starmap(func, params)
+    with mp.Pool(4) as pool:
+        raw_depth, high_mq_depth, raw_xa_depth, raw_xs_depth = pool.starmap(func, params)
 
     raw_depth = raw_depth.rename(columns={"depth": "raw_depth"})
     high_mq_depth = high_mq_depth.rename(columns={"depth": "high_MQ_depth"})
     raw_xa_depth = raw_xa_depth.rename(columns={"depth": "raw_XA_depth"})
+    raw_xs_depth = raw_xs_depth.rename(columns={"depth": "raw_XS_depth"})
     logger.debug("Completed empirical depth calculations. ")
-    merged_depth = raw_depth.merge(high_mq_depth, how="left", on=["chr", "position"]).merge(raw_xa_depth, how="left", on=["chr", "position"]).drop_duplicates()
+    merged_depth = raw_depth.merge(high_mq_depth, how="left", on=["chr", "position"]).merge(raw_xa_depth, how="left", on=["chr", "position"]).merge(raw_xs_depth, how="left", on=["chr", "position"]).drop_duplicates()
     merged_depth = merged_depth.fillna(0)
     logger.info("Depth calculation completed. ")
     
     # Now we filter the bases that do not fulfill the standards below: (AND logic)
     # 1. Has at least 5 reads covered. (no MQ considered)
-    # 2. Has 60% of the overlapping reads with XA tag
+    # 2. Has 60% of the overlapping reads with XA/XS tag
     # 3. Has no more than 10 MQ >= 50 reads covered
 
     min_depth = merged_depth["raw_depth"] >= min_dp
     most_xa = (merged_depth["raw_XA_depth"]/merged_depth["raw_depth"]) >= multialign_fraction
+    most_xs = (merged_depth["raw_XS_depth"]/merged_depth["raw_depth"]) >= multialign_fraction
     not_enough_evidence = merged_depth["high_MQ_depth"] <= unambiguous_dp
         
-    merged_depth = merged_depth.loc[min_depth & most_xa & not_enough_evidence, :].drop_duplicates()
+    merged_depth = merged_depth.loc[min_depth & (most_xa | most_xs) & not_enough_evidence, :].drop_duplicates()
 
     merged_depth["start"] = merged_depth.loc[:, "position"] - 1
     merged_depth["end"] = merged_depth.loc[:, "position"]

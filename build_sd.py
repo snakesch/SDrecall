@@ -2,6 +2,9 @@
 
 # This module consists of functions used in building SD maps. 
 
+import logging
+logger = logging.getLogger("root")
+
 def build_SD_pair_from_pe_reads(pe_reads, avg_insert_size, std_insert_size, conf = 0.95, full = True):
     '''
     This function builds SD pairs from a pair of PE reads. 
@@ -82,7 +85,88 @@ def validate_sd_map(sd_map):
     
     return filtered_sd_map
 
-def build_sd_pairs(bam_file, confidence, threads, full=True):
+def calculate_shortest_sd_span(xa_sds):
+    '''
+    This function takes as input a dataframe of reference SD regions associated with one particular XA region identified in BAM input.
+    It finds the shortest SD fragment associated with each BAM SD and returns the SD map for the record with shortest reference SD span.
+    '''
+    import pandas as pd
+    
+    ## Compute overlap of reference SD and BAM SD
+    consensus_start, consensus_end = xa_sds[["start_1", "start_bam1"]].apply(max, axis=1), xa_sds[["end_1", "end_bam1"]].apply(min, axis=1)
+    xa_sds["bam_region_overlap_frac"] = (consensus_end - consensus_start)/(xa_sds["end_bam1"] - xa_sds["start_bam1"])
+
+    ## Compute the size of each known SD fragment
+    xa_sds["size"] = xa_sds["end_1"] - xa_sds["start_1"]
+
+    xa_sds = xa_sds.sort_values(by=["bam_region_overlap_frac", "size"], ascending=[False, True])
+
+    ## Here we pick the shortest SD region in reference map
+    same_strand = xa_sds["strand2"] == xa_sds["strand1"]
+    same_strand_df, diff_strand_df = xa_sds[same_strand], xa_sds[~same_strand]
+    
+    if same_strand_df.shape[0] == 0 or diff_strand_df.shape[0] == 0:
+        return xa_sds.iloc[0:1, :] 
+    else:
+        return pd.concat([same_strand_df.iloc[0:1, :], diff_strand_df.iloc[0:1, :]])
+
+def map_overlap_with_known_sd(sd_map, reference_map = "WGAC.hg19.cigar.trimmed.homo.expanded.bed"):
+    '''
+    This function takes a SD map derived from sample BAM file and intersect with known SD regions to produce a consensus SD map with shortest overlapping SD.
+    '''
+    import pybedtools as pb
+    import os
+    import pandas as pd
+    
+    if not os.path.isfile(reference_map):
+        raise FileNotFoundError("Reference SD map not found. ")
+    
+    reference_sd, sd_map = pb.BedTool(reference_map).sort(), pb.BedTool.from_dataframe(sd_map).sort()
+    logger.info(f"Total coverage of reference SD map = {reference_sd.total_coverage()}bp")
+
+    ## Recall that sd_map at this step is a two-way map, including chr_1 would suffice
+    overlapped_sd = reference_sd.intersect(sd_map, wo=True).to_dataframe(disable_auto_names=True,
+                                                    names = ["chr_1", "start_1", "end_1",
+                                                             "chr_2", "start_2", "end_2",
+                                                             "strand1", "strand2",
+                                                             "cigar", "mismatch_rate",
+                                                             "chr_bam1", "start_bam1", "end_bam1",
+                                                             "chr_bam2", "start_bam2", "end_bam2",
+                                                             "overlap_len"]) \
+                                           .loc[:,["chr_1", "start_1", "end_1", "strand1",
+                                                   "chr_2", "start_2", "end_2", "strand2",
+                                                   "chr_bam1", "start_bam1", "end_bam1"]] \
+                                           .drop_duplicates().dropna()
+    logger.info(f"{overlapped_sd.shape[0]} SD regions ({pb.BedTool.from_dataframe(overlapped_sd).total_coverage()}bp) overlapped with known SD reference map. ")
+    logger.debug("Overlapped SD map looks like: ")
+    logger.debug(overlapped_sd.head(5))
+    
+    ## Change -/- strands to +/+ since we mirrored the SD map
+    overlapped_sd.loc[(overlapped_sd["strand1"] == "-") & (overlapped_sd["strand2"] == "-"), ["strand1", "strand2"]] = "+"
+
+    ## Exclude alternative contigs
+    contig_pattern = r'(chr)*(X|Y|MT*|[0-9][0-9]*)$'
+    main_contigs = overlapped_sd.loc[:, "chr_1"].str.match(contig_pattern) & \
+               overlapped_sd.loc[:, "chr_2"].str.match(contig_pattern) & \
+               overlapped_sd.loc[:, "chr_bam1"].str.match(contig_pattern)
+    main_contig_sd = overlapped_sd.loc[main_contigs, :]
+    
+    ## Each XA region identified from BAM file is associated with multiple SDs in the reference map, we need to compute the **shortest** SD span.
+    ## Multithreading does not offer significant benefit here since the number of associated reference SD regions is not large.
+    shortest_sd_map = main_contig_sd.groupby(["chr_bam1", "start_bam1", "end_bam1"]).apply(calculate_shortest_sd_span).reset_index(drop=True)
+    shortest_sd_map = shortest_sd_map[["chr_1", "start_1", "end_1", "strand1", "chr_2", "start_2", "end_2", "strand2"]].drop_duplicates().reset_index(drop=True)
+
+    logger.info("SD map successfully built. ")
+    logger.debug("SD map: ")
+    logger.debug(shortest_sd_map.head(5))
+    
+    ## Remove equivalent entries: A <-> B implies B <-> A
+    shortest_sd_map["span"] = shortest_sd_map.apply(lambda row: {(row["chr_1"], row["start_1"], row["end_1"], row["strand1"]), (row["chr_2"], row["start_2"], row["end_2"], row["strand2"])}, axis=1)
+    shortest_sd_map = shortest_sd_map.drop_duplicates("span")
+        
+    return shortest_sd_map
+
+def build_sd_pairs(avg_insert_size, std_insert_size, confidence, threads, full=True, reference_map = "WGAC.hg19.cigar.trimmed.homo.expanded.bed"):
     '''
     Expected output is a list containing mappings of primary alignments and multialignments:
         chr	start	end	chr_counterpart	start_counterpart	end_counterpart
@@ -93,12 +177,14 @@ def build_sd_pairs(bam_file, confidence, threads, full=True):
     4	chr5	70126395	70126958	chr5	69251325	69251886
     5	chr5	70126395	70126958	chr5	21945467	21946029
     '''    
-    from read_properties import get_fragment_dist
     from read_filter import p_value
+    
+    import pybedtools as pb
     
     import multiprocessing as mp
     import pandas as pd
     from itertools import repeat
+    import os
     
     # Step 1: Load JSON file
     multialignments = pd.read_json("selected_regions.json", lines=True)
@@ -109,9 +195,7 @@ def build_sd_pairs(bam_file, confidence, threads, full=True):
     
     discordant_pairs = multialignments.loc[multialignments["tlen"] == 0, "qname"].drop_duplicates().to_list()
     multialignments = multialignments.loc[~multialignments["qname"].isin(discordant_pairs), :]
-    
-    # avg_insert_size, std_insert_size = get_fragment_dist(bam_file)
-    avg_insert_size, std_insert_size = 563.0, 138.5
+        
     extreme_reads = multialignments["tlen"].abs().apply(p_value, args = (avg_insert_size, std_insert_size,)) < 0.001
     multialignments = multialignments[~extreme_reads]
     
@@ -174,49 +258,16 @@ def build_sd_pairs(bam_file, confidence, threads, full=True):
     if logger.level >= logging.INFO:
         cov = pb.BedTool.from_dataframe(final_sd_map).sort().merge().total_coverage()
         logger.info(f"Total SD region coverage = {cov}bp, based on BAM file {bam_file}")
-        logger.info("First 5 rows of the SD map are as follows: ")
-        logger.info(final_sd_map.head(5))
+        logger.debug("First 5 rows of the SD map are as follows: ")
+        logger.debug(final_sd_map.head(5))
 
+    # Step 9: Refine SD regions by intersecting with known SD regions and determining shortest SD units.
+    ## This step also outputs an SD map for debugging.
+    final_sd_map = map_overlap_with_known_sd(final_sd_map, reference_map = reference_map)
+    final_sd_map = final_sd_map.drop("span", axis=1)
+    
+    ## Output selected SD
+    final_sd_map.to_csv("selected_sd.map", sep="\t", index=False)
+    logger.info(f"Selected SD map written to {os.getcwd()}")
+        
     return final_sd_map
-
-def map_overlap_with_known_sd(sd_map, reference_map = "WGAC.hg19.cigar.trimmed.homo.expanded.bed"):
-    import pybedtools as pb
-    import os
-    
-    if not os.path.isfile(reference_map):
-        raise FileNotFoundError("Reference SD map not found. ")
-    
-    reference_sd, sd_map = pb.BedTool(reference_map).sort(), pb.BedTool.from_dataframe(sd_map).sort()
-    logger.info(f"Total coverage of reference SD map = {reference_sd.total_coverage()}bp")
-
-    ## Recall that sd_map at this step is a two-way map, including chr_1 would suffice
-    overlapped_sd = reference_sd.intersect(sd_map, wo=True).to_dataframe(disable_auto_names=True,
-                                                    names = ["chr_1", "start_1", "end_1",
-                                                             "chr_2", "start_2", "end_2",
-                                                             "strand1", "strand2",
-                                                             "cigar", "mismatch_rate",
-                                                             "chr_bam1", "start_bam1", "end_bam1",
-                                                             "chr_bam2", "start_bam2", "end_bam2",
-                                                             "overlap_len"]) \
-                                           .loc[:,["chr_1", "start_1", "end_1", "strand1",
-                                                   "chr_2", "start_2", "end_2", "strand2",
-                                                   "chr_bam1", "start_bam1", "end_bam1"]] \
-                                           .drop_duplicates().dropna()
-    logger.info(f"{overlapped_sd.shape[0]} SD regions overlapped with known SD reference map. ")
-    logger.debug("Overlapped SD map looks like: ")
-    logger.debug(overlapped_sd.head(5))
-    
-    ## Change -/- strands to +/+ since we mirrored the SD map
-    overlapped_sd.loc[(overlapped_sd["strand1"] == "-") & (overlapped_sd["strand2"] == "-"), ["strand1", "strand2"]] = "+"
-
-    ## Exclude alternative contigs
-    contig_pattern = r'(chr)*(X|Y|MT*|[0-9][0-9]*)$'
-    main_contigs = overlapped_sd.loc[:, "chr_1"].str.match(contig_pattern) & \
-               overlapped_sd.loc[:, "chr_2"].str.match(contig_pattern) & \
-               overlapped_sd.loc[:, "chr_bam1"].str.match(contig_pattern)
-    main_contig_sd = overlapped_sd.loc[main_contigs, :]
-    
-    ## Each XA region identified from BAM file is associated with multiple SDs in the reference map, we need to compute the **shortest** SD span.
-    ## Multithreading does not offer significant benefit here since the number of associated reference SD regions is not large.
-    
-    
