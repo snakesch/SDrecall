@@ -2,6 +2,7 @@ import os
 import uuid
 import pandas as pd
 import logging
+import sys
 
 from Bio import SeqIO
 from Bio.Seq import Seq
@@ -77,7 +78,9 @@ class Genome:
     def _apply_mask(self, interval_seq, logger, interval):
         mask_seq = "N" * 1000
         masked_seq = mask_seq + str(interval_seq)[1000:-1000] + mask_seq
-        assert str(masked_seq) != str(interval_seq), f"Sequence already contains Ns at both ends: {interval.chrom}:{interval.start}-{interval.stop}"
+        if str(masked_seq) != str(interval_seq):
+            logger.error(f"Sequence already contains Ns at both ends: {interval.chrom}:{interval.start}-{interval.stop}")
+            sys.exit(1)
         return Seq(masked_seq)
 
     def _write_masked_genome(self, masked_genome_contigs, region):

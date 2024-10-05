@@ -119,10 +119,10 @@ def calculate_inferred_coverage(bam_file,
 
     depth_df = pd.read_table(output_tsv + '.gz', compression='gzip', header=None, names=['chrom', 'pos', 'depth'], low_memory=False)
     logger.debug("First 5 rows of coverage table {} are: \n{}".format(output_tsv + '.gz', depth_df[:5].to_string(index=False)))
-    logger.info("Inferred coverage of {} bases:\n{}\n".format(depth_df.shape, depth_df.head(5).to_string(index=False)))
+    logger.debug("Inferred coverage of {} bases:\n{}".format(depth_df.shape[0], depth_df.head(5).to_string(index=False)))
     return depth_df
 
-def pick_region(input_bam: str,
+def pick_region_by_depth(input_bam: str,
                 output_bed: str,
                 MQ_threshold=41,
                 high_quality_depth=10, 
@@ -150,10 +150,10 @@ def pick_region(input_bam: str,
     raw_xa_depth = raw_xa_depth.rename(columns={"depth": "raw_XA_depth"})
     raw_xs_depth = raw_xs_depth.rename(columns={"depth": "raw_XS_depth"})
 
-    logger.info(f"Base coverage:\nAll bases: {raw_depth.shape[0]}\nBases covered by high quality reads: {high_mq_depth.shape[0]}\nBases covered by XA reads: {raw_xa_depth.shape[0]}\n")
+    logger.info(f"Base coverage:\nAll bases: {raw_depth.shape[0]}\nBases covered by high quality reads: {high_mq_depth.shape[0]}\nBases covered by XA reads: {raw_xa_depth.shape[0]}")
     merged_depth = raw_depth.merge(high_mq_depth, how="left", on=["chrom", "pos"]).merge(raw_xa_depth, how="left", on=["chrom", "pos"]).merge(raw_xs_depth, how="left", on=["chrom", "pos"]).drop_duplicates()
     merged_depth = merged_depth.fillna(0)
-    logger.debug("After consolidating multiple inferred depths, {} bases remained for filtration:\n{}\n".format(merged_depth.shape,
+    logger.debug("After consolidating multiple inferred depths, {} bases remained for filtration:\n{}\n".format(merged_depth.shape[0],
                                                                                                      merged_depth.head(5).to_string(index=False)))
 
     # - Identify candidate regions for short variant recall - #

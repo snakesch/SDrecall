@@ -117,7 +117,6 @@ def perform_bedtools_sort_and_merge(bed_file,
     merged_bed.saveas(output_bed_file)
 
 def filter_bed_by_interval_size(bed_obj, interval_size_cutoff):
-    prepared_tmp_file = prepare_tmp_file(suffix=".bed")
-    prepared_tmp_file_name = prepared_tmp_file.name
-    bed_obj.filter(lambda x: len(x) > interval_size_cutoff).sort().saveas(prepared_tmp_file_name)
-    return BedTool(prepared_tmp_file_name)
+    
+    return bed_obj.filter(lambda x: len(x) > interval_size_cutoff).sort()
+

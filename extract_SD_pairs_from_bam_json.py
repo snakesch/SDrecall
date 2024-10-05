@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import sys
 import multiprocessing as mp
 import logging
 from scipy.stats import norm
@@ -7,7 +8,7 @@ from itertools import product, repeat
 
 logger = logging.getLogger("SDrecall")
 
-def extract_sd_coordinates_from_json(bam_json, avg_frag_size=400, std_frag_size=100, err_rate = 0.05, threads=1):
+def extract_sd_coordinates_from_json(bam_json, avg_frag_size=400, std_frag_size=100, err_rate = 0.05, threads=1) -> str:
     
     df = pd.read_json(bam_json, lines=True)
     '''
@@ -61,15 +62,15 @@ def extract_sd_coordinates_from_json(bam_json, avg_frag_size=400, std_frag_size=
     # Now we need to exclude the extreme tlen cause they might overlap with strcutrual variant event
     extreme_tlen_size = df["tlen"].astype(int).abs().apply(p_value, args=(avg_frag_size, std_frag_size,)) < 0.001
     if df.loc[extreme_tlen_size, :].shape[0] > 0:
-        logger.warning("{} alignments have extreme tlen sizes:\n{}\n".format(df.loc[extreme_tlen_size, :].shape[0],
-                                                                         df.loc[extreme_tlen_size, :].head(5).to_string(index=False)))
+        logger.warning("{} alignments have extreme tlen sizes:\n{}".format(df.loc[extreme_tlen_size, :].shape[0],
+                                                                         df.loc[extreme_tlen_size, "qname"].drop_duplicates().tolist()))
         df = df.loc[~extreme_tlen_size, :]
     
     # Drop the singleton reads
     group_counts = df.groupby('qname')['qname'].transform('count')
     df = df.loc[group_counts == 2, :]
     
-    logger.info("After filtering, {} alignments remained.".format(df.shape[0]))
+    logger.info("{} alignments remained after filtering.".format(df.shape[0]))
     
     sorted_df = df.sort_values("qname")
     chunks = split_dataframe(sorted_df, threads)
@@ -161,8 +162,13 @@ def calculate_tlen_per_pair(xa1, xa2):
 
 def process_per_pair_return_tuple(group_df, avg_frag_size = 400, std_frag_size = 100, err_rate = 0.05):
 
-    assert len(group_df.loc[:, "qname"].drop_duplicates().values) == 1, f"Identified read pairs with different query names: \n{group_df.to_string()}\n"
-    assert len(group_df) == 2, "This error should not be triggered. Previous qname filters are defective. "
+    if len(group_df.loc[:, "qname"].drop_duplicates().values) > 1:
+        logger.error(f"Identified read pairs with different query names: \n{group_df.to_string()}\n")
+        sys.exit(1)
+    
+    if len(group_df) > 2:
+        logger.critical("This error should not be triggered. Previous qname filters are defective. ")
+        sys.exit(1)
 
     if (group_df.loc[:, "XA"].str.len() > 0).sum() < 2:
         return None
