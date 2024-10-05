@@ -1,10 +1,11 @@
 import gc
+import os
 import logging
 from multiprocessing import Pool
 import pandas as pd
 
 import networkx as nx
-import graph_tool.all
+import graph_tool.all as gt
 from intervaltree import Interval, IntervalTree
 from pybedtools import BedTool
 
@@ -75,11 +76,16 @@ def create_multiplex_graph(sd_data, graph_filepath=None,
                             std_frag_size = 120,
                             resolution = .1,
                             threads = 10, 
-                            target_bed = "",
-                            base_dir = ""):
-    
-    # sd_data is the binary sd map of genomic intervals
-    # Input the sd_data to networkx Graph object
+                            target_bed = ""):
+    '''
+    Inputs:
+    sd_data: refined and filtered SD map from previous steps (pd.DataFrame)
+    graph_filepath: output graph path (str)
+
+    Returns:
+    merged_directed_graph: NetworkX DiGraph with SD edges and PO edges
+    '''
+
     G = nx.Graph()
     all_chrs = set(sd_data["chr_1"]).union(set(sd_data["chr_2"]))
     
@@ -87,21 +93,19 @@ def create_multiplex_graph(sd_data, graph_filepath=None,
         target_chrs = pd.read_table(target_bed, header=None).iloc[:, 0].drop_duplicates().tolist()
         all_chrs = [c for c in all_chrs if c in target_chrs]
 
-    logger.info(f"The input sd_data dataframe looks like: \n{sd_data[:10].to_string(index=False)}\n")
     # adding edges between nodes in the same line
     # The below for loop not just build up a Graph composed of intervals sharing sequence similarity with each other
     # but also builds up an interval tree for each chromosome using the same intervals
     sd_data_by_chr = {chr_id: sd_data.loc[(sd_data["chr_1"]==chr_id) | (sd_data["chr_2"]==chr_id), sd_data.columns.tolist()[:8]] for chr_id in all_chrs}
-    for i in range(0, len(sd_data)):
-        row = sd_data.iloc[i, :]
+    for _, row in sd_data.iterrows():
         # First adding the binary pairwise SDs to the graph
         G.add_edge((row["chr_1"], row["start_1"], row["end_1"], row["strand1"]),
                    (row["chr_2"], row["start_2"], row["end_2"], row["strand2"]),
                     type = "segmental_duplication", weight=float(row["mismatch_rate"]))
-    logger.info(f"How many nodes in the graph: {G.number_of_nodes()} How many edges are SD edges: {G.number_of_edges()} ")
+    logger.debug(f"Constructed the initial graph with {G.number_of_nodes()} nodes and {G.number_of_edges()} SD edges.")
     
     with Pool(threads) as pool:
-        # Compose overlap graph within each chromsome
+        # Compose overlap graph within each chromosome
         partitions_by_chr = dict(pool.imap_unordered(compose_multiplex_graph_per_chr, 
                                                     ((chr_id, sd_data_by_chr[chr_id], overlap_frac_min, avg_frag_size, std_frag_size, resolution, graph_filepath) for chr_id in all_chrs)))
 
@@ -161,9 +165,17 @@ def create_multiplex_graph(sd_data, graph_filepath=None,
         
     return merged_directed_graph
 
+def summary_exon_overlap(groupdf):
+    # For directed graph
+    # This function is to summarize the exon overlap information for each node in the directed graph
+    groupdf["FC_overlap"] = groupdf["symbol"].astype(str) + ":" + groupdf["tranxID"].astype(str) + ":" + groupdf["exon_No"].astype(str) + ":" +     groupdf["strand"].astype(str) + ":" + groupdf["overlap_len"].astype(str) +        "bases"
+    summarized_overlap = ",".join(groupdf["FC_overlap"].drop_duplicates().tolist())
+    groupdf["FC_overlap"] = summarized_overlap
+    return groupdf.loc[:, ["chr_graph", "start_graph", "end_graph", "graph_strand", "FC_overlap"]].drop_duplicates()
+
 def read_graphml(graph_path):
     literal_graph = nx.read_graphml(graph_path)
-    # We need to convert the string back to tuple
+
     graph = literal_graph.__class__()
     for node, data in literal_graph.nodes(data=True):
         graph.add_node(string_to_tuple(node), **data)
