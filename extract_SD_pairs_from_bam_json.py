@@ -55,7 +55,7 @@ def extract_sd_coordinates_from_json(bam_json, avg_frag_size=400, std_frag_size=
     null_fragment_interval = df["end_pos"].astype(int) <= df["pos"].astype(int)
     if df.loc[null_fragment_interval, :].shape[0] > 0:
         logger.warning("{} alignments have END larger than START (indicated by TLEN), possibly null genomic intervals:\n{}".format(df.loc[null_fragment_interval, :].shape[0],
-                                                                                                                                   df.loc[null_fragment_interval, :].to_string(index=False)))
+                                                                                                                                   df.loc[null_fragment_interval, "qname"].to_string(index=False)))
     df = df.loc[~null_fragment_interval, :]
     df.loc[:, "ref_cov_span"] = df.loc[:, "rname"] + ":" + df.loc[:, "pos"].astype(str) + "-" + df.loc[:, "end_pos"].astype(str)
     
