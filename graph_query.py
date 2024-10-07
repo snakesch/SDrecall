@@ -8,9 +8,94 @@ import sys
 import logging
 from itertools import repeat
 
+from graph_traversal import traverse_network_to_get_homology_counterparts
 from homoseq_region import HOMOSEQ_REGION
 
 logger = logging.getLogger('SDrecall')
+
+def convert_networkx_to_graphtool(nx_graph):
+    # Create a new graph-tool graph
+    gt_graph = gt.Graph(directed=nx_graph.is_directed())
+
+    # Create a mapping between node objects and their indices
+    node_mapping = {node: i for i, node in enumerate(nx_graph.nodes())}
+
+    # Add nodes to the graph-tool graph
+    gt_graph.add_vertex(n=nx_graph.number_of_nodes())
+
+    # Create a vertex property map to store the original node objects
+    vprop_node_index = gt_graph.new_vertex_property("object")
+    for node, index in node_mapping.items():
+        vprop_node_index[gt_graph.vertex(index)] = node
+
+    # Determine node attribute categories and data types
+    node_attrs = set()
+    for _, data in nx_graph.nodes(data=True):
+        node_attrs.update(data.keys())
+
+    vprop = {}
+    for attr in node_attrs:
+        attr_types = set(type(data[attr]) for _, data in nx_graph.nodes(data=True) if attr in data)
+        if len(attr_types) == 1:
+            attr_type = next(iter(attr_types))
+            if attr_type == int:
+                vprop[attr] = gt_graph.new_vertex_property("int")
+            elif attr_type == float:
+                vprop[attr] = gt_graph.new_vertex_property("double")
+            elif attr_type == str:
+                vprop[attr] = gt_graph.new_vertex_property("string")
+            elif attr_type == bool:
+                vprop[attr] = gt_graph.new_vertex_property("bool")
+            else:
+                vprop[attr] = gt_graph.new_vertex_property("object")
+        else:
+            vprop[attr] = gt_graph.new_vertex_property("object")
+
+    # Set node attributes
+    for v, data in nx_graph.nodes(data=True):
+        gt_v = gt_graph.vertex(node_mapping[v])
+        for attr, value in data.items():
+            vprop[attr][gt_v] = value
+
+    # Determine edge attribute categories and data types
+    edge_attrs = set()
+    for _, _, data in nx_graph.edges(data=True):
+        edge_attrs.update(data.keys())
+
+    eprop = {}
+    for attr in edge_attrs:
+        attr_types = set(type(data[attr]) for _, _, data in nx_graph.edges(data=True) if attr in data)
+        if len(attr_types) == 1:
+            attr_type = next(iter(attr_types))
+            if attr_type == int:
+                eprop[attr] = gt_graph.new_edge_property("int")
+            elif attr_type == float:
+                eprop[attr] = gt_graph.new_edge_property("double")
+            elif attr_type == str:
+                eprop[attr] = gt_graph.new_edge_property("string")
+            elif attr_type == bool:
+                eprop[attr] = gt_graph.new_edge_property("bool")
+            else:
+                eprop[attr] = gt_graph.new_edge_property("object")
+        else:
+            eprop[attr] = gt_graph.new_edge_property("object")
+
+    # Set edge attributes
+    for u, v, data in nx_graph.edges(data=True):
+        gt_u = gt_graph.vertex(node_mapping[u])
+        gt_v = gt_graph.vertex(node_mapping[v])
+        e = gt_graph.add_edge(gt_u, gt_v)
+        for attr, value in data.items():
+            eprop[attr][e] = value
+
+    # Assign vertex and edge property maps to the graph-tool graph
+    gt_graph.vertex_properties["node_index"] = vprop_node_index
+    for attr, prop in vprop.items():
+        gt_graph.vertex_properties[attr] = prop
+    for attr, prop in eprop.items():
+        gt_graph.edge_properties[attr] = prop
+
+    return gt_graph
 
 def sort_query_nodes(query_nodes, graph):
     """
@@ -32,30 +117,26 @@ def sort_query_nodes(query_nodes, graph):
     sorted_query_nodes = sorted(query_nodes, key=lambda x: node_info[x], reverse=True)
     return sorted_query_nodes
 
-def extract_FC_NFC_pairs_from_graph(query_nodes, 
+def imap_traverse(tup_args):
+    return traverse_network_to_get_homology_counterparts(*tup_args)
+
+def extract_SD_paralog_pairs_from_graph(query_nodes, 
                                     directed_graph, 
                                     graph_path = "", 
                                     avg_frag_size = 500, 
                                     std_frag_size = 150, 
                                     threads = 12,
                                     logger = logger):
-    # First we need to annotate the graph about which nodes are query_nodes
-    # query nodes are dataframe with chr, start, end ,three columns
+    # query_nodes: pd.DataFrame (columns = chr, start, end, strand)
     query_nodes = list(zip(query_nodes["chr"], query_nodes["start"], query_nodes["end"], query_nodes["strand"]))
-    logger.info(f"How many query nodes we have ? {len(query_nodes)}, stored as a list of {type(query_nodes[0])}")
-    logger.info(f"We got a graph with {len(directed_graph.nodes())} nodes and {len(directed_graph.edges())} edges")
+    logger.info(f"Input graph has {len(directed_graph.nodes())} nodes and {len(directed_graph.edges())} edges")
     
     for node in directed_graph.nodes():
-        if node in query_nodes:
-            directed_graph.nodes[node]["query_node"] = True
-            if len(directed_graph.nodes[node].get("FC_overlap", "")) <= 1:
-                logger.warning(f"The query node {node} has not been annotated to overlap with FC region, but why it is recorded as an query_node region")
-        else:
-            directed_graph.nodes[node]["query_node"] = False
-    logger.info("Now we have marked the query nodes in the graph")
+        directed_graph.nodes[node]["query_node"] = bool(node in query_nodes)
+    logger.debug("Query nodes tagged")
 
     unfiltered_graph = directed_graph.copy()
-    # Then we need to filter out nodes that are too small
+    # Filter out small SDs
     cutoff = max(140, avg_frag_size - 1 * std_frag_size)
     tobe_removed_nodes = []
     for node in directed_graph.nodes(data=True):
@@ -66,13 +147,12 @@ def extract_FC_NFC_pairs_from_graph(query_nodes,
             tobe_removed_nodes.append(node[0])
     tobe_removed_nodes = list(dict.fromkeys(tobe_removed_nodes))
     directed_graph.remove_nodes_from(tobe_removed_nodes)
-    logger.info("Now we have removed nodes that are too small, the graph now has {} nodes and {} edges".format(len(directed_graph.nodes()), len(directed_graph.edges())))
+    logger.info("After removing small target SDs, the graph now has {} nodes and {} edges".format(len(directed_graph.nodes()), len(directed_graph.edges())))
     
-    # Then we filter out the edges that the overlap size is too small
+    # Remove PO edges with minimal overlap
     tobe_removed_edges = []
     for edge in directed_graph.edges(data=True):
-        overlap = edge[2].get("overlap", False)
-        if overlap:
+        if edge[2].get("overlap", False):
             smaller_node = edge[1]
             smaller_node_size = smaller_node[2] - smaller_node[1]
             weight = float(edge[2]["weight"])
@@ -80,11 +160,11 @@ def extract_FC_NFC_pairs_from_graph(query_nodes,
             if overlap_size < cutoff and 1/weight < 0.5:
                 tobe_removed_edges.append(edge[:2])
         if edge[0] == edge[1]:
-            # Remove self loop edges
+            # Remove self-to-self edges
             tobe_removed_edges.append(edge[:2])
     tobe_removed_edges = list(dict.fromkeys(tobe_removed_edges))
     directed_graph.remove_edges_from(tobe_removed_edges)  # This directed_graph also needs to be returned for further saving as a file
-    logger.info("Now we have removed edges that implies an overlap with a size too small, the graph now has {} nodes and {} edges".format(len(directed_graph.nodes()), len(directed_graph.edges())))
+    logger.info("After removing edges with minimal overlap, the graph now has {} nodes and {} edges".format(len(directed_graph.nodes()), len(directed_graph.edges())))
     
     """
     Then we can handle the BFS search to another function and perform this on each query node in parallel
@@ -96,10 +176,10 @@ def extract_FC_NFC_pairs_from_graph(query_nodes,
     gt_graph = convert_networkx_to_graphtool(undirected_graph)
     sorted_query_nodes = sort_query_nodes(query_nodes, undirected_graph)
     
-    # Identify the subgraphs each query_node is in
+    # Identify all subgraphs associated with each query_node
     prop_map = gt_graph.vertex_properties["node_index"]
     node_to_vertex = {prop_map[v]: v for v in gt_graph.vertices()}
-    components, hist = gt.label_components(gt_graph, directed = False) # Only use the returned components as a VertexPropertyMap object (mapping from vertices to properties, here the property is the label of the components)
+    components, _ = gt.label_components(gt_graph, directed = False) # Only use the returned components as a VertexPropertyMap object (mapping from vertices to properties, here the property is the label of the components)
     qnode_vertices = [node_to_vertex[qnode] for qnode in sorted_query_nodes]
     qnode_components = [gt.GraphView(gt_graph, directed = False, vfilt = lambda v: components[v] == components[vertex]) for vertex in qnode_vertices ]
     gt.openmp_set_num_threads(threads)
@@ -111,67 +191,64 @@ def extract_FC_NFC_pairs_from_graph(query_nodes,
                                               repeat(tuple([int(v) for v in qnode_vertices])),
                                               repeat(avg_frag_size), 
                                               repeat(std_frag_size)))
-        # Now we need to identify the FC-NFC pairs and annotate them on the directed graph
+
+        # Identify the paralogous regions (counterparts) associated with each SD (qnode) and annotate them on the directed graph
         i = 0
         filtered_results = set([])
         connected_qnodes_graph = nx.Graph()
         for success, tup, logs in hom_results:
-            print(f"\n\n*********************************** {i}_subprocess_start_for_traverse_network ***************************************", file = sys.stderr)
+            logger.debug(f"\n\n*********************************** {i}_subprocess_start_for_traverse_network ***************************************")
             if not success:
                 error_mes, tb_str = tup
                 logger.error(f"An error occurred: {error_mes}\nTraceback: {tb_str}\n")
+                sys.exit(1)
             else:
                 if len(tup) == 0:
-                    logger.warning(f"No FC-NFC pairs are found for query node {tup[0]}, so we will skip this query node")
-                    print(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************\n\n", file = sys.stderr)
+                    logger.debug(f"No SD-paralog pairs are found for query node {tup[0]}, so we will skip this query node")
+                    logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************\n\n")
                     i+=1
                     continue
                 filtered_results.add(tup[:2])
                 qnode, counterparts_nodes, query_counter_nodes = tup
-                # Add edges between qnode and its query counterparts in the connected qnodes graph
+                # Add edges between qnode and its counterparts in the connected qnodes graph
                 connected_qnodes_graph.add_node(qnode)
                 for cnode in query_counter_nodes:
-                    # Note cnode here is HOMOSEQ_REGION object
+                    # cnode: HOMOSEQ_REGION object
                     connected_qnodes_graph.add_edge(qnode, cnode.data)
-                # Here the tuple should contain (tuple_node, [list of nodes in self-defined class HOMOSEQ_REG])
+                # qnode: tuple = (tuple_node, [list of nodes in self-defined class HOMOSEQ_REG])
                 assert isinstance(qnode, tuple)
                 try:
                     assert isinstance(counterparts_nodes[0], HOMOSEQ_REGION)
                 except IndexError:
-                    # There is one interval (chrX, 70902050, 71018311) in the WGAC database, that it only corresponds with itself, so it will be filtered out
-                    logger.warning(f"No counterparts nodes are found for query node {qnode}, so we will skip this query node")
-                    print(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************\n\n", file = sys.stderr)
+                    # WGAC contains one interval (chrX, 70902050, 71018311) which only corresponds with itself, and is thus filtered out
+                    logger.debug(f"No counterparts nodes are found for query node {qnode}, skipping current query node")
+                    logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************\n\n")
                     i+=1
                     continue
                 
-                # First we need to annotate the query node
+                # First annotate the query node
                 unfiltered_graph.nodes[qnode]["FRA_dest"] = str(i)
-                # Then we need to annotate the counterparts nodes
+                # Then annotate the counterparts nodes
                 for cnode in counterparts_nodes:
                     unfiltered_graph.nodes[cnode.data]["FRA_source"] = (unfiltered_graph.nodes[cnode.data].get("FRA_source", "") + "," + str(i)).lstrip(",")
-            print(logs, file = sys.stderr)
-            print(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************\n\n", file = sys.stderr)
+            logger.debug(logs)
+            logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************\n\n")
             i+=1
    
-    # After the annotation with the FC-NFC pairs in the graph, we need to save it to a graphml file
+    # Save the annotated graph to a graphml file
     if graph_path:
         nx.write_graphml(unfiltered_graph, graph_path)
-    # Now we need to identify the qnodes that are in the same components in the new raph connected_qnodes_graph
+    # Identify the qnodes that are in the same graph component in the new connected_qnodes_graph
     qnode_components = list(nx.connected_components(connected_qnodes_graph))
     # The qnode components should be like this:
     # [ [(chr,start,end,strand), (), ..., ()],
     #   [], 
     #   [], ... ,]
-    logger.info(f"The connected qnodes graph has {len(qnode_components)} subgraphs. One component has {len(qnode_components[0])} nodes look like this :\n{qnode_components[0]}\n")
+    logger.debug(f"The connected qnode graph has {len(qnode_components)} subgraphs. One component has {len(qnode_components[0])} nodes:\n{qnode_components[0]}")
     return filtered_results, qnode_components
 
 def query_connected_nodes(fc_nfc_list, 
-                          connected_qnode_components,
-                          multiplex_graph = nx.Graph(), 
-                          threads = 12, 
-                          avg_frag_size = 500, 
-                          std_frag_size = 150, 
-                          graph_path = ""):
+                          connected_qnode_components):
     """
     Input fc_nfc_list: list of tuples (fc_node, nfc_nodes)
     Each tuple contains:
@@ -188,15 +265,12 @@ def query_connected_nodes(fc_nfc_list,
         from itertools import zip_longest
 
         # Each group in the groups is a list of tuples. Each tuple represents a query node
-        transposed = list(itertools.zip_longest(*groups))
-        # remove None values from each sublist (which are fill values for exhausted groups)
+        transposed = list(zip_longest(*groups))
+        # remove dummy None values from each sublist
         result = list(dict.fromkeys([tuple([ e for e in sublist if e not in [np.nan, None]]) for sublist in transposed]))
         return result
 
     fc_nfc_dict = { n:ns for n, ns in fc_nfc_list }
-    # We also need to build a dict that records which FC node each NFC node maps to
-    fc_nodes = [ n for n, ns in fc_nfc_list]
-    nfc_nodes = [ nfc for n, ns in fc_nfc_list for nfc in ns ]
     
     # The the FC nodes that can be put into the same masked genome
     component_delimited_fcnodes = pick_from_each_group(connected_qnode_components)
@@ -217,5 +291,5 @@ def query_connected_nodes(fc_nfc_list,
             continue
         grouped_results.append(grouped_result)
         
-    logger.info(f"There are {len(grouped_results) + 1} FC-NFC pairs for the preparation of realignment bed file\n\n")
+    logger.info(f"There are {len(grouped_results) + 1} SD-paralog pairs for the preparation of realignment bed file\n\n")
     return grouped_results, fc_nfc_dict
