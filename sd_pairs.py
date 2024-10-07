@@ -3,7 +3,7 @@ import logging
 logger = logging.getLogger("SDrecall")
 
 '''
-Two SD pairs are termed umbrella pairs if the pairs overlap > 90%
+A pair of SD is considered an umbrella pair if it completely encloses another pair of SDs.
 '''
 
 def calculate_interval_overlaps(interval1, interval2, fraction_select = None):
