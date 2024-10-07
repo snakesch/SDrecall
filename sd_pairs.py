@@ -1,6 +1,10 @@
-import pandas as pd
+import pandas
 import logging
 logger = logging.getLogger("SDrecall")
+
+'''
+Two SD pairs are termed umbrella pairs if the pairs overlap > 90%
+'''
 
 def calculate_interval_overlaps(interval1, interval2, fraction_select = None):
     overlap_span = min(interval1[1], interval2[1]) - max(interval1[0], interval2[0])
@@ -22,6 +26,7 @@ def is_same_pair(row, pair,
     Args:
         row (pandas.Series): Row from the dataframe.
         pair (tuple): Pair represented as (chrA, startA, endA, strandA, chrB, startB, endB, strandB).
+        chr*, start*, end*, strand*: Column names.
 
     Returns:
         bool: True if the row represents the same pair, False otherwise.

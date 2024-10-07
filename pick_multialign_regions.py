@@ -68,12 +68,14 @@ def calculate_inferred_coverage(bam_file,
     if not target_region:
         target_tag = None
 
+    output_prefix = os.path.join(os.path.dirname(output_bed), os.path.basename(bam_file).replace(".bam", ""))
+
     if len(filter_tags) > 0:
-        output_tsv = bam_file.replace(".bam", f".infercov.minMQ_{min_mapq}.{','.join(filter_tags)}.tsv")
+        output_tsv = output_prefix + f".infercov.minMQ_{min_mapq}.{','.join(filter_tags)}.tsv"
     else:
-        output_tsv = bam_file.replace(".bam", f".infercov.minMQ_{min_mapq}.tsv")
+        output_tsv = output_prefix + f".infercov.minMQ_{min_mapq}.tsv"
     if target_tag:
-        output_tsv = output_tsv.replace(".tsv", f".{target_tag}.tsv")
+        output_tsv = output_prefix + f".{target_tag}.tsv"
 
     output_bed = output_tsv.replace(".tsv", ".bed")
     tmp_output_bed = output_bed.replace(".bed", f".{uuid.uuid4()}.bed")
@@ -88,7 +90,6 @@ def calculate_inferred_coverage(bam_file,
 
         with pysam.AlignmentFile(bam_file, "rb") as bam:
             with open(tmp_output_bed, "w") as ob:
-                bam_iters = []
                 if bed_obj:
                     for interval in bed_obj:
                         bam_iter = bam.fetch(interval.chrom, interval.start, interval.end)
