@@ -50,7 +50,7 @@ def inspect_cnode_along_route(graph,
             
             if qnode_overlap_size <= max(avg_frag_size - std_frag_size, 140):
                 # 0.4 quantile in insert size distribution
-                logger.warning(f"The overlapping region for (cnode is {cnode}) query node {qnode}, ({qnode.chrom}:{qnode.start + qnode_overlap_start}-{qnode.start + qnode_overlap_end}) is too small, the traverse route ends here: {list(qnode.traverse_route) + [(qnode, 'overlap')]}")
+                logger.debug(f"The overlapping region for (cnode is {cnode}) query node {qnode}, ({qnode.chrom}:{qnode.start + qnode_overlap_start}-{qnode.start + qnode_overlap_end}) is too small, the traverse route ends here: {list(qnode.traverse_route) + [(qnode, 'overlap')]}")
                 return None
             else:
                 qnode_overlap_abs_start = qnode.start + qnode_overlap_start
@@ -63,12 +63,12 @@ def inspect_cnode_along_route(graph,
                 cnode.rela_end = cnode_rela_end
 
                 if cnode_rela_end - cnode_rela_start <= max(avg_frag_size - std_frag_size, 140):
-                    logger.warning(f"The remaining segment corresponding to the original qnode in cnode {cnode} is too small. Abandon this thread here")
+                    logger.debug(f"The cnode segment ({cnode}) is too small. Skipping ... ")
                     return None
                     
                 cnode.traverse_route = tuple(list(qnode.traverse_route) + [(qnode, "overlap")])
 
-        logger.info(f"The traverse route for {cnode} at the other end of {i}th edge is {cnode.traverse_route}")
+        logger.debug(f"The traverse route for {cnode} at the other end of {i}th edge is {cnode.traverse_route}")
         qnode = cnode
     return cnode
 
@@ -81,7 +81,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
                                           std_frag_size = 150,
                                           logger = logger):
     '''
-    Input ori_qnode should be a HOMOSEQ_REGION object
+    ori_qnode: HOMOSEQ_REGION object
     subgraph is a GraphView object containing only one subgraph connected by overlap edges
     '''
     from functools import reduce
@@ -103,16 +103,16 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
                                                                     target=v,
                                                                     weights=graph.ep["weight"])
 
-        # If the last edge is overlap then skip this path
+        # Skip the current path if the last edge is a PO edge
         if graph.ep["overlap"][shortest_path_edges[-1]] == "True":
             continue
-        # If there are two consecutive(adjacent) overlap edges then skip this path
+        # Skip the current path in case of adjacent PO edges
         if len([i for i in range(0, len(shortest_path_edges) - 1) if graph.ep["overlap"][shortest_path_edges[i]] == "True" and graph.ep["overlap"][shortest_path_edges[i+1]] == "True"]) > 1:
             continue
         if reduce(mul, [1 - graph.ep["weight"][e] for e in shortest_path_edges if graph.ep["type"][e] == "segmental_duplication"]) < 0.6:
             continue
         
-        # If the last edge is segmental duplication, theen we ned to test whether the corresponding region is big enough
+        # If the last edge is segmental duplication, then check if the region is considerably large
         cnode = inspect_cnode_along_route(graph, 
                                           shortest_path_verts, 
                                           shortest_path_edges, 
@@ -120,14 +120,14 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
                                           std_frag_size, 
                                           logger = logger)
         if cnode:
-            logger.info(f"Found a new counterparts node {cnode} for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes. The traverse route is {cnode.traverse_route} \n")
+            logger.debug(f"Found a new counterparts node {cnode} for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes. The traversal route is {cnode.traverse_route}")
             counter_nodes.append(cnode)
 
     if len(counter_nodes) == 0:
-        logger.warning(f"No counterparts nodes are found for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes, (one of the node is {HOMOSEQ_REGION(shortest_path_verts[-1], graph)}).\n")
+        logger.debug(f"No cnodes found for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes, (one of the node is {HOMOSEQ_REGION(shortest_path_verts[-1], graph)}).")
         return [], []
     else:
-        logger.info(f"Found {len(counter_nodes)} new counterparts nodes for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes, (one of the node is {HOMOSEQ_REGION(shortest_path_verts[-1], graph)}).\n")
+        logger.debug(f"Found {len(counter_nodes)} new cnodes for qnode {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes, (one of the node is {HOMOSEQ_REGION(shortest_path_verts[-1], graph)})")
         return counter_nodes, [c for c in counter_nodes if c.vertex in all_qnode_vertices]
 
 @log_command
@@ -171,11 +171,13 @@ def traverse_network_to_get_homology_counterparts(qnode,
         total_query_counter_nodes += query_counter_nodes
     
     if len(counterparts_nodes) == 0:
-        logger.warning(f"This query node {qnode} cannot identify any region in the graph that shares homologous sequences\n\n")
+        logger.warning(f"Query node {qnode} is not associated with any cnodes.")
     else:
-        assert all([type(cnode) == HOMOSEQ_REGION for cnode in counterparts_nodes]), "The counterparts nodes are not of type HOMOSEQ_REGION"
+        if not all([type(cnode) == HOMOSEQ_REGION for cnode in counterparts_nodes]):
+            logger.critical("cnodes are not of type HOMOSEQ_REGION")
+            sys.exit(2)
         counter_bed_str = "\n".join([str(cnode) for cnode in counterparts_nodes])
         precise_counter_bed_str = "\n".join(["\t".join([str(field) for field in cnode]) for cnode in counterparts_nodes])
-        logger.info(f"This query node {qnode} has {len(counterparts_nodes)} counterparts nodes that share homologous sequences and they are:\n{counter_bed_str}\nThe precise counterpart bed coordinates are:\n{precise_counter_bed_str}\n\n")
+        logger.debug(f"This query node {qnode} has {len(counterparts_nodes)} counterpart nodes:\n{counter_bed_str}\nPrecise counterpart bed coordinates are:\n{precise_counter_bed_str}\n\n")
 
     return (qnode.data, tuple(counterparts_nodes), tuple(total_query_counter_nodes))  

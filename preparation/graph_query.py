@@ -127,6 +127,11 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                                     std_frag_size = 150, 
                                     threads = 12,
                                     logger = logger):
+    '''
+    Returns:
+    sd_paralog_pairs: dict = {(qnode): (cnode1, cnode2, ...), ...}
+    qnode_components: List[List[node]]
+    '''
     # query_nodes: pd.DataFrame (columns = chr, start, end, strand)
     query_nodes = list(zip(query_nodes["chr"], query_nodes["start"], query_nodes["end"], query_nodes["strand"]))
     logger.info(f"Input graph has {len(directed_graph.nodes())} nodes and {len(directed_graph.edges())} edges")
@@ -194,7 +199,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
 
         # Identify the paralogous regions (counterparts) associated with each SD (qnode) and annotate them on the directed graph
         i = 0
-        filtered_results = set([])
+        sd_paralog_pairs = {}
         connected_qnodes_graph = nx.Graph()
         for success, tup, logs in hom_results:
             logger.debug(f"*********************************** {i}_subprocess_start_for_traverse_network ***************************************")
@@ -208,7 +213,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                     logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************")
                     i+=1
                     continue
-                filtered_results.add(tup[:2])
+                sd_paralog_pairs[tup[0]] = tup[1]
                 qnode, counterparts_nodes, query_counter_nodes = tup
                 # Add edges between qnode and its counterparts in the connected qnodes graph
                 connected_qnodes_graph.add_node(qnode)
@@ -217,20 +222,19 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                     connected_qnodes_graph.add_edge(qnode, cnode.data)
                 # qnode: tuple = (tuple_node, [list of nodes in self-defined class HOMOSEQ_REG])
                 assert isinstance(qnode, tuple)
-                try:
-                    assert isinstance(counterparts_nodes[0], HOMOSEQ_REGION)
-                except IndexError:
+                
+                if len(counterparts_nodes) == 0:
                     # WGAC contains one interval (chrX, 70902050, 71018311) which only corresponds with itself, and is thus filtered out
                     logger.debug(f"No counterparts nodes are found for query node {qnode}, skipping current query node")
                     logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************")
                     i+=1
                     continue
                 
-                # First annotate the query node
-                unfiltered_graph.nodes[qnode]["FRA_dest"] = str(i)
-                # Then annotate the counterparts nodes
-                for cnode in counterparts_nodes:
-                    unfiltered_graph.nodes[cnode.data]["FRA_source"] = (unfiltered_graph.nodes[cnode.data].get("FRA_source", "") + "," + str(i)).lstrip(",")
+                # # First annotate the query node
+                # unfiltered_graph.nodes[qnode]["FRA_dest"] = str(i)
+                # # Then annotate the counterparts nodes
+                # for cnode in counterparts_nodes:
+                #     unfiltered_graph.nodes[cnode.data]["FRA_source"] = (unfiltered_graph.nodes[cnode.data].get("FRA_source", "") + "," + str(i)).lstrip(",")
             logger.debug(logs)
             logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************")
             i+=1
@@ -240,57 +244,46 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
         nx.write_graphml(unfiltered_graph, graph_path)
     # Identify the qnodes that are in the same graph component in the new connected_qnodes_graph
     qnode_components = list(nx.connected_components(connected_qnodes_graph))
-    # The qnode components should be like this:
-    # [ [(chr,start,end,strand), (), ..., ()],
-    #   [], 
-    #   [], ... ,]
+    
     logger.debug(f"The connected qnode graph has {len(qnode_components)} subgraphs. One component has {len(qnode_components[0])} nodes:\n{qnode_components[0]}")
-    return filtered_results, qnode_components
 
-def query_connected_nodes(sd_paralog_list, 
+    return sd_paralog_pairs, qnode_components
+
+def query_connected_nodes(sd_paralog_pairs, 
                           connected_qnode_components):
     """
-    Input fc_nfc_list: list of tuples (fc_node, nfc_nodes)
-    Each tuple contains:
-        fc_node: (chr, start, end, strand)
-        nfc_nodes: list of HOMOSEQ_REGION objects
-    Note that an FC node can also be an NFC node.
+    Inputs:
+    sd_paralog_pairs: dict = {(qnode): (cnode1, cnode2, ...), ...}
+    qnode_components: List[List[node]]
+
+    Note: A query node can also be a cnode of another qnode.
     """
 
-    def pick_from_each_group(groups):
+    def pick_from_each_group(qnode_groups):
         '''
-        Input groups should be a list of list
+        Identify non-homologous groups of qnodes for building masked genomes
         '''
-        import numpy as np
         from itertools import zip_longest
 
-        # Each group in the groups is a list of tuples. Each tuple represents a query node
-        transposed = list(zip_longest(*groups))
-        # remove dummy None values from each sublist
-        result = list(dict.fromkeys([tuple([ e for e in sublist if e not in [np.nan, None]]) for sublist in transposed]))
-        return result
-    
-    print(sd_paralog_list)
-    sd_paralog_pairs = { n:ns for n, ns in sd_paralog_list }
-    
-    # The the FC nodes that can be put into the same masked genome
-    component_delimited_fcnodes = pick_from_each_group(connected_qnode_components)
-    logger.info("Here are the {} groups of FC nodes that can be put into the same masked genome: \n{}\n".format(len(component_delimited_fcnodes),
-                                                                                                                "\n".join(str(g) for g in component_delimited_fcnodes)))
-    final_fcnode_groups = component_delimited_fcnodes
+        unique_qnodes = list(zip_longest(*qnode_groups, fillvalue=None))
+        unique_qnodes = list(dict.fromkeys([tuple([ e for e in sublist if e is not None]) for sublist in unique_qnodes]))
+        return unique_qnodes
+      
+    # Identify qnodes that can be put into the same masked genome
+    unique_qnodes = pick_from_each_group(connected_qnode_components)
+    logger.info("{} groups of qnodes can be put into the same masked genome: {}".format(len(unique_qnodes), "\n".join(str(g) for g in unique_qnodes)))
     
     grouped_results = []
-    for group in final_fcnode_groups:
-        sd_counterparts = [nfc_node for fcnode in group for nfc_node in sd_paralog_pairs[fcnode]]
+    for group in unique_qnodes:
+        sd_counterparts = [cnode for qnode in group for cnode in sd_paralog_pairs[qnode]]
         assert isinstance(sd_counterparts[0], HOMOSEQ_REGION)
-        grouped_result = { "PCs":[ n for n in group ], "SD_counterparts": sd_counterparts }
+        grouped_result = { "PCs": group, "SD_counterparts": sd_counterparts }
         if len(group) == 0:
-            logger.warning(f"There is an empty group in the component_delimited_fcnodes, please check the component_delimited_fc_nodes: \n{component_delimited_fcnodes}\n\n")
-            continue
-        if len(sd_counterparts) == 0:
-            logger.warning(f"There is an empty set of SD counterparts in the connected_result, please check the input sd_paralog_pairs: \n{sd_paralog_pairs}\nAnd the fc nodes group: \n{group}\n\n")
-            continue
-        grouped_results.append(grouped_result)
-        
-    logger.info(f"There are {len(grouped_results) + 1} SD-paralog pairs for the preparation of realignment bed file\n\n")
-    return grouped_results, sd_paralog_pairs
+            logger.warning(f"Empty group in the unique_qnodes: {unique_qnodes}")
+        elif len(sd_counterparts) == 0:
+            logger.warning(f"No SD counterparts in group {group}. Please check sd_paralog_pairs: {sd_paralog_pairs}.")
+        else:
+            grouped_results.append(grouped_result)
+
+    logger.info(f"Total {len(grouped_results) + 1} SD-paralog pairs for the preparation of realignment bed file")
+    return grouped_results

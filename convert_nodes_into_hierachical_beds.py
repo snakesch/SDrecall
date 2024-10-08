@@ -5,12 +5,17 @@ import sys
 from itertools import repeat
 from multiprocessing import Pool
 import logging
+
+from build_regions_from_PC_clusters import establish_beds_per_PC_cluster
 from utils import executeCmd
 
 logger = logging.getLogger("SDrecall")
 
-def convert_nodes_into_hierachical_beds(all_results: list,
-                                        fc_nfc_dict: dict,
+def imap_establish(tup_args):
+    return establish_beds_per_PC_cluster(*tup_args)
+
+def convert_nodes_into_hierachical_beds(grouped_qnode_cnodes: list,
+                                        sd_paralog_pairs: dict,
                                         output_folder,
                                         ref_genome,
                                         target_region_bed = "",
@@ -26,19 +31,23 @@ def convert_nodes_into_hierachical_beds(all_results: list,
     import re
     
     logger.info("Start to put beds into the rest of PC-counterparts paired beds into subfolders")
-    # We kind of need to restructure the all_results to pass the information of fc-nfc pairs to the establish_beds_per_PC_cluster function
+    # We kind of need to restructure the grouped_qnode_cnodes to pass the information of fc-nfc pairs to the establish_beds_per_PC_cluster function
     new_results = []
-    for result in all_results:
+    
+    for result in grouped_qnode_cnodes:
+        print(result)
         new_result = {"PCs": {}, "SD_counterparts": {}}
         for i in range(0, len(result["PCs"])):
             fc_node = result["PCs"][i]
             new_result['PCs'][i] = [fc_node]
-            new_result['SD_counterparts'][i] = fc_nfc_dict[fc_node]
+            new_result['SD_counterparts'][i] = sd_paralog_pairs[fc_node]
         new_results.append(new_result)
+        print(new_result)
+        sys.exit()
 
     # Load balancing
     new_results = sorted(new_results, key = lambda x: sum(v[0][2] - v[0][1] for k,v in x["PCs"].items()) * sum(len(v) for k,v in x["SD_counterparts"].items()), reverse=True)
-    labels = [ "PC" + str(n) for n in range(0, len(all_results))]
+    labels = [ "PC" + str(n) for n in range(0, len(grouped_qnode_cnodes))]
     
     pool = Pool(nthreads)
     results = pool.imap_unordered(imap_establish, zip(new_results,
@@ -101,8 +110,8 @@ def convert_nodes_into_hierachical_beds(all_results: list,
     # Third remove leftover PC folders
     subdir_gen = os.walk(output_folder)
     # Prepare all target folder names in this time's generation, the naming syntax should follow the function called construct_folder
-    if len(all_results) > 1:
-        target_folder_names = set([f"PC{x}_related_homo_regions" for x in range(0, len(all_results))])
+    if len(grouped_qnode_cnodes) > 1:
+        target_folder_names = set([f"PC{x}_related_homo_regions" for x in range(0, len(grouped_qnode_cnodes))])
     else:
         target_folder_names = ["PC0_related_homo_regions"]
     logger.info(f"This time, we only have these PC regions generated: {target_folder_names}")
