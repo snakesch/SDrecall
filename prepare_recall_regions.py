@@ -231,15 +231,9 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
     
     # Now we need to test which FC-NFC pairs can be merged together (meaning FCs cannot appear in NFCs covered region)
     # Step 8: Pass the query nodes to function and get the cluster of SD intervals (The query nodes here is a pandas dataframe object)
-    pair_graph_path = graph_path.replace(".graphml", ".pair.graphml")
     logger.info("Now we about to use the extract SD-paralog pairs to find out which of them can be put in the same masked genome")
-    all_results, fc_nfc_dict = query_connected_nodes(sd_paralog_pairs, 
-                                                     connected_qnode_components, 
-                                                     multiplex_graph = graph,
-                                                     threads = threads,
-                                                     avg_frag_size = avg_frag_size,
-                                                     std_frag_size = std_frag_size,
-                                                     graph_path = pair_graph_path)
+    all_results, sd_paralog_pairs = query_connected_nodes(sd_paralog_pairs, 
+                                                     connected_qnode_components)
 
     # Step 8.5: We need to tag the nodes with FC-NFC pair ID
     final_graph = graph.copy()
@@ -254,10 +248,10 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
             assert type(node) == HOMOSEQ_REGION, f"The counterpart node {node} type is not HOMOSEQ_REGION, the FC nodes are {result['PCs']}"
             final_graph.nodes[node.data]["NFC"] = ",".join([e for e in list(dict.fromkeys(final_graph.nodes[node.data].get("NFC", "").split(",") + [tag])) if len(e) > 0])
     nx.write_graphml(final_graph, final_graph_path)
-
+    sys.exit()
     # Step 9: Create beds and masked genomes
     convert_nodes_into_hierachical_beds(all_results = all_results,
-                                        fc_nfc_dict = fc_nfc_dict,
+                                        sd_paralog_pairs = sd_paralog_pairs,
                                         output_folder = work_dir,
                                         ref_genome = ref_genome,
                                         target_region_bed=target_bed,

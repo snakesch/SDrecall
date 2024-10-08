@@ -1,4 +1,5 @@
 import logging
+import sys
 
 import networkx as nx
 import graph_tool.all as gt
@@ -16,11 +17,11 @@ def inspect_cnode_along_route(graph,
                               logger = logger):
     qnode = HOMOSEQ_REGION(verts[0], graph)
     for i in range(0, len(edges)):
-        logger.info(f"The qnode is {qnode} while the relative start is {qnode.rela_start} and relative end is {qnode.rela_end}")
+        logger.debug(f"For qnode {qnode}: relative start is {qnode.rela_start} and relative end is {qnode.rela_end}")
         vertex = verts[i + 1]
         edge = edges[i]
         cnode = HOMOSEQ_REGION(vertex, graph)
-        logger.info(f"The cnode is {cnode} at the other end of {i}th edge. The relative_start is {cnode.rela_start} and relative end is {cnode.rela_end}")
+        logger.debug(f"The cnode is {cnode} at the other end of the {i}th edge. The relative_start is {cnode.rela_start} and relative end is {cnode.rela_end}")
         if graph.ep["type"][edge] == "segmental_duplication":
             if qnode.strand == cnode.strand:
                 cnode.ups_rela_start = max(qnode.rela_start, 0)
@@ -30,7 +31,9 @@ def inspect_cnode_along_route(graph,
                 cnode.ups_rela_start = max(qnode.size - qnode.rela_end, 0)
             cnode.rela_start = cnode.ups_rela_start
             cnode.rela_end = cnode.ups_rela_end
-            assert cnode.rela_end > cnode.rela_start, f"The relative end is smaller than the relative start for {cnode} at the end of {i}th edge, rela_start is {cnode.rela_start} and rela_end is {cnode.rela_end}. The upstream qnode is {qnode}, rela_start is {qnode.rela_start} and rela_end is {qnode.rela_end}"
+            if not cnode.rela_end > cnode.rela_start:
+                logger.error(f"The relative end is smaller than the relative start for {cnode} at the end of {i}th edge, rela_start is {cnode.rela_start} and rela_end is {cnode.rela_end}. The upstream qnode is {qnode}, rela_start is {qnode.rela_start} and rela_end is {qnode.rela_end}")
+                sys.exit(1)
             cnode.traverse_route = tuple(list(qnode.traverse_route) + [(qnode, "segmental_duplication")])
         elif graph.ep["overlap"][edge] == "True":
             qnode_rela_start = cnode.start - qnode.start
@@ -84,12 +87,8 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
     from functools import reduce
     from operator import mul
 
-    prop_map = graph.vertex_properties["node_index"]
-    node_to_vertex = {prop_map[v]: v for v in graph.vertices()}
-    backup_vertices = []
     counter_nodes = []
-    counter_query_nodes = []
-    
+
     n = 0
     for v in subgraph.vertices():
         n += 1
@@ -113,7 +112,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
         if reduce(mul, [1 - graph.ep["weight"][e] for e in shortest_path_edges if graph.ep["type"][e] == "segmental_duplication"]) < 0.6:
             continue
         
-        # If the last edge is segmental duplication, then we need to test whether the corresponding region is big enough
+        # If the last edge is segmental duplication, theen we ned to test whether the corresponding region is big enough
         cnode = inspect_cnode_along_route(graph, 
                                           shortest_path_verts, 
                                           shortest_path_edges, 

@@ -197,7 +197,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
         filtered_results = set([])
         connected_qnodes_graph = nx.Graph()
         for success, tup, logs in hom_results:
-            logger.debug(f"\n\n*********************************** {i}_subprocess_start_for_traverse_network ***************************************")
+            logger.debug(f"*********************************** {i}_subprocess_start_for_traverse_network ***************************************")
             if not success:
                 error_mes, tb_str = tup
                 logger.error(f"An error occurred: {error_mes}\nTraceback: {tb_str}\n")
@@ -205,7 +205,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
             else:
                 if len(tup) == 0:
                     logger.debug(f"No SD-paralog pairs are found for query node {tup[0]}, so we will skip this query node")
-                    logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************\n\n")
+                    logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************")
                     i+=1
                     continue
                 filtered_results.add(tup[:2])
@@ -222,7 +222,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                 except IndexError:
                     # WGAC contains one interval (chrX, 70902050, 71018311) which only corresponds with itself, and is thus filtered out
                     logger.debug(f"No counterparts nodes are found for query node {qnode}, skipping current query node")
-                    logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************\n\n")
+                    logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************")
                     i+=1
                     continue
                 
@@ -232,7 +232,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                 for cnode in counterparts_nodes:
                     unfiltered_graph.nodes[cnode.data]["FRA_source"] = (unfiltered_graph.nodes[cnode.data].get("FRA_source", "") + "," + str(i)).lstrip(",")
             logger.debug(logs)
-            logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************\n\n")
+            logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************")
             i+=1
    
     # Save the annotated graph to a graphml file
@@ -247,7 +247,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
     logger.debug(f"The connected qnode graph has {len(qnode_components)} subgraphs. One component has {len(qnode_components[0])} nodes:\n{qnode_components[0]}")
     return filtered_results, qnode_components
 
-def query_connected_nodes(fc_nfc_list, 
+def query_connected_nodes(sd_paralog_list, 
                           connected_qnode_components):
     """
     Input fc_nfc_list: list of tuples (fc_node, nfc_nodes)
@@ -269,8 +269,9 @@ def query_connected_nodes(fc_nfc_list,
         # remove dummy None values from each sublist
         result = list(dict.fromkeys([tuple([ e for e in sublist if e not in [np.nan, None]]) for sublist in transposed]))
         return result
-
-    fc_nfc_dict = { n:ns for n, ns in fc_nfc_list }
+    
+    print(sd_paralog_list)
+    sd_paralog_pairs = { n:ns for n, ns in sd_paralog_list }
     
     # The the FC nodes that can be put into the same masked genome
     component_delimited_fcnodes = pick_from_each_group(connected_qnode_components)
@@ -280,16 +281,16 @@ def query_connected_nodes(fc_nfc_list,
     
     grouped_results = []
     for group in final_fcnode_groups:
-        sd_counterparts = [nfc_node for fcnode in group for nfc_node in fc_nfc_dict[fcnode]]
+        sd_counterparts = [nfc_node for fcnode in group for nfc_node in sd_paralog_pairs[fcnode]]
         assert isinstance(sd_counterparts[0], HOMOSEQ_REGION)
         grouped_result = { "PCs":[ n for n in group ], "SD_counterparts": sd_counterparts }
         if len(group) == 0:
             logger.warning(f"There is an empty group in the component_delimited_fcnodes, please check the component_delimited_fc_nodes: \n{component_delimited_fcnodes}\n\n")
             continue
         if len(sd_counterparts) == 0:
-            logger.warning(f"There is an empty set of SD counterparts in the connected_result, please check the input fc_nfc_dict: \n{fc_nfc_dict}\nAnd the fc nodes group: \n{group}\n\n")
+            logger.warning(f"There is an empty set of SD counterparts in the connected_result, please check the input sd_paralog_pairs: \n{sd_paralog_pairs}\nAnd the fc nodes group: \n{group}\n\n")
             continue
         grouped_results.append(grouped_result)
         
     logger.info(f"There are {len(grouped_results) + 1} SD-paralog pairs for the preparation of realignment bed file\n\n")
-    return grouped_results, fc_nfc_dict
+    return grouped_results, sd_paralog_pairs
