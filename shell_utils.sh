@@ -2,26 +2,24 @@ function check_bam_validity {
     local input=${1}
     local expected_lines=${2}
 
-    # >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): Start to run check_bam_validity function"
     if [[ -z ${expected_lines} ]]; then local expected_lines=1; fi
 
     if [[ ! -f ${input} ]] && [[ ! -L ${input} ]] ; then
-        >&2 echo "$(timestamp): In function ${FUNCNAME}, found ${input} not even exist."
+        >&2 echo "File ${input} does not exist."
         return 1
     fi
-    # >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): Now try to check qname format of ${input}."
 
     local line_num=$( samtools view -c ${input} 2>&1 | awk '{print;}' - )
 
     if [[ ${line_num} -lt ${expected_lines} ]]; then
-        >&2 echo "$(timestamp): In function ${FUNCNAME}, found ${input} only has ${line_num} lines where we expect it to have ${expected_lines} lines."
+        >&2 echo "${input} only has ${line_num} lines where we expect it to have ${expected_lines} lines."
         return 1
     fi
 
     if check_bam_qname_format ${input}; then
-        >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): ${input} has proper query name format."
+        :
     else
-        >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): ${input} has inappropriate query name format."
+        >&2 echo "${input} has inappropriate query name format."
         return 1
     fi
 
@@ -228,7 +226,7 @@ function independent_minimap2_masked () {
      ${masked_genome/.fasta/.mmi} ${forward_reads} ${reverse_reads}" && \
      minimap2 -ax ${mode} --eqx --MD -F 1000 -t ${threads} -R "@RG\tID:${samp_ID}\tLB:SureSelectXT\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}" \
      ${masked_genome/.fasta/.mmi} ${forward_reads} ${reverse_reads} > ${mid_align} && \
-     modify_masked_genome_coords ${mid_align} ${ref_contig_sizes} ${pc_index} | \
+     masked_genome_coords ${mid_align} ${ref_contig_sizes} ${pc_index} | \
      samtools view -S -b - | samtools sort -O bam -o ${output_align} && \
      samtools index ${output_align}
 

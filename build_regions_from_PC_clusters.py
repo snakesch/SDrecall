@@ -4,22 +4,20 @@ import subprocess
 
 from pybedtools import BedTool
 
-from log import error_handling_decorator
-from homoseq_region import HOMOSEQ_REGION
-from genome import Genome
+from src.log import error_handling_decorator
+from preparation.homoseq_region import HOMOSEQ_REGION
+from preparation.genome import Genome
 from intrinsic_variants import getIntrinsicVcf
-from utils import construct_folder_struc, perform_bedtools_sort_and_merge, update_plain_file_on_md5
+from src.utils import construct_folder_struc, perform_bedtools_sort_and_merge, update_plain_file_on_md5
 
 logger = logging.getLogger("SDrecall")
 
 @error_handling_decorator
 def establish_beds_per_PC_cluster(cluster_dict={"PCs":{},
                                                 "SD_counterparts":{}},
-                                  base_folder = "/paedyl01/disk1/yangyxt/indexed_genome/SD_priority_component_pairs",
+                                  base_folder = "",
                                   label = "PC0",
-                                  target_region_bed = "",
-                                  ref_genome = "/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta",
-                                  length = None,
+                                  ref_genome = "",
                                   avg_frag_size = 400,
                                   std_frag_size = 140,
                                   threads = 2, 
@@ -32,13 +30,8 @@ def establish_beds_per_PC_cluster(cluster_dict={"PCs":{},
         "SD_counterparts": {0: [], 1: [], 2: []}
     }
     """
-
-    logger.info("The input cluster_dict is:\n{}\n".format(cluster_dict))
-    assert isinstance(cluster_dict["SD_counterparts"][0][0], HOMOSEQ_REGION)
-    assert isinstance(cluster_dict["PCs"][0][0], tuple), f"The first element in the PC cluster should be a tuple, but it is {type(cluster_dict['PCs'][0][0])} and it looks like {cluster_dict['PCs'][0][0]}"
     paths = construct_folder_struc(base_folder=base_folder, label=label, logger=logger)
-    # logger.info("The PC bed file is {}, the counterparts bed file is {}, the total bed file is {}".format(paths["PC_bed"], paths["Counterparts_bed"], paths["All_region_bed"]))
-    
+
     # First convert the disconnected nodes to beds, each node is a tuple consisting of three values (chr, start, end)
     tmp_id = str(uuid.uuid4())
     tmp_pc_bed = paths["PC_bed"].replace(".bed", "." + tmp_id + ".bed")
@@ -52,7 +45,7 @@ def establish_beds_per_PC_cluster(cluster_dict={"PCs":{},
         for idx, records in cluster_dict["PCs"].items():
             for record in records:
                 if len(record) >= 3:
-                    # Here you want to trigger the __iter__ method in HOMOSEQ_REGION instead of the __getitem__ method
+                    # call the __iter__ method in HOMOSEQ_REGION instead of the __getitem__ method
                     f.write("\t".join([str(value) for value in record][:3] + [".", ".", record[3]]) + "\n")
                 elif len(record) == 2:
                     f.write("\t".join([str(value) for value in record[0]][:3] + [".", ".", record[0][3]]) + "\n")

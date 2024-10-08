@@ -11,19 +11,19 @@ import networkx as nx
 import graph_tool.all
 
 from build_regions_from_PC_clusters import establish_beds_per_PC_cluster
-from seq import get_bam_frag_size
-from extract_SD_pairs_from_bam_json import extract_sd_coordinates_from_json
-from pick_multialign_regions import pick_region_by_depth
-from genome import Genome
-from homoseq_region import HOMOSEQ_REGION
-from graph_build import read_graphml, create_multiplex_graph
-from graph_query import extract_SD_paralog_pairs_from_graph, query_connected_nodes
+from preparation.seq import get_bam_frag_size
+from preparation.extract_SD_pairs_from_bam_json import extract_sd_coordinates_from_json
+from preparation.pick_multialign_regions import pick_region_by_depth
+from preparation.genome import Genome
+from preparation.homoseq_region import HOMOSEQ_REGION
+from preparation.graph_build import read_graphml, create_multiplex_graph
+from preparation.graph_query import extract_SD_paralog_pairs_from_graph, query_connected_nodes
 from convert_nodes_into_hierachical_beds import convert_nodes_into_hierachical_beds
 from sd_pairs import filter_umbrella_pairs
 
-from log import ColoredFormatter
-from suppress_warning import *
-from utils import is_file_up_to_date, executeCmd, filter_bed_by_interval_size
+from src.log import ColoredFormatter
+from src.suppress_warning import *
+from src.utils import is_file_up_to_date, executeCmd, filter_bed_by_interval_size
 
 logger = logging.getLogger('SDrecall')
 

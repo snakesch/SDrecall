@@ -1,13 +1,12 @@
 import os
-import re
-import shutil
 import sys
 from itertools import repeat
 from multiprocessing import Pool
 import logging
 
 from build_regions_from_PC_clusters import establish_beds_per_PC_cluster
-from utils import executeCmd
+from src.utils import executeCmd, is_file_up_to_date
+from src.const import *
 
 logger = logging.getLogger("SDrecall")
 
@@ -30,20 +29,17 @@ def convert_nodes_into_hierachical_beds(grouped_qnode_cnodes: list,
     from itertools import repeat
     import re
     
-    logger.info("Start to put beds into the rest of PC-counterparts paired beds into subfolders")
-    # We kind of need to restructure the grouped_qnode_cnodes to pass the information of fc-nfc pairs to the establish_beds_per_PC_cluster function
+    # logger.info("Start putting beds into the rest of PC-counterparts paired beds into subfolders")
+    # We need to restructure the grouped_qnode_cnodes to pass the information of sd-paralog pairs to the establish_beds_per_PC_cluster function
     new_results = []
     
     for result in grouped_qnode_cnodes:
-        print(result)
         new_result = {"PCs": {}, "SD_counterparts": {}}
         for i in range(0, len(result["PCs"])):
             fc_node = result["PCs"][i]
             new_result['PCs'][i] = [fc_node]
             new_result['SD_counterparts'][i] = sd_paralog_pairs[fc_node]
         new_results.append(new_result)
-        print(new_result)
-        sys.exit()
 
     # Load balancing
     new_results = sorted(new_results, key = lambda x: sum(v[0][2] - v[0][1] for k,v in x["PCs"].items()) * sum(len(v) for k,v in x["SD_counterparts"].items()), reverse=True)
@@ -53,9 +49,7 @@ def convert_nodes_into_hierachical_beds(grouped_qnode_cnodes: list,
     results = pool.imap_unordered(imap_establish, zip(new_results,
                                                       repeat(output_folder),
                                                       labels,
-                                                      repeat(target_region_bed),
                                                       repeat(ref_genome),
-                                                      repeat(length),
                                                       repeat(avg_frag_size),
                                                       repeat(std_frag_size)))
     i = 0
@@ -75,24 +69,21 @@ def convert_nodes_into_hierachical_beds(grouped_qnode_cnodes: list,
     if not all([t[0] for t in results]):
         raise RuntimeError("Error happened during the parallel execution of establish_beds_per_PC_cluster. So stop the total python script here.")
 
-    execute = False
-    valid_intrinsic_bams = " ".join(intrinsic_bams)
     total_intrinsic_bam = os.path.join(output_folder, "total_intrinsic_alignments.bam")
-    test_cmd = f"bash {bash_utils_hub} check_bam_validity {total_intrinsic_bam}"
+    test_cmd = f"bash {shell_utils} check_bam_validity {total_intrinsic_bam}"
+    print(test_cmd)
     try:
         executeCmd(test_cmd)
     except RuntimeError:
         logger.info(f"The merged intrinsic alignment BAM file {total_intrinsic_bam} is not ready")
         execute = True
     else:
-        if all([os.path.getmtime(total_intrinsic_bam) > os.path.getmtime(vb) for vb in intrinsic_bams]) and \
-           (os.path.getmtime(total_intrinsic_bam) > os.path.getmtime(os.path.abspath(__file__))):
-            execute = False
-        else:
-            execute = True
+        execute = not (is_file_up_to_date(total_intrinsic_bam, [vb for vb in intrinsic_bams]) and is_file_up_to_date(total_intrinsic_bam, [os.path.abspath(__file__)]))
+        if execute:
+            executeCmd(test_cmd)
 
     intrinsic_bam_header = total_intrinsic_bam.replace(".bam", ".bam.header")
-    cmd = f"bash {bash_utils_hub} modify_bam_sq_lines {intrinsic_bams[0]} {ref_genome} {intrinsic_bam_header}"
+    cmd = f"bash {shell_utils} modify_bam_sq_lines {intrinsic_bams[0]} {ref_genome} {intrinsic_bam_header}"
     executeCmd(cmd, logger=logger)
 
     intrinsic_bam_list = total_intrinsic_bam.replace(".bam", ".bams.list.txt")
@@ -152,5 +143,5 @@ def convert_nodes_into_hierachical_beds(grouped_qnode_cnodes: list,
     with open(vcf_list_file, "w") as f:
         for v in intrinsic_vcfs: f.write(v + "\n")
     
-    executeCmd(f"bcftools concat -o {tmp_intrinsic_vcf} -a --no-version -Oz -f {vcf_list_file} && bcftools sort --temp-dir /paedyl01/disk1/yangyxt/test_tmp -o {final_intrinsic_vcf} -Oz {tmp_intrinsic_vcf} && ls -lh {final_intrinsic_vcf} && rm {tmp_intrinsic_vcf}")
+    executeCmd(f"bcftools concat -o {tmp_intrinsic_vcf} -a --no-version -Oz -f {vcf_list_file} && bcftools sort --temp-dir /tmp -o {final_intrinsic_vcf} -Oz {tmp_intrinsic_vcf} && ls -lh {final_intrinsic_vcf} && rm {tmp_intrinsic_vcf}")
     return

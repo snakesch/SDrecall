@@ -8,8 +8,8 @@ import sys
 import logging
 from itertools import repeat
 
-from graph_traversal import traverse_network_to_get_homology_counterparts
-from homoseq_region import HOMOSEQ_REGION
+from preparation.graph_traversal import traverse_network_to_get_homology_counterparts
+from preparation.homoseq_region import HOMOSEQ_REGION
 
 logger = logging.getLogger('SDrecall')
 

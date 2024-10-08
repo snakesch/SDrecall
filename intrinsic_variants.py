@@ -1,8 +1,8 @@
 import os
 import logging
 
-from seq import getRawseq
-from utils import executeCmd, prepare_tmp_file
+from preparation.seq import getRawseq
+from src.utils import executeCmd, prepare_tmp_file
 
 def getIntrinsicVcf(pc_bed, 
                     all_homo_regions_bed, 

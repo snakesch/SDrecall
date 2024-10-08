@@ -4,8 +4,8 @@ import sys
 import networkx as nx
 import graph_tool.all as gt
 
-from log import log_command
-from homoseq_region import HOMOSEQ_REGION
+from src.log import log_command
+from preparation.homoseq_region import HOMOSEQ_REGION
 
 logger = logging.getLogger('SDrecall')
 
