@@ -39,7 +39,7 @@ from intervaltree import Interval, IntervalTree
 from python_utils import convert_input_value
 from sortedcontainers import SortedList
 from subprocess import PIPE
-bash_utils_hub = "/paedyl01/disk1/yangyxt/ngs_scripts/common_bash_utils.sh"
+bash_utils_hub = "shell_utils.sh"
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -55,7 +55,7 @@ def prepare_tmp_file(tmp_dir="/paedyl01/disk1/yangyxt/test_tmp", **kwargs):
         os.mkdir(tmp_dir)
     except FileExistsError:
         pass
-    
+
     return tempfile.NamedTemporaryFile(dir = "/paedyl01/disk1/yangyxt/test_tmp", delete = False, **kwargs)
 
 
@@ -208,13 +208,13 @@ def pure_numba_max_idx_mem(data, index_mask=None):
 def find_row_index_of_max(matrix, row_index_mask, column_index_mask):
     # Apply the masks to get the submatrix
     submatrix = matrix[row_index_mask, :][:, column_index_mask]
-    
+
     # Find the index of the maximum value in the submatrix
     max_index = np.argmax(submatrix)
-    
+
     # Convert the flat index to a row index
     row_index = max_index // submatrix.shape[1]
-    
+
     # Return the actual row index in the original matrix
     return np.where(row_index_mask)[0][row_index]
 
@@ -363,12 +363,12 @@ class HashableAlignedSegment(pysam.AlignedSegment):
 
 
 
-def executeCmd(cmd, stdout_only = False, shell="/home/yangyxt/miniforge3/envs/ngs_pipeline/bin/bash", logger=logger):
+def executeCmd(cmd, stdout_only = False, logger=logger):
     logger.info("About to run this command in shell invoked within python: \n{}\n".format(cmd))
 
     if stdout_only:
         result = subprocess.run(cmd, shell=True, executable=shell, capture_output=True)
-        
+
     else:
         result = subprocess.run(cmd, shell=True, executable=shell, stderr=subprocess.STDOUT, stdout=PIPE)
 
@@ -395,21 +395,21 @@ def executeCmd(cmd, stdout_only = False, shell="/home/yangyxt/miniforge3/envs/ng
 
 def calculate_mean_read_length(bam_file_path, sample_size=1000000):
     bamfile = pysam.AlignmentFile(bam_file_path, "rb")
-    
+
     total_length = 0
     read_count = 0
-    
+
     for read in bamfile:
         total_length += read.query_length
         read_count += 1
         if read_count >= sample_size:
             break
-    
+
     bamfile.close()
-    
+
     if read_count == 0:
         return 0  # Handle the case where there are no reads
-    
+
     mean_length = total_length / read_count
     return mean_length
 
@@ -436,7 +436,7 @@ def migrate_bam_to_ncls(bam_file,
     n = 0
     noisy_qnames = set([])
 
-    # vis_qnames = ["HISEQ1:63:HB65FADXX:2:1214:20219:7107:PC0", 
+    # vis_qnames = ["HISEQ1:63:HB65FADXX:2:1214:20219:7107:PC0",
     #               "HISEQ1:66:HB7AUADXX:1:1114:16240:97312:PC357",
     #               "HISEQ1:59:HB66DADXX:1:2109:13800:52860:PC0",
     #               "HISEQ1:63:HB65FADXX:1:1114:2865:3570:PC357"]
@@ -445,7 +445,7 @@ def migrate_bam_to_ncls(bam_file,
     for read in bam:
         if read.query_name in noisy_qnames:
             continue
-        
+
         if paired:
             if read.is_secondary or \
                read.is_supplementary:
@@ -1065,7 +1065,7 @@ def get_hapvector_from_cigar(cigar_tuples,
                 base = query_sequence[query_pos:query_pos + length]
                 if base == "N":
                     true_mismatch = False
-        
+
             if not insertion:
                 if true_mismatch:
                     hapvector[index:index + length] = -4
@@ -1201,7 +1201,7 @@ def get_interval_seq(read, interval_start, interval_end, read_ref_pos_dict = {})
     # Input interval_start and interval_end are both 0-indexed
     # get_reference_positions() also returns 0-indexed positions (a list)
     read_id = get_read_id(read)
-    
+
     if read_id in read_ref_pos_dict:
         ref_positions, qseq_ref_positions = read_ref_pos_dict[read_id]
     else:
@@ -1567,7 +1567,7 @@ def numba_diff_indices(arr1, arr2):
 def compare_sequences(read_seq, other_seq, except_char):
     if read_seq.shape != other_seq.shape:
         return False
-    
+
     total_match = True
     for i in range(read_seq.size):
         if read_seq[i] != other_seq[i]:
@@ -1660,9 +1660,9 @@ def determine_same_haplotype(read, other_read,
     overlap_span = overlap_span + numba_sum(score_arr[:var_count])
     overlap_span = overlap_span + mean_read_length * 3 * indel_num
 
-    # vis_qnames = ["HISEQ1:21:H9V1VADXX:2:1112:21127:38421:PC0", 
+    # vis_qnames = ["HISEQ1:21:H9V1VADXX:2:1112:21127:38421:PC0",
     #               "HISEQ1:26:HA2RRADXX:1:1113:11601:32503:PC0"]
-    
+
     # if read.query_name in vis_qnames and other_read.query_name in vis_qnames:
     #     logger.info(f"The read sequence is {interval_hap_vector.tolist()} for {read_id} \nand the other read sequence is {interval_other_hap_vector.tolist()} for other read_id {other_read_id} at region {overlap_start}, {overlap_end}. \nThe different indices are {diff_indices.tolist()} and the identical part is {identical_part.tolist()}")
     #     logger.info(f"The raw read sequence is {read_hap_vector.tolist()} for {read_id} with cigar {read.cigartuples} and query_sequence {read.query_sequence} \nand the other read sequence is {other_read_hap_vector.tolist()} for other read_id {other_read_id} with cigar {other_read.cigartuples} and query sequence {other_read.query_sequence}")
@@ -2110,36 +2110,36 @@ def para_row_wise_max_with_mask_nb(matrix, index_mask, mask_values = np.array([-
 @numba.njit(types.float32[:](types.float32[:, :], types.boolean[:], types.float32[:]), fastmath=True)
 def row_wise_max_with_mask_nb(matrix, index_mask, mask_values):
     row_max_values = np.zeros(matrix.shape[0], dtype=np.float32)
-    
+
     for i in range(matrix.shape[0]):
         if not index_mask[i]:
             continue
-        
+
         max_val = -np.inf
         for j in range(matrix.shape[1]):
             if index_mask[j] and matrix[i, j] != mask_values[0] and i != j:
                 max_val = max(max_val, matrix[i, j])
-            
+
         row_max_values[i] = max_val if max_val != -np.inf else 0
-    
+
     return row_max_values
 
 
 @numba.njit(types.float32[:](types.float32[:, :], types.boolean[:], types.float32[:]), fastmath=True, parallel=True)
 def para_row_wise_max_with_mask_nb(matrix, index_mask, mask_values):
     row_max_values = np.zeros(matrix.shape[0], dtype=np.float32)
-    
+
     for i in numba.prange(matrix.shape[0]):
         if not index_mask[i]:
             continue
-        
+
         max_val = -np.inf
         for j in range(matrix.shape[1]):
             if index_mask[j] and matrix[i, j] != mask_values[0] and i != j:
                 max_val = max(max_val, matrix[i, j])
-            
+
         row_max_values[i] = max_val if max_val != -np.inf else 0
-    
+
     return row_max_values
 
 
@@ -2329,9 +2329,9 @@ def pretty_print_matrix(matrix, precision=3):
 
 
 
-def iteratively_find_largest_cliques(selected_indices, 
-                                     weight_matrix, 
-                                     cutoff = 0.1, 
+def iteratively_find_largest_cliques(selected_indices,
+                                     weight_matrix,
+                                     cutoff = 0.1,
                                      qname_dict = {},
                                      logger = logger):
     # Generate a index_mask array for the indices of rows in the weight_matrix that the indices are in the initial_vert_indices
@@ -2346,7 +2346,7 @@ def iteratively_find_largest_cliques(selected_indices,
         index_mask = para_create_default_true_mask(weight_matrix.shape[0])
     else:
         index_mask = create_default_true_mask(weight_matrix.shape[0])
-    
+
     sparse_matrix = sparse.csr_matrix(weight_matrix)
     sparse_matrix_data = sparse_matrix.data
     sparse_matrix_indices = sparse_matrix.indices
@@ -2361,11 +2361,11 @@ def iteratively_find_largest_cliques(selected_indices,
             logger.warning(f"Found that in this iteration, the subgraph size is already 0")
             break
         # clique_indices, drop_mask = submatrix_locate_without_neg_values(weight_matrix, index_mask, logger = logger)
-        clique_indices, drop_mask = heuristic_find_largest_edge_weight_clique_sparse(sparse_matrix_data, 
-                                                                                     sparse_matrix_indices, 
-                                                                                     sparse_matrix_indptr, 
+        clique_indices, drop_mask = heuristic_find_largest_edge_weight_clique_sparse(sparse_matrix_data,
+                                                                                     sparse_matrix_indices,
+                                                                                     sparse_matrix_indptr,
                                                                                      matrix_size,
-                                                                                     index_mask, 
+                                                                                     index_mask,
                                                                                      cutoff = cutoff)
         # This is utter important. It makes sure the returned vertex index are in the original total graph
         assert np.max(clique_indices) < selected_indices.size, f"The returned clique indices are out of the range of the selected indices. The max index is {np.max(clique_indices)} and the size of selected indices is {selected_indices.size}"
@@ -2395,9 +2395,9 @@ def iteratively_find_largest_cliques(selected_indices,
         sparse_matrix_indices = sparse_matrix.indices
         sparse_matrix_indptr = sparse_matrix.indptr
         matrix_size = sparse_matrix.shape[0]
-        # sparse_matrix_data, sparse_matrix_indices, sparse_matrix_indptr, matrix_size = sparse_mask_selection( sparse_matrix_data, 
-        #                                                                                                       sparse_matrix_indices, 
-        #                                                                                                       sparse_matrix_indptr, 
+        # sparse_matrix_data, sparse_matrix_indices, sparse_matrix_indptr, matrix_size = sparse_mask_selection( sparse_matrix_data,
+        #                                                                                                       sparse_matrix_indices,
+        #                                                                                                       sparse_matrix_indptr,
         #                                                                                                       drop_mask )
 
         if matrix_size < 1000000:
@@ -2407,7 +2407,7 @@ def iteratively_find_largest_cliques(selected_indices,
             index_mask = para_create_default_true_mask(matrix_size)
         else:
             index_mask = create_default_true_mask(matrix_size)
-        
+
 
 
 @numba.njit(types.Tuple((types.float32[:], types.int32[:], types.int32[:], types.int32))(types.float32[:], types.int32[:], types.int32[:], types.boolean[:]), fastmath=True)
@@ -2438,7 +2438,7 @@ def heuristic_find_largest_edge_weight_clique(weight_matrix, initial_index_mask,
         parallel = True
     else:
         parallel = False
-    
+
     if parallel:
         row_wise_maxs = para_row_wise_max_with_mask_nb(weight_matrix, initial_index_mask, mask_values = np.array([-1.0], dtype=np.float32))
     else:
@@ -2449,12 +2449,12 @@ def heuristic_find_largest_edge_weight_clique(weight_matrix, initial_index_mask,
         parallel = True
     else:
         parallel = False
-    
+
     if parallel:
         max_row_ind, max_value = numba_max_idx_mem(row_wise_maxs, initial_index_mask)
     else:
         max_row_ind, max_value = numba_max_idx_mem(row_wise_maxs, initial_index_mask)
-        
+
     select_indices[0] = max_row_ind
     neg_1_mask = weight_matrix[max_row_ind] != -1
     neg_1_mask[max_row_ind] = False
@@ -2483,31 +2483,31 @@ def heuristic_find_largest_edge_weight_clique(weight_matrix, initial_index_mask,
                 else:
                     next_max_ind, next_max_value = numba_max_idx_mem(weight_matrix[select_indice], index_mask)
                 trial += 1
-            
+
             if trial >= i and next_max_value <= cutoff:
                 # Run out of paths
                 # print(f"Run out of paths to extend the clique. The next max value is {next_max_value} and the cutoff is {cutoff}. Directly break", file=sys.stderr)
                 break
             else:
                 max_row_ind = next_max_ind
-           
+
         else:
             # print(f"Found the next max value is {next_max_value} larger than the cutoff {cutoff} and the corresponding index is {next_max_ind}, raw index is {raw_indices[next_max_ind]}, last max raw index is {raw_indices[max_row_ind]}", file=sys.stderr)
             max_row_ind = next_max_ind
-            
-        
+
+
         select_indices[i] = max_row_ind
         # selected_mask[max_row_ind] = True
         i += 1
 
         if i >= weight_matrix.shape[0]:
             break
-        
+
         neg_1_mask = weight_matrix[max_row_ind] != -1
         neg_1_mask[max_row_ind] = False
         # not_selected_mask = numba_not(selected_mask)
         index_mask = numba_and(index_mask, neg_1_mask)
-    
+
     select_indices = select_indices[:i]
     remain_mask = reverse_boolean_mask(weight_matrix.shape[0], select_indices)
     remain_mask = numba_and(remain_mask, initial_index_mask)
@@ -2515,19 +2515,19 @@ def heuristic_find_largest_edge_weight_clique(weight_matrix, initial_index_mask,
 
 
 @numba.njit(types.float32[:](types.float32[:], types.int32[:], types.int32[:], types.int32, types.boolean[:], types.float32), fastmath=True)
-def row_wise_max_with_mask_sparse(matrix_data, 
-                                  matrix_indices, 
+def row_wise_max_with_mask_sparse(matrix_data,
+                                  matrix_indices,
                                   matrix_indptr,
-                                  matrix_size, 
-                                  index_mask, 
+                                  matrix_size,
+                                  index_mask,
                                   mask_value=-1):
     # assert sparse.isspmatrix_csr(matrix), "Input matrix must be in CSR format"
     row_max_values = np.zeros(matrix_size, dtype=np.float32)
-    
+
     for i in range(matrix_size):
         if not index_mask[i]:
             continue
-        
+
         row_start, row_end = matrix_indptr[i], matrix_indptr[i+1]
         row_data = matrix_data[row_start:row_end]
         row_cols = matrix_indices[row_start:row_end]
@@ -2537,28 +2537,28 @@ def row_wise_max_with_mask_sparse(matrix_data,
         valid_mask = (row_data != mask_value) & index_mask[row_cols]
         index_mask[i] = index_mask_i
         valid_data = row_data[valid_mask]
-        
+
         if valid_data.size > 0:
             row_max_values[i] = np.max(valid_data)
-    
+
     return row_max_values
 
 
 
 @numba.njit(types.float32[:](types.float32[:], types.int32[:], types.int32[:], types.int32, types.boolean[:], types.float32), fastmath=True, parallel=True)
-def para_row_wise_max_with_mask_sparse(matrix_data, 
-                                       matrix_indices, 
+def para_row_wise_max_with_mask_sparse(matrix_data,
+                                       matrix_indices,
                                        matrix_indptr,
-                                       matrix_size, 
-                                       index_mask, 
+                                       matrix_size,
+                                       index_mask,
                                        mask_value=-1):
     # assert sparse.isspmatrix_csr(matrix), "Input matrix must be in CSR format"
     row_max_values = np.zeros(matrix_size, dtype=np.float32)
-    
+
     for i in prange(matrix_size):
         if not index_mask[i]:
             continue
-        
+
         row_start, row_end = matrix_indptr[i], matrix_indptr[i+1]
         row_data = matrix_data[row_start:row_end]
         row_cols = matrix_indices[row_start:row_end]
@@ -2568,18 +2568,18 @@ def para_row_wise_max_with_mask_sparse(matrix_data,
         valid_mask = (row_data != mask_value) & index_mask[row_cols]
         index_mask[i] = index_mask_i
         valid_data = row_data[valid_mask]
-        
+
         if valid_data.size > 0:
             row_max_values[i] = np.max(valid_data)
-    
+
     return row_max_values
 
 
 
 @numba.njit(types.boolean[:](types.float32[:], types.int32[:], types.int32, types.float32), fastmath=True)
-def efficient_mask(sarr_data, 
-                   sarr_indices, 
-                   sarr_size, 
+def efficient_mask(sarr_data,
+                   sarr_indices,
+                   sarr_size,
                    mask_value=-1.0):
     '''
     The input should be the data, indices, arr_size of a one row sparse_matrix instance
@@ -2599,12 +2599,12 @@ def efficient_mask(sarr_data,
     neg_1_mask = np.ones(sarr_size, dtype=np.bool_)
     data_mask = sarr_data == mask_value
     neg_1_mask[sarr_indices[data_mask]] = False
-    
+
     return neg_1_mask
 
 
 @numba.njit(types.Tuple((types.int32, types.float32))(types.float32[:], types.int32[:], types.boolean[:]), fastmath=True)
-def efficient_row_max(sarr_data, 
+def efficient_row_max(sarr_data,
                       sarr_indices,
                       index_mask):
     '''
@@ -2633,8 +2633,8 @@ def efficient_row_max(sarr_data,
 def heuristic_find_largest_edge_weight_clique_sparse(matrix_data,
                                                      matrix_indices,
                                                      matrix_indptr,
-                                                     matrix_size, 
-                                                     initial_index_mask, 
+                                                     matrix_size,
+                                                     initial_index_mask,
                                                      cutoff=0.1):
     # assert sparse.isspmatrix_csr(weight_matrix), "Input matrix must be in CSR format"
     if matrix_size > 5000:
@@ -2643,25 +2643,25 @@ def heuristic_find_largest_edge_weight_clique_sparse(matrix_data,
         parallel = False
 
     if parallel:
-        row_wise_maxs = para_row_wise_max_with_mask_sparse(matrix_data, 
-                                                           matrix_indices, 
-                                                           matrix_indptr, 
-                                                           matrix_size, 
-                                                           initial_index_mask, 
+        row_wise_maxs = para_row_wise_max_with_mask_sparse(matrix_data,
+                                                           matrix_indices,
+                                                           matrix_indptr,
+                                                           matrix_size,
+                                                           initial_index_mask,
                                                            -1.0)
     else:
-        row_wise_maxs = row_wise_max_with_mask_sparse(matrix_data, 
-                                                      matrix_indices, 
-                                                      matrix_indptr, 
-                                                      matrix_size, 
-                                                      initial_index_mask, 
+        row_wise_maxs = row_wise_max_with_mask_sparse(matrix_data,
+                                                      matrix_indices,
+                                                      matrix_indptr,
+                                                      matrix_size,
+                                                      initial_index_mask,
                                                       -1.0)
-        
+
     select_indices = np.empty(matrix_size, dtype=np.int32)
     # print(len(row_wise_maxs))
 
     max_row_ind, max_value = numba_max_idx_mem(row_wise_maxs, initial_index_mask)
-    
+
     # print(max_row_ind, max_value)
     index_mask = initial_index_mask.copy()
     select_indices[0] = max_row_ind
@@ -2671,21 +2671,21 @@ def heuristic_find_largest_edge_weight_clique_sparse(matrix_data,
     max_row_data = matrix_data[max_row_start: max_row_end]
     max_row_cols = matrix_indices[max_row_start: max_row_end]
 
-    neg_1_mask = efficient_mask(max_row_data, 
-                                max_row_cols, 
-                                matrix_size, 
+    neg_1_mask = efficient_mask(max_row_data,
+                                max_row_cols,
+                                matrix_size,
                                 -1.0)
-    
-    neg_1_mask[max_row_ind] = False  # Exclude the element itself   
+
+    neg_1_mask[max_row_ind] = False  # Exclude the element itself
     index_mask = numba_and(index_mask, neg_1_mask)
 
     i = 1
     while np.any(index_mask):
         # print(f"max_row_ind is {max_row_ind}, while the total array size is {matrix_size}, and the index_mask sum is {np.sum(index_mask)}")
-        next_max_ind, next_max_value = efficient_row_max(max_row_data, 
-                                                         max_row_cols, 
+        next_max_ind, next_max_value = efficient_row_max(max_row_data,
+                                                         max_row_cols,
                                                          index_mask)
-        
+
         if next_max_value <= cutoff:
             trial = 0
             while next_max_value <= cutoff and trial < i:
@@ -2694,8 +2694,8 @@ def heuristic_find_largest_edge_weight_clique_sparse(matrix_data,
                 select_row_end = matrix_indptr[select_indice+1]
                 select_row_data = matrix_data[select_row_start: select_row_end]
                 select_row_cols = matrix_indices[select_row_start: select_row_end]
-                next_max_ind, next_max_value = efficient_row_max(select_row_data, 
-                                                                 select_row_cols, 
+                next_max_ind, next_max_value = efficient_row_max(select_row_data,
+                                                                 select_row_cols,
                                                                  index_mask)
                 trial += 1
             if next_max_value <= cutoff and trial >= i:
@@ -2717,15 +2717,15 @@ def heuristic_find_largest_edge_weight_clique_sparse(matrix_data,
         max_row_data = matrix_data[max_row_start: max_row_end]
         max_row_cols = matrix_indices[max_row_start: max_row_end]
 
-        neg_1_mask = efficient_mask(max_row_data, 
-                                    max_row_cols, 
-                                    matrix_size, 
+        neg_1_mask = efficient_mask(max_row_data,
+                                    max_row_cols,
+                                    matrix_size,
                                     -1.0)
-        
-        neg_1_mask[max_row_ind] = False  # Exclude the element itself   
+
+        neg_1_mask[max_row_ind] = False  # Exclude the element itself
         index_mask = numba_and(index_mask, neg_1_mask)
 
-    
+
     select_indices = select_indices[:i]
     remain_mask = reverse_boolean_mask(matrix_size, select_indices)
     remain_mask = numba_and(remain_mask, initial_index_mask)
@@ -2748,7 +2748,7 @@ def find_cliques_in_every_component(graph, weight_matrix, ew_cutoff = 0.101, log
 
     if not weight_matrix.flags['C_CONTIGUOUS']:
         weight_matrix = np.ascontiguousarray(weight_matrix)
-    
+
     logger.info(f"Found {len(component_dict)} components in the graph. The big weight matrix has {numba_sum(big_row_mask)} rows and columns. The original weight_matrix has {weight_matrix.shape[0]} rows and columns and its contiguity in memory is {weight_matrix.flags['C_CONTIGUOUS']}. The small row indices are {small_row_indices}")
 
     # total_cliques = []
@@ -2790,8 +2790,8 @@ def find_cliques_in_every_component(graph, weight_matrix, ew_cutoff = 0.101, log
         cliques_iter = iteratively_find_largest_cliques(selected_indices, small_weight_matrix, cutoff = ew_cutoff/2, qname_dict = graph.vertex_properties['qname'], logger = logger)
         for clique in cliques_iter:
             yield clique
-                
-                
+
+
 
 # def refine_small_cliques_in_every_component(graph, weight_matrix, small_clique_verts, logger = logger):
 #     # Find all components for this graph
@@ -2819,9 +2819,9 @@ def graph_vertex_iter(vertex_indices, graph):
 
 
 
-def find_components_inside_filtered_cliques(final_cliques, 
-                                            graph, 
-                                            final_components, 
+def find_components_inside_filtered_cliques(final_cliques,
+                                            graph,
+                                            final_components,
                                             weight_matrix,
                                             ew_cutoff = 0.101,
                                             logger=logger):
@@ -2831,7 +2831,7 @@ def find_components_inside_filtered_cliques(final_cliques,
     # final_components = defaultdict(int)
     # last_c_idx = 0
 
-    # vis_qnames = ["HISEQ1:59:HB66DADXX:1:1110:1670:77678:PC0", 
+    # vis_qnames = ["HISEQ1:59:HB66DADXX:1:1110:1670:77678:PC0",
     #               "HISEQ1:63:HB65FADXX:2:2214:15844:10511:PC0",
     #               "HISEQ1:61:HB66HADXX:1:1213:7009:61371:PC0",
     #               "HISEQ1:63:HB65FADXX:1:1114:2865:3570:PC357"]
@@ -2843,7 +2843,7 @@ def find_components_inside_filtered_cliques(final_cliques,
         # Set the filter to True for vertices in the list
         for vid in clique:
             vertex_filter[graph.vertex(vid)] = True
-    
+
         subgraph = gt.GraphView(graph, vfilt = vertex_filter)
         clique = list(clique)
         # Supplement the small weight edges to the graph
@@ -2862,7 +2862,7 @@ def find_components_inside_filtered_cliques(final_cliques,
         for v in graph_vertex_iter(clique, subgraph):
             c_index = component_labels[v]
             components_dict[c_index].add(int(v))
-        
+
         logger.info(f"Found {len(components_dict)} components in the clique {clique}")
         for c_index, vs in components_dict.items():
             for v in vs:
@@ -2879,14 +2879,14 @@ def find_components_inside_filtered_cliques(final_cliques,
 def find_uncovered_regions(existing_intervals, new_interval):
     # Find overlapping intervals
     overlapping_intervals = existing_intervals.overlap(new_interval[0], new_interval[1])
-    
+
     # Sort the overlapping intervals by start time
     sorted_intervals = sorted(overlapping_intervals, key=lambda x: x.begin)
-    
+
     # Determine the uncovered regions
     uncovered_regions = []
     current_start = new_interval[0]
-    
+
     if len(overlapping_intervals) == 0:
         return [new_interval]
 
@@ -2894,10 +2894,10 @@ def find_uncovered_regions(existing_intervals, new_interval):
         if interval.begin > current_start:
             uncovered_regions.append((current_start, interval.begin))
         current_start = max(current_start, interval.end)
-    
+
     if current_start < new_interval[1]:
         uncovered_regions.append((current_start, new_interval[1]))
-    
+
     return uncovered_regions
 
 
@@ -3025,11 +3025,11 @@ def build_phasing_graph(bam_file,
                 continue
 
             # assert len(dict.fromkeys(r.query_name for r in other_reads)) == 1, f"The query names of the reads in the other_reads are not the same: {other_reads}"
-            # vis_qnames = ["HISEQ1:21:H9V1VADXX:2:1112:21127:38421:PC0", 
+            # vis_qnames = ["HISEQ1:21:H9V1VADXX:2:1112:21127:38421:PC0",
             #                 "HISEQ1:26:HA2RRADXX:1:1113:11601:32503:PC0"]
             # if qname in vis_qnames and other_qname in vis_qnames:
             #     logger.info(f"Found the qname {qname} and other_qname {other_qname} might overlap with each other.")
-                
+
             # Check if the query name already exists in the graph
             if not other_qname in qname_to_node:
                 # Add a new node to the graph
@@ -3098,7 +3098,7 @@ def build_phasing_graph(bam_file,
                             pair_weight += norm_weight
                     else:
                         norm_weight = None
-                    
+
                     # if read1.query_name in vis_qnames and read2.query_name in vis_qnames:
                     #     logger.info(f"Found the qname {get_read_id(read1)} and other_qname {get_read_id(read2)} might overlap with each other at {uncovered_start}, {uncovered_end} with a norm weight {norm_weight}")
 
@@ -3215,7 +3215,7 @@ def assemble_consensus(seq_arrays, qual_arrays, reads):
         # assert seq.size == qual.size, f"Found the hap_vector {list(seq)} ({seq.size}bp) and qual_vector {list(qual)} ({qual.size}bp) have different lengths for read {read} at position {start}"
         # Filter out NaN values
         non_na_values = numba_sum(seq >= -8)
-        
+
         nona_seq = np.empty(non_na_values, dtype=np.int32)
         nona_qual = np.empty(non_na_values, dtype=np.float32)
 
@@ -3225,7 +3225,7 @@ def assemble_consensus(seq_arrays, qual_arrays, reads):
 
         seq = nona_seq
         qual = nona_qual
-        
+
         # Calculate the relative start and end positions of the current sequence
         rel_start = start - start_pos
         rel_end = rel_start + non_na_values
@@ -3474,11 +3474,11 @@ def record_haplotype_rank(haplotype_dict, mean_read_length = 150):
         indel_counts[i] = count_continuous_indel_blocks(seq)
         total_depth += depth
         i += 1
-    
+
     total_depth_col.fill(total_depth)
     return np.column_stack((starts, ends, total_depth_col, hap_ids, hap_depths, var_counts, indel_counts))
-    
-    
+
+
 
 def choose_haplotypes(haplotype_dict,
                       genome_haps,
@@ -3491,7 +3491,7 @@ def choose_haplotypes(haplotype_dict,
     This function is used to choose 2 most likely haplotypes from the haplotype dictionary
     The haplotype dictionary should be in the format of {haplotype_id: (haplotype_seq, reads)}
     '''
-    
+
     for hid, (seq, reads, span) in haplotype_dict.items():
         region_size = seq.size
         region_str = "-".join([str(x) for x in span])
@@ -3502,7 +3502,7 @@ def choose_haplotypes(haplotype_dict,
         varno_cutoff = float(varno_cutoff) * region_size/150
 
     max_varno = read_level_vard_cutoff * region_size
-    
+
     mismap_qnames = set([])
     mismap_hapids = set([])
     varcount_hap_dict = {}
@@ -3521,7 +3521,7 @@ def choose_haplotypes(haplotype_dict,
 
     for hid in mismap_hapids:
         mismap_qnames.update(hap_qname_info[hid])
-        
+
     uniq_varcounts = sorted(list(dict.fromkeys([vc for hid, (seq, reads, span, vc) in haplotype_dict.items()])))
 
     if len(uniq_varcounts) == 1:
@@ -3709,12 +3709,12 @@ def extract_continuous_regions_dict(reads):
 def rank_unique_values(arr):
     # Step 1: Extract unique values and sort them
     unique_values = np.unique(arr)
-    
+
     # Step 2: Create a mapping from each unique value to its rank
     value_to_rank = np.empty(unique_values.shape, dtype=np.int32)
     for i in range(unique_values.size):
         value_to_rank[i] = i + 1  # Ranks start from 1
-    
+
     # Step 3: Apply the mapping to create a new array with the ranks
     ranks = np.empty(arr.shape, dtype=np.int32)
     for i in range(arr.size):
@@ -3807,7 +3807,7 @@ def identify_misalignment_per_region(region,
         # reads = [r for r in overlap_reads if r.query_name in qnames]
         # Sort the reads by their start positions
         continuous_covered_regions = extract_continuous_regions_dict(reads)
-        
+
         for span, sreads in continuous_covered_regions.items():
             if span[0] <= region[1] and span[1] >= region[2]:
                 region_haplotype_info[span] = (sreads, set([qname_to_node[r.query_name] for r in sreads]), subgraph_id, qnames)
@@ -3835,7 +3835,7 @@ def identify_misalignment_per_region(region,
                 return None, total_hapvectors, total_errvectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx
     else:
         overlapping_span = (region[1], region[2])
-    region_str = f"{read.reference_name}:{overlapping_span[0]}-{overlapping_span[1]}"            
+    region_str = f"{read.reference_name}:{overlapping_span[0]}-{overlapping_span[1]}"
 
     final_clusters = {}
     for span, (reads, vert_inds, haplotype_idx, qnames) in region_haplotype_info.items():
@@ -3845,7 +3845,7 @@ def identify_misalignment_per_region(region,
         if len(reads) == 0:
             logger.warning(f"No reads are found for the haplotype across {span}. Skip this haplotype cluster.")
             continue
-        
+
         read_spans = np.empty((len(reads), 2), dtype=np.int32)
         hap_vectors = np.full((len(reads), 500), -10, dtype=np.int32)
         err_vectors = np.full((len(reads), 500), -10, dtype=np.float32)
@@ -4055,19 +4055,19 @@ def refine_inspect_region(var_df, region, varno_cutoff=3, logger = logger):
     chrom, start, end = region
     chrom_df = var_df[var_df["chrom"] == chrom]
     var_df = chrom_df[(chrom_df["start"] <= end) & (chrom_df["end"] >= start)]
-    
+
     refined_regions = set([region])
-    
+
     while var_df.shape[0] >= varno_cutoff:
         # Inspect the first and last variant's distance with their adjacent variant
         first_var_end = var_df.iloc[0, 2]
         second_var_start = var_df.iloc[1, 1]
         first_var_distance = second_var_start - first_var_end
-        
+
         last_var_start = var_df.iloc[-1, 1]
         second_last_var_end = var_df.iloc[-2, 2]
         last_var_distance = last_var_start - second_last_var_end
-        
+
         if first_var_distance > last_var_distance:
             var_df = var_df.iloc[1:, :]
         else:
@@ -4121,7 +4121,7 @@ def refine_inspect_region(var_df, region, varno_cutoff=3, logger = logger):
                 refined_regions.add((chrom, var2_end - 40, var2_end + 40))
         else:
             refined_regions.add((chrom, var1_start - 40, var1_start + 40))
-    
+
     logger.info(f"The input region is {region}. The refined regions are \n{refined_regions}\n")
     return refined_regions
 
@@ -4129,11 +4129,11 @@ def refine_inspect_region(var_df, region, varno_cutoff=3, logger = logger):
 @numba.njit(types.int32[:,:](types.boolean[:]), fastmath=True)
 def extract_true_stretches(bool_array):
     n = len(bool_array)
-    
+
     # Pre-allocate maximum possible space (worst case: every element is True)
     stretches = np.zeros((n, 2), dtype=np.int32)
     count = 0
-    
+
     if n == 0:
         return stretches[:count]
 
@@ -4253,7 +4253,7 @@ def lp_solve_remained_haplotypes(total_record_df,
 
     # Set the output_flag to False to suppress output
     highs.setOptionValue('output_flag', True)
-    
+
     col_costs = - hap_id_coefficients["coefficient"].to_numpy().astype(np.double)
 
     # Add Vars
@@ -4342,18 +4342,18 @@ def contiguous_regions(condition):
 def bin_interval(start, end, window_size=100):
     """
     Bins an interval (start, end) into continuous smaller windows of a specified size.
-    
+
     Parameters:
     - start (int): The start of the interval.
     - end (int): The end of the interval.
     - window_size (int): The size of each window. Default is 100.
-    
+
     Returns:
     - List of tuples: Each tuple represents a window (window_start, window_end).
     """
     windows = np.empty((end - start, 2), dtype = np.int32)
     current_start = start
-    
+
     region_count = 0
     while current_start < end:
         current_end = min(current_start + window_size, end)
@@ -4362,7 +4362,7 @@ def bin_interval(start, end, window_size=100):
         windows[region_count, 1] = current_end
         region_count += 1
         current_start += window_size
-    
+
     return windows[:region_count]
 
 
@@ -4388,7 +4388,7 @@ def split_var_regions(var_df, delimiter_size = 1500):
             if i == chrom_df.shape[0] - 1:
                 end = chrom_df.iloc[i, 2]
                 splitted_intervals.add((start, end))
-        
+
         total_binned_intervals = np.empty((chrom_df["end"].max() - chrom_df["start"].min(), 2), dtype = np.int32)
         bin_count = 0
         for interval in splitted_intervals:
@@ -4405,10 +4405,10 @@ def calulate_coefficient_per_group(record_df, logger=logger):
     # Generate a rank for haplotypes
     record_df["rank"] = rank_unique_values(record_df["var_count"].to_numpy() * 50 + record_df["indel_count"].to_numpy())
     # logger.info(f"Before calculating the coefficient for this region, the dataframe looks like :\n{record_df[:10].to_string(index=False)}\n")
-    record_df["coefficient"] = calculate_coefficient(record_df.loc[:, ["start", 
-                                                                       "end", 
-                                                                       "total_depth", 
-                                                                       "hap_id", 
+    record_df["coefficient"] = calculate_coefficient(record_df.loc[:, ["start",
+                                                                       "end",
+                                                                       "total_depth",
+                                                                       "hap_id",
                                                                        "hap_depth",
                                                                        "var_count",
                                                                        "indel_count",
@@ -4417,7 +4417,7 @@ def calulate_coefficient_per_group(record_df, logger=logger):
     return record_df
 
 
-def sweep_region_inspection(input_bam, 
+def sweep_region_inspection(input_bam,
                             output_bed = None,
                             depth_cutoff = 5,
                             window_size = 120,
@@ -4439,7 +4439,7 @@ def sweep_region_inspection(input_bam,
 
 
 def inspect_by_haplotypes(input_bam,
-                          hap_qname_info, 
+                          hap_qname_info,
                           qname_hap_info,
                           bam_ncls,
                           intrin_bam_ncls,
@@ -4467,17 +4467,17 @@ def inspect_by_haplotypes(input_bam,
     hsid_seq_dict = {}
     phased_graph_qname_vprop = phased_graph.vertex_properties['qname']
     logger.info("All the haplotype IDs are :\n{}\n".format(list(hap_qname_info.keys())))
-    
+
     for hid, qnames in hap_qname_info.items():
         logger.info(f"The haplotype {hid} contains {len(qnames)} read pairs in total.")
-        
+
         qname_indices = [qname_idx_dict[qname] for qname in qnames]
         reads = [read for qname_idx in qname_indices for read in read_dict[qname_idx]]
         conregion_dict = extract_continuous_regions_dict(reads)
 
         if len(qnames) < 2:
             scatter_hid_dict[hid] = True
-        
+
         high_vard = False
         mid_vard_dict = {}
         # Generate consensus sequence for each continuously covered region
@@ -4509,7 +4509,7 @@ def inspect_by_haplotypes(input_bam,
                     total_err_vectors[rid] = err_vector
 
                 err_vectors[i, :err_vector.size] = err_vector
-            
+
             consensus_sequence = assemble_consensus(hap_vectors, err_vectors, read_spans)
             # logger.info(f"The consensus sequence for the haplotype {hid} across {span} is \n{consensus_sequence.tolist()}\nThe input read_spans are \n{pretty_print_matrix(read_spans)}\nThe input hap_vectors are \n{pretty_print_matrix(hap_vectors)}\nThe input err_vectors are \n{pretty_print_matrix(err_vectors)}\n")
             extreme_vard = judge_misalignment_by_extreme_vardensity(consensus_sequence)
@@ -4580,7 +4580,7 @@ def inspect_by_haplotypes(input_bam,
             # logger.info(f"For haplotype {hid}, comparing to mapping against the genomic sequence {genomic_seq_qname}. Variant count ratio is {similarity} and variant count delta is {delta}.")
             similarity_score = delta + similarity
             max_similarity = max(max_similarity, similarity_score)
-        
+
         final_ref_seq_similarities[hid] = max_similarity if max_similarity > 0 else 0
 
     ref_genome_similarities = final_ref_seq_similarities
@@ -4612,8 +4612,8 @@ def inspect_by_haplotypes(input_bam,
                                                                                                                                                         logger = logger )
         if record_df is not None:
             record_dfs.append(record_df)
-    
-    failed_lp = False                 
+
+    failed_lp = False
     if len(record_dfs) > 0:
         total_record_df = pd.concat(record_dfs)
         record_hapids = set(total_record_df["hap_id"].unique())
@@ -4642,12 +4642,12 @@ def inspect_by_haplotypes(input_bam,
         if not failed_lp:
             total_record_df.loc[total_record_df["hap_var_count"] == 0, "coefficient"] = -1
             total_record_df = total_record_df.groupby(["chrom", "start", "end"]).filter(lambda x: len(x) > 5)
-            
+
             if total_record_df.shape[0] == 0:
                 failed_lp = True
     else:
-        failed_lp = True  
-    
+        failed_lp = True
+
     if not failed_lp:
         by_region = total_record_df.groupby(["chrom", "start", "end"], group_keys=False)
         total_record_df = by_region.apply(calulate_coefficient_per_group, logger = logger).reset_index(drop=True)
@@ -4669,7 +4669,7 @@ def inspect_by_haplotypes(input_bam,
         logger.info(f"Here is the qnames seemed mismapped: \n{mismap_qnames}\nAnd the mismap haplotype IDs: \n{mismap_hids}\n")
         logger.info(f"Here is the qnames seemed correctly mapped: \n{correct_map_qnames}\nAnd the correct map haplotype IDs: \n{correct_map_hids}\n")
         return correct_map_qnames, mismap_qnames
-    
+
     if failed_lp:
         mismap_hids = set([hid for hid in hid_extreme_vard if hid_extreme_vard[hid]])
         mismap_hids.update(set([hid for hid in scatter_hid_dict if scatter_hid_dict[hid] and hid_var_count[hid] > 1]))
@@ -4737,7 +4737,7 @@ def main_function(bam,
                 mv {tmp_output_bam}.bai {merged_intrin_bam}.bai"
         executeCmd(cmd, logger = logger)
         logger.info(f"Successfully merged the intrinsic bam {intrinsic_bam} with the raw intrinsic bam {raw_intrinsic_bam} to {merged_intrin_bam}.\n")
-        
+
 
     bam_ncls = migrate_bam_to_ncls(bam,
                                    mapq_filter = mapq_cutoff,
@@ -4749,32 +4749,32 @@ def main_function(bam,
     bam_ncls = bam_ncls[:-1]
     ncls_dict, read_dict, qname_dict, qname_idx_dict = bam_ncls
     logger.info(f"Successfully migrated the BAM file {bam} to NCLS format\n\n")
-    intrin_bam_ncls = migrate_bam_to_ncls(merged_intrin_bam, 
-                                          mapq_filter = 0, 
-                                          basequal_median_filter = 0, 
-                                          paired = False, 
+    intrin_bam_ncls = migrate_bam_to_ncls(merged_intrin_bam,
+                                          mapq_filter = 0,
+                                          basequal_median_filter = 0,
+                                          paired = False,
                                           logger=logger)
     intrin_bam_ncls = intrin_bam_ncls[:-1]
     logger.info(f"Successfully migrated the intrinsic BAM file {intrinsic_bam} to NCLS format\n")
     logger.info(f"Containing {len(intrin_bam_ncls[1])} reads in total.\n\n")
     bam_graph = bam.replace(".bam", ".phased.graphml")
-    
+
     mean_read_length = calculate_mean_read_length(bam)
     read_level_vard_cutoff = max_varno/mean_read_length
     logger.info(f"The read level variant density cutoff is {read_level_vard_cutoff}\n")
 
     # Create the phasing (local assembly) graph
-    phased_graph, weight_matrix, qname_to_node, total_readhap_vector = build_phasing_graph(bam, 
-                                                                                           *bam_ncls, 
-                                                                                           mean_read_length, 
-                                                                                           edge_weight_cutoff = edge_weight_cutoff, 
+    phased_graph, weight_matrix, qname_to_node, total_readhap_vector = build_phasing_graph(bam,
+                                                                                           *bam_ncls,
+                                                                                           mean_read_length,
+                                                                                           edge_weight_cutoff = edge_weight_cutoff,
                                                                                            logger = logger)
     if phased_graph is None:
         return None
 
-    # vis_qnames = ["HISEQ1:21:H9V1VADXX:1:1207:20778:56848:PC23", 
+    # vis_qnames = ["HISEQ1:21:H9V1VADXX:1:1207:20778:56848:PC23",
     #               "HISEQ1:21:H9V1VADXX:1:1201:6122:57532:PC23"]
-    
+
     # vis_qids = []
     # for vis_qname in vis_qnames:
     #     vis_qid = qname_to_node.get(vis_qname, -1)
@@ -4805,19 +4805,19 @@ def main_function(bam,
                                                     weight_matrix,
                                                     ew_cutoff = edge_weight_cutoff,
                                                     logger = logger)
-    
+
     total_cliques = list(total_cliques)
-    
+
     # clique_sep_component_idx = 0
     qname_hap_info = defaultdict(int)
     qname_hap_info = find_components_inside_filtered_cliques( total_cliques,
                                                               phased_graph,
                                                               qname_hap_info,
-                                                              weight_matrix, 
+                                                              weight_matrix,
                                                               edge_weight_cutoff,
                                                               logger = logger )
     gc.collect()
-    
+
     logger.info(f"The final components are {qname_hap_info}")
     hap_qname_info = defaultdict(set)
     for vid, hid in qname_hap_info.items():
@@ -4841,9 +4841,9 @@ def main_function(bam,
     total_genomic_haps = {}
     total_readerr_vector = {}
     compare_haplotype_meta_tab = bam.replace(".bam", ".haplotype_meta.tsv")
-    
+
     correct_qnames, mismap_qnames = inspect_by_haplotypes(bam,
-                                                          hap_qname_info, 
+                                                          hap_qname_info,
                                                           qname_hap_info,
                                                           bam_ncls,
                                                           intrin_bam_ncls,
