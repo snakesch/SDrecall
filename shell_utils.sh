@@ -1,27 +1,131 @@
+#!/usr/bin/env bash
+self=$(realpath ${BASH_SOURCE[0]})
+
+
+function log() {
+    local msg="$1"
+    local script_name="${BASH_SOURCE[1]##*/}"
+    local func_name="${FUNCNAME[1]}"
+    local line_num="${BASH_LINENO[0]}"
+    local timestamp=$(date +"%Y-%m-%d %H:%M:%S")
+    >&2 echo "[$timestamp] [Script $script_name: Line $line_num] [Func: $func_name] $msg"
+}
+
+
+function silent_remove_tmps {
+    local -a targets=($(echo "$@"))
+
+    for target in "${targets[@]}"; do
+        if [[ -f ${target} ]]; then
+            rm -f ${target} || log "In function ${FUNCNAME}: File ${target} already deleted"
+        elif [[ -d ${target} ]]; then
+            if [[ ${target} != "/paedyl01/disk1/yangyxt/test_tmp/" ]]; then
+                rm -rf ${target} || log "In function ${FUNCNAME}: Folder ${target} already deleted"
+            fi
+        fi
+    done
+}
+
+
+function echo_line_no {
+    grep -n "$1" $0 | sed "s/echo_line_no//"
+    # grep the line(s) containing input $1 with line numbers
+    # replace the function name with nothing
+}
+
+
+function randomID {
+    dd bs=24 count=1 status=none if=/dev/urandom | base64 | tr +/ _
+}
+
+
+function display_vcf {
+    local input_vcf=${1}
+    local head_lines=${2}
+    local tmp_tab="/paedyl01/disk1/yangyxt/test_tmp/$(randomID).tsv"
+
+    if [[ -z ${head_lines} ]]; then
+        local head_lines=10
+    else
+        local head_lines=$((head_lines + 1))
+    fi
+
+    bcftools view -H ${input_vcf} | tail -n +${head_lines} > ${tmp_tab} && \
+    display_table ${tmp_tab} && \
+    silent_remove_tmps ${tmp_tab}
+}
+
+
+function display_table {
+    if [[ -z $2 ]]; then local rows=10; else local rows=${2}; fi
+    if [[ -z $3 ]]; then local delimiter="\t"; else local delimiter=${3}; fi
+
+    if [[ ${delimiter} == "\t" ]]; then
+        local del_arg=""
+    else
+        local del_arg="-d ${delimiter}"
+    fi
+
+    if [[ ${1} =~ \.vcf$ ]] || \
+       [[ ${1} =~ \.vcf\.gz$ ]] || \
+       [[ ${1} =~ \.bcf$ ]]; then
+        log "Input an VCF file ${1}. Using bcftools to extract the records and view the content of first ${rows} lines."
+        display_vcf ${1} ${rows}
+        return;
+    fi
+
+    local tsv_pretty=/home/yangyxt/software/tsv-utils-v2.2.0_linux-x86_64_ldc2/bin/tsv-pretty
+    local row_num=$(tail -n +2 ${1} | wc -l)
+    local col_num=$(head -1 ${1} | awk '{print NF;}')
+
+    if [[ ${1} =~ \.gz$ ]]; then
+        local tmp_tag=$(randomID)
+        zcat ${1} > ${1/.gz/}.${tmp_tag} && \
+        local input=${1/.gz/}.${tmp_tag}
+    else
+        local input=${1}
+    fi
+
+
+    >&2 echo "$(timestamp): ${1} has ${row_num} rows and ${col_num} columns. It looks like:"
+    if [[ ${rows} -le 0 ]]; then
+        ${tsv_pretty} -u ${del_arg} -m 5000 -l 200 -a ${input} >&2 2> /dev/null
+    else
+        ${tsv_pretty} -u ${del_arg} -m 5000 -l 200 -a ${input} | \
+        head -n ${rows} - >&2 2> /dev/null || >&2 echo ""
+    fi
+
+    if [[ ${input} != "${1}" ]]; then
+        silent_remove_tmps ${input}
+    fi
+}
+
+
+
 function check_bam_validity {
     local input=${1}
     local expected_lines=${2}
 
-    # >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): Start to run check_bam_validity function"
+    # log "Start to run check_bam_validity function"
     if [[ -z ${expected_lines} ]]; then local expected_lines=1; fi
 
     if [[ ! -f ${input} ]] && [[ ! -L ${input} ]] ; then
-        >&2 echo "$(timestamp): In function ${FUNCNAME}, found ${input} not even exist."
+        log "found ${input} not even exist."
         return 1
     fi
-    # >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): Now try to check qname format of ${input}."
+    # log "Now try to check qname format of ${input}."
 
     local line_num=$( samtools view -c ${input} 2>&1 | awk '{print;}' - )
 
     if [[ ${line_num} -lt ${expected_lines} ]]; then
-        >&2 echo "$(timestamp): In function ${FUNCNAME}, found ${input} only has ${line_num} lines where we expect it to have ${expected_lines} lines."
+        log "found ${input} only has ${line_num} lines where we expect it to have ${expected_lines} lines."
         return 1
     fi
 
     if check_bam_qname_format ${input}; then
-        >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): ${input} has proper query name format."
+        log "${input} has proper query name format."
     else
-        >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): ${input} has inappropriate query name format."
+        log "${input} has inappropriate query name format."
         return 1
     fi
 
@@ -29,85 +133,83 @@ function check_bam_validity {
     check_bam_format ${input}
 }
 
+
+
+function quick_check_bam_validity {
+    local input=${1}
+    samtools quickcheck -v ${input} && return || return 1
+}
+
+
 function check_bam_format {
     local input=${1}
-    local gatk="bash /paedyl01/disk1/yangyxt/ngs_scripts/common_bash_utils.sh gatk_wrapper"
+
 
     if quick_check_bam_validity ${input}; then
-        >&2 echo "In function ${FUNCNAME}: $(timestamp): ${input} format passed quick check by samtools"
-        return;
+        log "${input} format passed quick check by samtools"
+        return
+	else
+		log "${input} format failed quick check by samtools"
+		return 1
     fi
-
-    local tmp_check_log=${input::-4}.$(randomID).check
-    >&2 echo "In function ${FUNCNAME}: $(timestamp): ${input} format check log is ${tmp_check_log}"
-    ${gatk} --java-options "-Xmx20G" \
-    ValidateSamFile \
-    -I ${input} \
-    --INDEX_VALIDATION_STRINGENCY EXHAUSTIVE \
-    -MO 1000000 > ${tmp_check_log} 2>&1 || \
-    >&2 echo "In function ${FUNCNAME}: $(timestamp): Seems some error format in ${input}, check log is ${tmp_check_log}"
-
-    local -a err_types=($(awk '$1 ~ /^ERROR::/{print $1;}' ${tmp_check_log} | sort - | uniq - | awk -F ':' '{printf "%s ",$3;}'))
-    if [[ ${#err_types[@]} -eq 0 ]]; then
-        >&2 echo "Line "${LINENO}": In function "${FUNCNAME}: "$(timestamp): No format errors detected in ${input_bam}"
-    else
-        for err in "${err_types[@]}"; do
-            if [[ ! ${err} =~ "INVALID_INDEX_FILE_POINTER" ]] && [[ ! ${err} =~ "MATE_NOT_FOUND" ]] && [[ ! ${err} =~ "INVALID_PLATFORM_VALUE" ]] && [[ ! ${err} =~ "MISSING_READ_GROUP" ]]; then
-                >&2 echo "In function ${FUNCNAME}: $(timestamp): ${input} is corrupted and cannot be simply fixed."
-                return 1
-            elif [[ ${err} =~ "INVALID_INDEX_FILE_POINTER" ]]; then
-                >&2 echo "In function ${FUNCNAME}: $(timestamp): ${input} has corrupted index file, re-indexing it."
-                #First delete the old index file
-                rm -f ${input::-1}i || >&2 echo "In function ${FUNCNAME}: $(timestamp): Index file ${input::-1}i already deleted."
-                rm -f ${input}.bai || >&2 echo "In function ${FUNCNAME}: $(timestamp): Index file ${input}.bai already deleted."
-                samtools index ${input}
-            elif [[ ${err} =~ "MATE_NOT_FOUND" ]]; then
-                >&2 echo "In function ${FUNCNAME}: $(timestamp): ${input} has some singleton reads. Just leave them there."
-            elif [[ ${err} =~ "INVALID_PLATFORM_VALUE" ]]; then
-                >&2 echo "In function ${FUNCNAME}: $(timestamp): ${input} might be a simulated golden bam file, which does not have a valid PL value. Let it pass. The error message is:"
-                >&2 mawk '$1 ~ /^ERROR::INVALID_PLATFORM_VALUE/{print $0;}' ${tmp_check_log}
-            elif [[ ${err} =~ "MISSING_READ_GROUP" ]]; then
-                >&2 echo "In function ${FUNCNAME}: $(timestamp): ${input} does not have the read group line. Just ignore."
-            fi
-        done
-        # IF the for loop above is executed without return 1, then no other error types are identified. return
-    fi
-    rm ${tmp_check_log} 2> /dev/null || >&2 echo "${tmp_check_log} already deleted"
 }
+
+
+
+function check_bam_qname_format {
+    local input_bam=${1}
+    local threads=${2}
+
+    if [[ -z ${threads} ]]; then local threads=1; fi
+
+    if [[ -L ${input_bam} ]]; then
+        local source_bam=$(readlink -f ${input_bam})
+        log "${input_bam} is a symbolic link, the source file is ${source_bam}"
+    fi
+
+    local issue_lines=$(samtools view ${input_bam} 2>&1 | head -20 | awk -F '\t' '$1 ~ /\/[1-2]$/{print;}' | wc -l)
+    if [[ ${issue_lines} -eq 0 ]]; then
+        log "No malformed lines found in ${input_bam}."
+    else
+        log "The bam file ${input_bam} contains problematic query name format: there are hanging /1 or /2 tag at the end of query names."
+        return 1
+    fi
+}
+
 
 function check_bam_index {
     local bam=${1}
-    >&2 echo "Line ${LINENO}: In function ${FUNCNAME}: $(timestamp): Input BAM files is ${bam}"
+    log "Input BAM files is ${bam}"
 
     if [[ -L ${bam} ]]; then
         local source_bam=$(readlink -f ${bam})
-        >&2 echo "Line ${LINENO}: In function ${FUNCNAME}: $(timestamp): Input BAM files is a symbolic link: ${bam}"
+        log "Input BAM files is a symbolic link: ${bam}"
         if [[ -L ${bam}.bai ]] && [[ ${bam}.bai -nt ${bam} ]]; then
-            >&2 echo "Line ${LINENO}: In function ${FUNCNAME}: $(timestamp): Input BAM files index is a symbolic link: ${bam}.bai and its updated"
+            log "Input BAM files index is a symbolic link: ${bam}.bai and its updated"
         else
             samtools index ${bam} && \
             ln -f -s ${source_bam}.bai ${bam}.bai || { \
-            >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): Indexing ${bam} failed. Need to sort it first." && \
+            log "Indexing ${bam} failed. Need to sort it first." && \
             samtools sort -O bam -o ${source_bam/.bam/.tmp.bam} ${source_bam} && \
             samtools index ${source_bam} && \
             ln -f -s ${source_bam}.bai ${bam}.bai || { \
-            >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): Sorting source bam ${source_bam} failed. Quit with error."; \
+            log "Sorting source bam ${source_bam} failed. Quit with error."; \
             return 1; } }
         fi
     elif [[ ! -f ${bam}.bai ]] && [[ ! -f ${bam::-1}i ]]; then
-        >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): Index file for ${bam} not existed."
+        log "Index file for ${bam} not existed."
         samtools index ${bam} || \
-        >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): Indexing ${bam} failed. Need to sort it first."
+        log "Indexing ${bam} failed. Need to sort it first."
     elif [[ -f ${bam}.bai ]] && [[ ${bam} -nt ${bam}.bai ]]; then
-        >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): Index file for ${bam} is older than ${bam} itself. Reindexing"
+        log "Index file for ${bam} is older than ${bam} itself. Reindexing"
         samtools index ${bam} && ls -lh ${bam}* || \
-        >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): Indexing ${bam} failed. Need to sort it first."
+        log "Indexing ${bam} failed. Need to sort it first."
     elif [[ -f ${bam::-4}.bai ]] && [[ ${bam} -nt ${bam::-4}.bai ]]; then
-        >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): Index file for ${bam} is older than ${bam} itself. Reindexing"
+        log "Index file for ${bam} is older than ${bam} itself. Reindexing"
         samtools index ${bam} || \
-        >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): Indexing ${bam} failed. Need to sort it first."
+        log "Indexing ${bam} failed. Need to sort it first."
     else
-        >&2 echo "Line "${LINENO}": In function ${FUNCNAME}: $(timestamp): Index file for ${bam} is valid."
+        log "Index file for ${bam} is valid."
     fi
 }
 
@@ -123,6 +225,7 @@ function modify_bam_sq_lines () {
     ls -lht ${output_header}
 }
 
+
 function generate_sq_lines () {
     local ref_fasta=${1}
 
@@ -135,6 +238,7 @@ function generate_sq_lines () {
 
     awk 'BEGIN{OFS="\t"} {printf "@SQ\tSN:%s\tLN:%s\n", $1, $2;}' ${ref_fasta}.fai
 }
+
 
 function modify_masked_genome_coords () {
      local mid_align=${1}
@@ -239,4 +343,12 @@ function independent_minimap2_masked () {
          return 1;
      fi
  }
+
+
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    echo "This script is being run directly."
+	"$@"
+else
+    echo "This script is being sourced."
+fi
 
