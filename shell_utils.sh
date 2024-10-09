@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 self=$(realpath ${BASH_SOURCE[0]})
 
+function timestamp() {
+	echo $(date +"%Y-%m-%d %H:%M:%S")
+}
 
 function log() {
     local msg="$1"
@@ -11,28 +14,17 @@ function log() {
     >&2 echo "[$timestamp] [Script $script_name: Line $line_num] [Func: $func_name] $msg"
 }
 
-
 function silent_remove_tmps {
     local -a targets=($(echo "$@"))
 
     for target in "${targets[@]}"; do
-        if [[ -f ${target} ]]; then
-            rm -f ${target} || log "In function ${FUNCNAME}: File ${target} already deleted"
-        elif [[ -d ${target} ]]; then
-            if [[ ${target} != "/paedyl01/disk1/yangyxt/test_tmp/" ]]; then
-                rm -rf ${target} || log "In function ${FUNCNAME}: Folder ${target} already deleted"
-            fi
-        fi
+    	rm -rf ${target}
     done
 }
 
-
 function echo_line_no {
     grep -n "$1" $0 | sed "s/echo_line_no//"
-    # grep the line(s) containing input $1 with line numbers
-    # replace the function name with nothing
 }
-
 
 function randomID {
     dd bs=24 count=1 status=none if=/dev/urandom | base64 | tr +/ _
@@ -42,7 +34,7 @@ function randomID {
 function display_vcf {
     local input_vcf=${1}
     local head_lines=${2}
-    local tmp_tab="/paedyl01/disk1/yangyxt/test_tmp/$(randomID).tsv"
+    local tmp_tab="/tmp/$(randomID).tsv"
 
     if [[ -z ${head_lines} ]]; then
         local head_lines=10
@@ -73,7 +65,8 @@ function display_table {
         display_vcf ${1} ${rows}
         return;
     fi
-
+    
+    ## Another dependency?
     local tsv_pretty=/home/yangyxt/software/tsv-utils-v2.2.0_linux-x86_64_ldc2/bin/tsv-pretty
     local row_num=$(tail -n +2 ${1} | wc -l)
     local col_num=$(head -1 ${1} | awk '{print NF;}')
@@ -99,7 +92,6 @@ function display_table {
         silent_remove_tmps ${input}
     fi
 }
-
 
 
 function check_bam_validity {
@@ -248,7 +240,7 @@ function modify_masked_genome_coords () {
      if [[ -z ${pc_index} ]]; then
          local pc_index="PC1"
      fi
-
+     ## Can we use fai index instead?
      if [[ -z ${ref_contig_sizes} ]]; then
          local ref_contig_sizes="/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.contigsize.genome"
      fi
@@ -301,7 +293,7 @@ function independent_minimap2_masked () {
          esac
      done
 
-     if [[ -z ${ref_genome} ]]; then local ref_genome=/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta; fi
+     if [[ -z ${ref_genome} ]]; then {echo >&2 "No reference genome provided. Exit. " && exit 1}; fi
      if [[ -z ${samp_ID} ]]; then local samp_ID=$(basename ${forward_reads} | awk '{gsub(/_[a-z]*1\.f[ast]*q[\.gz]*$/, "", $0); printf "%s", $0;}'); fi
      if [[ -z ${output_align} ]]; then local output_align=${samp_ID}.bam; fi
      if [[ -z ${expected_lines} ]]; then local expected_lines=1; fi
@@ -332,7 +324,7 @@ function independent_minimap2_masked () {
      ${masked_genome/.fasta/.mmi} ${forward_reads} ${reverse_reads}" && \
      minimap2 -ax ${mode} --eqx --MD -F 1000 -t ${threads} -R "@RG\tID:${samp_ID}\tLB:SureSelectXT\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}" \
      ${masked_genome/.fasta/.mmi} ${forward_reads} ${reverse_reads} > ${mid_align} && \
-     masked_genome_coords ${mid_align} ${ref_contig_sizes} ${pc_index} | \
+     modify_masked_genome_coords ${mid_align} ${ref_contig_sizes} ${pc_index} | \
      samtools view -S -b - | samtools sort -O bam -o ${output_align} && \
      samtools index ${output_align}
 
@@ -343,12 +335,3 @@ function independent_minimap2_masked () {
          return 1;
      fi
  }
-
-
-if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    echo "This script is being run directly."
-	"$@"
-else
-    echo "This script is being sourced."
-fi
-
