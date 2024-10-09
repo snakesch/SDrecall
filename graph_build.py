@@ -27,7 +27,7 @@ class HashableGraph:
 
     def __getattr__(self, name):
         return getattr(self.graph, name)
-    
+
     def to_graph(self):
         return self.graph
 
@@ -39,7 +39,7 @@ def graph_to_sorted_bedtool(G):
     bedtool = BedTool("\n".join(bed_format), from_string=True).sort()
 
     return bedtool
-    
+
 def compose_PO_graph_per_chr(args):
     chrom, sd_data, graph_file_path = args
     sd_data_chr = sd_data.loc[(sd_data["chr_1"] == chrom) | (sd_data["chr_2"] == chrom), sd_data.columns.tolist()[:8]]
@@ -51,7 +51,7 @@ def compose_PO_graph_per_chr(args):
     if directed_graph_path == graph_file_path:
         logger.error("The directed graph path is the same as the graph path, please check the input graph path.")
         sys.exit(1)
-    
+
     ## - Properties of PO graph - ##
     ## 1. Potential PO regions are tracked by a growing IntervalTree
     ## 2. PO edges point from large intervals to small intervals
@@ -62,10 +62,10 @@ def compose_PO_graph_per_chr(args):
         directed_overlap_graph.add_node((row["chr_2"], row["start_2"], row["end_2"], row["strand2"]), size = row["end_2"] - row["start_2"])
         interval_1 = Interval(row["start_1"], row["end_1"], (row["chr_1"], row["start_1"], row["end_1"], row["strand1"]))
         interval_2 = Interval(row["start_2"], row["end_2"], (row["chr_2"], row["start_2"], row["end_2"], row["strand2"]))
-        
+
         for interval in [interval_1, interval_2]:
             ## Check if target intervals are located on chrom
-            if chrom == interval.data[0]: 
+            if chrom == interval.data[0]:
                 sd_interval_tree.add(interval)
             ## o_interval represents an interval with overlap with 'interval'
             for o_interval in sd_interval_tree.overlap(interval.begin, interval.end):
@@ -88,7 +88,8 @@ def compose_PO_graph_per_chr(args):
     gc.collect()
     return (chrom, directed_graph_path)
 
-def create_multiplex_graph(sd_data, graph_filepath=None, threads = 10, target_bed = ""):
+
+def create_multiplex_graph(sd_data, graph_filepath=None, threads = 10):
     '''
     Inputs:
     sd_data: refined and filtered SD map from previous steps (pd.DataFrame)
@@ -113,24 +114,24 @@ def create_multiplex_graph(sd_data, graph_filepath=None, threads = 10, target_be
                    (row["chr_2"], row["start_2"], row["end_2"], row["strand2"]),
                     type = "segmental_duplication", weight=float(row["mismatch_rate"]))
     logger.debug(f"Constructed the initial graph with {G.number_of_nodes()} nodes and {G.number_of_edges()} SD edges.")
-    
+
     with Pool(threads) as pool:
         # Compose a PO graph for each chromosome
-        partitions_by_chr = dict(pool.imap_unordered(compose_PO_graph_per_chr, 
+        partitions_by_chr = dict(pool.imap_unordered(compose_PO_graph_per_chr,
                                                     ((chrom, sd_data, graph_filepath) for chrom in all_chrs)))
 
     directed_graphs = [read_graphml(dg_path) for dg_path in partitions_by_chr.values()]  # k is node and v is the directed graph path
-    
+
     ## Clean up GraphML files if not in debugging
     if logger.level != logging.DEBUG:
         for dg_path in partitions_by_chr.values():
             os.remove(dg_path)
-    
+
     # Merge the directed PO graphs
     merged_PO_graph = nx.DiGraph()
     for dg in directed_graphs:
         merged_PO_graph = nx.compose(merged_PO_graph, dg)
-        
+
     # Draw SD edges between SD nodes or add SD as attribute if PO edge already exists
     for u, v, d in G.edges(data=True):
         if d.get("type", None) == "segmental_duplication":
@@ -141,14 +142,14 @@ def create_multiplex_graph(sd_data, graph_filepath=None, threads = 10, target_be
                     merged_PO_graph[u][v]["type"] = "segmental_duplication"
             else:
                 logger.warning("These two overlapping genomic regions are not found in the overlap graph: \n{}\n{}".format(u, v))
-        
+
     sd_edge_count = [e.get("type", None) for _, _, e in merged_PO_graph.edges(data=True)].count("segmental_duplication")
     logger.info(f"Merged SD + PO graph contains {merged_PO_graph.number_of_nodes()} nodes and {merged_PO_graph.number_of_edges()} edges. ({sd_edge_count} SD edges)")
 
-    if logger.level == logging.DEBUG and graph_filepath is not None:    
+    if logger.level == logging.DEBUG and graph_filepath is not None:
         nx.write_graphml(merged_PO_graph, graph_filepath)
         logger.debug("Merged SD + PO graph is saved as {}".format(graph_filepath))
-        
+
     return merged_PO_graph
 
 def read_graphml(graph_path):
@@ -160,5 +161,5 @@ def read_graphml(graph_path):
 
     for node1, node2, data in literal_graph.edges(data=True):
         graph.add_edge(string_to_tuple(node1), string_to_tuple(node2), **data)
-        
+
     return graph

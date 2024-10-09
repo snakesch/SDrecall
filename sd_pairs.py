@@ -114,7 +114,7 @@ def is_umbrella_pair(pair1, pair2, coverage_threshold, overlap1, overlap2,
     """
     Basically the input pairs follow the rules below:
     the first interval in both pairs are overlapping with the same target region interval.
-    We want to identify whether the pair of SD1 in pair1 is almost enclosing the pair of SDs in pair2.
+    We want to identify whether the pair of SDs in pair1 is almost enclosing the pair of SDs in pair2.
     If pair1 is an umbrella pair of pair2, then pair1 might be redundant to be considered for further analysis.
 
     Args:
