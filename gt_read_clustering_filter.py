@@ -146,22 +146,6 @@ def numba_max(data, index_mask=None):
     else:
         return np.max(data)
 
-
-@numba.njit(types.Tuple((types.int32, types.float32))(types.float32[:], types.boolean[:]), fastmath=True)
-def numba_max_idx(data, index_mask = None):
-    '''
-    Deprecated
-    '''
-    if index_mask is not None:
-        data[~index_mask] = -np.inf  # Cannot allow this, this is modifying the original value
-        max_indx = np.argmax(data)
-        return max_indx, data[max_indx]
-    else:
-        max_indx = np.argmax(data)
-        return max_indx, data[max_indx]
-
-
-
 @numba.njit(types.Tuple((types.int32, types.float32))(types.float32[:], types.boolean[:]), fastmath=True)
 def numba_max_idx_mem(data, index_mask=None):
     max_val = -np.inf
@@ -436,12 +420,6 @@ def migrate_bam_to_ncls(bam_file,
     n = 0
     noisy_qnames = set([])
 
-    # vis_qnames = ["HISEQ1:63:HB65FADXX:2:1214:20219:7107:PC0",
-    #               "HISEQ1:66:HB7AUADXX:1:1114:16240:97312:PC357",
-    #               "HISEQ1:59:HB66DADXX:1:2109:13800:52860:PC0",
-    #               "HISEQ1:63:HB65FADXX:1:1114:2865:3570:PC357"]
-
-
     for read in bam:
         if read.query_name in noisy_qnames:
             continue
@@ -480,10 +458,6 @@ def migrate_bam_to_ncls(bam_file,
                     noisy_qnames.add(read.query_name)
                     continue
 
-        # if paired and not read.is_proper_pair:
-        #     noisy_qnames.add(read.query_name)
-        #     continue
-
         chrom = read.reference_name
         start = read.reference_start
         end = read.reference_end
@@ -506,9 +480,6 @@ def migrate_bam_to_ncls(bam_file,
         else:
             updated_interval = (int(start), int(end))
             qname_interval_dict[chrom][qname_idx] = updated_interval
-
-        # if qname in vis_qnames:
-        #     logger.info(f"The qname {qname} is from {chrom}:{updated_interval}")
 
     bam.close()
 
@@ -534,7 +505,6 @@ def get_overlapping_reads(ncls_dict, read_dict, qname_dict, chrom, start, end):
 
     # Perform an overlap query on the NCLS tree
     _, overlapping_read_qnames = ncls_dict[chrom].all_overlaps_both(np.array([start]), np.array([end]), np.array([0]))
-    # overlapping_read_qnames = ncls_dict[chrom].find_overlap(start, end)
     overlapping_reads = [read for qname_idx in list(dict.fromkeys(overlapping_read_qnames)) for read in read_dict[qname_idx] if read.reference_start < end and read.reference_end > start]
 
     return overlapping_reads
@@ -554,7 +524,6 @@ def get_overlapping_qnames(ncls_dict, read_dict, qname_dict, chrom, start, end):
         return []
 
     _, overlapping_read_qnames = ncls_dict[chrom].all_overlaps_both(np.array([start]), np.array([end]), np.array([0]))
-    # overlapping_read_qnames = ncls_dict[chrom].find_overlap(start, end)
     overlapping_qnames = [qname_dict[qname_idx] for qname_idx in dict.fromkeys(overlapping_read_qnames)]
 
     return overlapping_qnames
@@ -867,15 +836,6 @@ def count_local_var_density(array, padding_size=25, var_threshold=3):
         contain_indel[i] = numba_sum(iter_is_indel) > 0
         var_count = numba_sum(iter_arr != 1)
         density = var_count / iter_arr.size
-        # if var_count <= var_threshold:
-        #     density = var_count / iter_arr.size
-        # else:
-        #     iter_is_var = is_var[start:end]
-        #     first_true_idx = np.argmax(iter_is_var)
-        #     last_true_idx = np.argmax(iter_is_var[::-1])
-        #     last_true_idx = iter_is_var.size - last_true_idx - 1
-        #     iter_arr_size = last_true_idx - first_true_idx + 1
-        #     density = var_count / iter_arr_size
         density_arr[i] = density
     return density_arr, contain_indel
 
@@ -991,19 +951,7 @@ def ref_genome_similarity(query_read_vector,
     # Calculate the Manhattan distance between the query read vector and each genomic haplotype
     alt_var_size = count_continuous_blocks(genomic_hap_vector != query_read_vector)
     var_size = count_var(query_read_vector)
-    # ref_man_distance = numba_sum(np.abs(query_read_vector - ref_read_vector))
 
-    # The bigger the delta between manhattan_distances and the reference manhattan distance, the more likely the query read vector is from elsewhere in reference genome
-    # return numba_sum(ref_man_distance - manhattan_distances)
-    # Determine belonged haplotypes
-    # belonged_haplotypes = np.where(manhattan_distances == 0)[0]
-
-    # if len(belonged_haplotypes) >= 1:
-    #     # logger.info(f"The query read vector {list(query_read_vector)} is close to only one genomic haplotype vector {list(genomic_hap_vectors[belonged_haplotypes[0]])}")
-    #     return count_var_size(genomic_hap_vectors[belonged_haplotypes[0]])
-    # else:
-    #     return 0
-    # logger.info(f"The output var_size is {var_size}, the output alt_var_size is {alt_var_size}")
     return var_size, alt_var_size
 
 
@@ -1026,13 +974,9 @@ def get_hapvector_from_cigar(cigar_tuples,
 
     # Determine the length of the reference sequence consumption
     ref_length = sum([length for operation, length in cigar_tuples if operation in {0, 7, 8, 2, 3}])
-    # for operation, length in cigar_tuples:
-    #     if operation in {0, 7, 8, 2, 3}:  # M, =, X, D operations consume reference
-    #         ref_length += length
 
     # Create a haplotype vector of zeros
     hapvector = np.empty(ref_length, dtype=np.int32)
-    # logger.info(f"The empty hapvector has shape of {hapvector.shape}")
 
     index = 0
     query_pos = 0
@@ -1159,31 +1103,6 @@ def get_ori_qname(read):
     return ":".join(read.query_name.split(":")[:-1])
 
 
-
-def identify_discontinuity(interval_ref_pos_list, interval_read_seq, insert_unit = "D"):
-    # There can be None in the ref_pos_list
-    # Normal values are integers representing the genomic coordinates
-    # We need to identify the discontinuity in the ref_pos_list
-    # The discontinuity is defined as the gap between two continuous genomic coordinates
-    assert len(interval_ref_pos_list) == len(interval_read_seq), f"The length of the reference positions list should be the same as the read sequence, but the actual lengths are {len(interval_ref_pos_list)} and {len(interval_read_seq)}"
-    for i in range(0, len(interval_ref_pos_list) - 1):
-        idx = interval_ref_pos_list[i]
-        if idx is None:
-            continue
-        if interval_ref_pos_list[i + 1] is None:
-            continue
-        if idx + 1 == interval_ref_pos_list[i + 1]:
-            continue
-        else:
-            n = 0
-            while idx + n + 1 < interval_ref_pos_list[i+1]:
-                n += 1
-            insert_seq = n * [insert_unit]
-            interval_read_seq = interval_read_seq[:i+1] + insert_seq + interval_read_seq[i+1:]
-    return interval_read_seq
-
-
-
 # @numba.njit()
 def prepare_ref_query_idx_map(qseq_ref_pos_arr):
     # numba_dict = Dict.empty(key_type=types.int32, value_type=types.int32)
@@ -1210,16 +1129,12 @@ def get_interval_seq(read, interval_start, interval_end, read_ref_pos_dict = {})
         read_ref_pos_dict[read_id] = (ref_positions, qseq_ref_positions)
 
     size = interval_end - interval_start + 1
-    # logger.debug("The reference positions are: {}".format(ref_positions))
-    # These two sequences are used to dealt with deletions
-    preseq = []
-    # postseq = []
 
+    preseq = []
     interval_start_qidx = ref_positions.get(interval_start, None)
     if interval_start_qidx is not None:
         # logger.debug(f"Found the interval start {interval_start} is not in the reference positions: \n{ref_positions} of read {read.query_name}. Might locate in the middle of a deletion event.")
         while interval_start not in ref_positions and interval_start <= interval_end:
-            # preseq = preseq + ["D"]
             interval_start += 1
         if interval_start > interval_end:
             return_seq = preseq
@@ -1242,12 +1157,6 @@ def get_interval_seq(read, interval_start, interval_end, read_ref_pos_dict = {})
     interval_read_seq = read.query_sequence[interval_start_qidx:interval_end_qidx]
     qidx_ridx_arr = qseq_ref_positions[interval_start_qidx:interval_end_qidx]
 
-    # interval_read_seq = identify_discontinuity(interval_ref_pos, interval_read_seq)
-    # return_seq = interval_read_seq
-    # if len(return_seq) < size:
-        # logger.debug(f"There are deletion event inside the read. The final return_seq should cover {size}bp, but it turns out to be {len(return_seq)}bp. The interval start is {interval_start}, interval end is {interval_end}. Take a look:\n{return_seq}\nThe preseq is {preseq}\nThe reference_positions are {ref_positions}\n")
-    # elif len(return_seq) > size:
-        # logger.debug(f"There are insertion event inside the read. The final return_seq should cover {size}bp, but it turns out to be {len(return_seq)}bp. The interval start is {interval_start}, interval end is {interval_end}. Take a look:\n{return_seq}\nThe preseq is {preseq}\nThe reference_positions are {ref_positions}\n")
     return interval_read_seq, read_ref_pos_dict, qidx_ridx_arr
 
 
@@ -1265,44 +1174,31 @@ def get_interval_seq_qual(read, interval_start, interval_end, read_ref_pos_dict 
         read_ref_pos_dict[read_id] = (ref_positions, qseq_ref_positions)
 
     size = interval_end - interval_start + 1
-    # logger.debug("The reference positions are: {}".format(ref_positions))
     preseq = []
     qual_preseq = []
-    # postseq = []
 
     interval_start_qidx = ref_positions.get(interval_start, None)
     if not interval_start_qidx:
-        # logger.debug(f"Found the interval start {interval_start} is not in the reference positions: \n{ref_positions} of read {read.query_name}. Might locate in the middle of a deletion event.")
         while interval_start not in ref_positions and interval_start <= interval_end:
             preseq = preseq + ["D"]
             qual_preseq = qual_preseq + [99]
             interval_start += 1
         if interval_start > interval_end:
-            # logger.debug(f"The whole specified interval (size {size}) is in a deletion event for read {read.query_name}. Now the returned seq is: {return_seq}\n")
             return preseq, qual_preseq, read_ref_pos_dict, np.array([], dtype=np.int32)
         interval_start_qidx = ref_positions[interval_start]
 
     interval_end_qidx = ref_positions.get(interval_end, None)
     if not interval_end_qidx:
-        # logger.debug(f"Found the interval end {interval_end} is not in the reference positions: \n{ref_positions} of read {read.query_name}. Might locate in the middle of a deletion event.")
         while interval_end not in ref_positions:
-            # postseq = postseq + ["D"]
             interval_end -= 1
         interval_end_qidx = ref_positions[interval_end] + 1
     else:
         interval_end_qidx += 1
 
-    # interval_ref_pos = ref_positions[interval_start_qidx: interval_end_qidx]
     interval_read_seq = read.query_sequence[interval_start_qidx:interval_end_qidx]
     interval_qual_seq = read.query_qualities[interval_start_qidx:interval_end_qidx]
     qidx_ridx_arr = qseq_ref_positions[interval_start_qidx:interval_end_qidx]
 
-    # interval_read_seq = identify_discontinuity(interval_ref_pos, interval_read_seq)
-    # return_seq = interval_read_seq
-    # if len(return_seq) < size:
-        # logger.debug(f"There are deletion event inside the read. The final return_seq should cover {size}bp, but it turns out to be {len(return_seq)}bp. The interval start is {interval_start}, interval end is {interval_end}. Take a look:\n{return_seq}\nThe preseq is {preseq}\nThe reference_positions are {ref_positions}\n")
-    # elif len(return_seq) > size:
-        # logger.debug(f"There are insertion event inside the read. The final return_seq should cover {size}bp, but it turns out to be {len(return_seq)}bp. The interval start is {interval_start}, interval end is {interval_end}. Take a look:\n{return_seq}\nThe preseq is {preseq}\nThe reference_positions are {ref_positions}\n")
     return interval_read_seq, interval_qual_seq, read_ref_pos_dict, qidx_ridx_arr
 
 
@@ -1320,38 +1216,28 @@ def get_interval_basequal(read, interval_start, interval_end, read_ref_pos_dict 
         read_ref_pos_dict[read_id] = ref_positions
     size = interval_end - interval_start + 1
     preseq = []
-    # postseq = []
     try:
         interval_start_qidx = ref_positions[interval_start]
     except KeyError:
-        # logger.debug(f"Found the interval start {interval_start} is not in the reference positions: \n{ref_positions} of read {read.query_name}. Might locate in the middle of a deletion event.")
         while interval_start not in ref_positions and interval_start <= interval_end:
             preseq = preseq + [99]
             interval_start += 1
         if interval_start > interval_end:
             return_seq = preseq
-            # logger.debug(f"The whole specified interval (size {size}) is in a deletion event for read {read.query_name}. Now the returned seq is not in the correct size: {return_seq}\n")
             return return_seq, read_ref_pos_dict
         interval_start_qidx = ref_positions[interval_start]
 
     try:
         interval_end_qidx = ref_positions[interval_end] + 1
     except KeyError:
-        # logger.debug(f"Found the interval end {interval_end} is not in the reference positions: \n{ref_positions} of read {read.query_name}. Might locate in the middle of a deletion event.")
         while interval_end not in ref_positions:
-            # postseq = postseq + [99]
             interval_end -= 1
         interval_end_qidx = ref_positions[interval_end] + 1
 
-    # interval_ref_pos = ref_positions[interval_start_qidx: interval_end_qidx]
     interval_read_qual = list(read.query_qualities[interval_start_qidx:interval_end_qidx])
 
-    # interval_read_qual = identify_discontinuity(interval_ref_pos, interval_read_qual, insert_unit=99)
     return_seq = interval_read_qual
-    # if len(return_seq) < size:
-        # logger.debug(f"There is deletion event inside the read. The final return_seq should cover {size}bp, but it turns out not. Take a look:\n{return_seq}\n")
-    # elif len(return_seq) > size:
-        # logger.debug(f"There is insertion event inside the read. The final return_seq should cover {size}bp, but it turns out not. Take a look:\n{return_seq}\n")
+
     return return_seq, read_ref_pos_dict
 
 
@@ -1377,8 +1263,7 @@ def seq_err_det_stacked_bases(target_read,
         return False, read_ref_pos_dict
 
     chrom = target_read.reference_name
-    # target_base = get_interval_seq(target_read, position0, position0)[0]
-
+    
     ad = nested_dict.get(target_read.reference_name, {}).get(position0, {}).get(target_base, 0)
     dp = nested_dict.get(target_read.reference_name, {}).get(position0, {}).get("DP", 0)
 
@@ -1386,7 +1271,6 @@ def seq_err_det_stacked_bases(target_read,
         logger.warning(f"The depth at position {position0} is 0. The AD is {ad}. The target base is {target_base}. The base quality is {base_qual}. The read is {target_read.query_name}.")
         return False, read_ref_pos_dict
 
-    # occurences = overlap_bases.count(target_base)
     af = int(ad) / int(dp)
 
     if (af <= 0.02 or (int(ad) == 1 and int(dp) >= 10)) and base_qual < 10:
@@ -1409,22 +1293,6 @@ def tolerate_mismatches_two_seq(read1, read2,
     And to decide whether we are safe to determine the mismatches are originated from sequencing error or not.
     '''
 
-    # vis = False
-    # if (read1.query_name in ["HISEQ1:63:HB65FADXX:1:1201:6669:32930:PC98",
-    #                    "HISEQ1:59:HB66DADXX:2:1213:10506:28883:PC98"] and \
-    #    read2.query_name in ["HISEQ1:66:HB7AUADXX:1:1205:5681:81591:PC98",
-    #                    "HISEQ1:59:HB66DADXX:1:1112:3025:49296:PC98"]) or \
-    #    (read2.query_name in ["HISEQ1:63:HB65FADXX:1:1201:6669:32930:PC98",
-    #                     "HISEQ1:59:HB66DADXX:2:1213:10506:28883:PC98"] and \
-    #    read1.query_name in ["HISEQ1:66:HB7AUADXX:1:1205:5681:81591:PC98",
-    #                     "HISEQ1:59:HB66DADXX:1:1112:3025:49296:PC98"]):
-    #     vis = True
-    # vis = False
-    # if (read1.query_name in ["HISEQ1:59:HB66DADXX:1:2211:18731:60316:PC98"]) or \
-    #    (read2.query_name in ["HISEQ1:59:HB66DADXX:1:2211:18731:60316:PC98"]):
-    #     vis = True
-
-
     tolerate_mismatches = []
     for diff_ind in abs_diff_indices:
         seq_err1, read_ref_pos_dict = seq_err_det_stacked_bases(read1,
@@ -1435,9 +1303,7 @@ def tolerate_mismatches_two_seq(read1, read2,
                                                                 nested_dict,
                                                                 read_ref_pos_dict,
                                                                 logger = logger)
-        # if added_stack_base_dict:
-        #     stack_base_dict.update(added_stack_base_dict)
-
+        
         seq_err2, read_ref_pos_dict = seq_err_det_stacked_bases(read2,
                                                                 diff_ind,
                                                                 ncls_bam,
@@ -1446,85 +1312,12 @@ def tolerate_mismatches_two_seq(read1, read2,
                                                                 nested_dict,
                                                                 read_ref_pos_dict,
                                                                 logger = logger)
-        # if added_stack_base_dict:
-        #     stack_base_dict.update(added_stack_base_dict)
-        # if vis:
-        #     logger.info(f"Mismatch1 between {get_read_id(read1)} at position {diff_ind} is {seq_err1}. For read {get_read_id(read2)} is {seq_err2}")
         tolerate_mismatches.append(seq_err1 or seq_err2)
-
-    # if vis:
-    #     logger.info(f"All the mismatches between {get_read_id(read1)} and {get_read_id(read2)} are {tolerate_mismatches}")
 
     if all(tolerate_mismatches):
         return True, read_ref_pos_dict, len(tolerate_mismatches)
     else:
         return False, read_ref_pos_dict, 0
-
-
-
-def update_on_removal(g, removed_vertex, label_to_vertex, name_prop):
-    # Remove the mapping for the deleted vertex
-    if removed_vertex in g.vertices():
-        del label_to_vertex[name_prop[removed_vertex]]
-        g.remove_vertex(removed_vertex)
-
-    # Create a new mapping after removal
-    new_label_to_vertex = {}
-    for v in g.vertices():
-        label = name_prop[v]
-        new_label_to_vertex[label] = v
-    return new_label_to_vertex
-
-
-
-def update_on_removal_optimized(g, removed_vertex, label_to_vertex, name_prop):
-    removed_index = int(removed_vertex)
-    removed_label = name_prop[removed_vertex]
-
-    logger.info(f"Removing {removed_index} from the graph")
-
-    # Remove the mapping for the deleted vertex
-    if removed_label in label_to_vertex:
-        del label_to_vertex[removed_label]
-        g.remove_vertex(removed_vertex)
-
-    # Adjust the indices of vertices with larger indices
-    for v in g.vertices():
-        v_index = int(v)
-        if v_index >= removed_index:
-            label = name_prop[v]
-            label_to_vertex[label] = v_index
-
-    return label_to_vertex
-
-
-
-def get_overlap_intervals_optimized(read_pair1, read_pair2):
-    intervals = SortedList()
-    for r1 in read_pair1:
-        # Only include numeric attributes in the tuple
-        intervals.add((r1.reference_start, r1.reference_end))
-
-    overlap_intervals = {}
-
-    for r2 in read_pair2:
-        r2_start = r2.reference_start
-        r2_end = r2.reference_end
-
-        start_index = intervals.bisect_left((r2_start - 4, ))
-        end_index = intervals.bisect_right((r2_end + 4, ))
-
-        for i in range(start_index, end_index):
-            r1_start, r1_end = intervals[i]
-
-            if r1_end - r2_start >= 5 and r2_end - r1_start >= 5:
-                overlap_start = max(r1_start, r2_start)
-                overlap_end = min(r1_end, r2_end)
-                overlap_intervals[(overlap_start, overlap_end)] = (r1, r2)
-
-    return overlap_intervals
-
-
 
 def get_overlap_intervals(read_pair1, read_pair2):
     overlap_intervals = {}
@@ -1738,198 +1531,6 @@ def accumulated_edge_weights(node, weight):
     total_weight = sum(weight[edge] for edge in node.all_edges())
     return total_weight
 
-
-
-def remove_weak_edges(g, qv, oqv, weight, component_dict):
-    '''
-    Deprecated since find_shortest_path is too time consuming
-    '''
-    qv_component = component_dict[qv].copy()
-    if int(oqv) not in qv_component:
-        return component_dict
-
-    direct_edge = g.edge(qv, oqv)
-    if direct_edge:
-        g.remove_edge(direct_edge)
-        return component_dict
-
-    logger.info("The current component_dict looks like \n{}\n".format("\n".join([f"{k}: {v}" for k, v in component_dict.items()])))
-    # If there is no direct edge between qv and oqv, we need to find the path between them
-    qv_total_weight = accumulated_edge_weights(qv, weight)
-    oqv_total_weight = accumulated_edge_weights(oqv, weight)
-
-    # Here weight smaller is better
-    if qv_total_weight <= oqv_total_weight:
-        for e in oqv.all_edges():
-            g.remove_edge(e)
-
-        for qc in qv_component:
-            component_dict[qc].remove(int(oqv))
-        component_dict[int(oqv)] = component_dict[int(oqv)] - component_dict[int(qv)]
-    else:
-        oqv_component = component_dict[int(oqv)].copy()
-        for e in qv.all_edges():
-            g.remove_edge(e)
-        for oqc in oqv_component:
-            component_dict[oqc].remove(int(qv))
-        component_dict[int(qv)] = component_dict[int(qv)] - component_dict[int(oqv)]
-
-    return component_dict
-
-
-
-
-def add_conn_component(qv: int,
-                       oqv: int,
-                       component_dict: dict,
-                       qname_check_dict: dict,
-                       edge_weight: int,
-                       graph,
-                       weight):
-    '''
-    Deprecated because of new workflow
-    '''
-    qv_component = component_dict[qv].copy()
-
-    reject = False
-    for qc in qv_component:
-        if qc != qv:
-            inspect_res = check_edge(qc, oqv, qname_check_dict)
-            if inspect_res == -1:
-                # Now we need to decide between qc and oqv, who gets to remain in the component, who needs to be kicked out.
-                poor_weight = 0
-                for e in graph.vertex(qc).all_edges():
-                    eweight = weight[e]
-                    poor_weight = max(poor_weight, eweight)
-
-                if poor_weight < edge_weight:
-                    reject = True
-                else:
-                    for e in graph.vertex(qc).all_edges():
-                        graph.remove_edge(e)
-
-                    component_dict[qv].remove(qc)
-                    for oqc in component_dict[qv]:
-                        component_dict[oqc] = component_dict[qv]
-                    component_dict[qc] = component_dict[qc] - component_dict[qv]
-                    reject = False
-                break
-
-    if reject:
-        logger.info("Reject the oqv node {} The current component_dict looks like \n{}\n".format(oqv, "\n".join([f"{k}: {v}" for k, v in component_dict.items()])))
-        return component_dict, reject
-    else:
-        for qc in qv_component:
-            component_dict[qc].update(component_dict[oqv])
-        oqv_component = component_dict[oqv].copy()
-        for oqc in oqv_component:
-            component_dict[oqc].update(component_dict[qv])
-        logger.info("Added the oqv node {} The current component_dict looks like \n{}\n".format(oqv, "\n".join([f"{k}: {v}" for k, v in component_dict.items()])))
-        return component_dict, reject
-
-
-
-@numba.njit
-def calculate_clique_weight(clique, weight_matrix):
-    '''
-    Deprecated because finding cliques is so freaking slow even with graph-tool (C++ level speed)
-    '''
-    weight_sum = 0
-    for i in range(len(clique)):
-        for j in range(i + 1, len(clique)):
-            weight_sum += weight_matrix[clique[i], clique[j]]
-    return weight_sum
-
-
-
-def assign_non_overlapping_cliques(total_graph, weight_matrix, component_dict, logger = logger):
-    '''
-    Deprecated because finding cliques is astonishingly slow, even with graph-tool in a much smaller subgraph (components)
-    '''
-    # Step 1: Collect all maximal cliques
-    vertex_number = total_graph.num_vertices()
-    logger.info(f"Now we have a edge weight matrix of shape {weight_matrix.shape}, the total vertices number in graph are {vertex_number}")
-    final_cliques = []
-
-    for component_idx, component_verts in component_dict.items():
-        # component_idx is integer
-        # component_verts is a set of integers (vert index)
-        if len(component_verts) == 1:
-            final_cliques.append(component_verts)
-            continue
-
-        graph = gt.GraphView(total_graph, vfilt=lambda v: v in component_verts)
-        logger.info(f"Component {component_idx} has {graph.num_vertices()} vertices and {graph.num_edges()} edges. Now start finding max_cliques for this subgraph")
-        all_maximal_cliques = gt.max_cliques(graph)
-        logger.info(f"Found {len(all_maximal_cliques)} maximal cliques in the subgraph")
-        # Step 2: Calculate the summed edge weights for each clique
-        clique_weights = []
-        for clique in all_maximal_cliques:
-            # Here each clique is an np.array of vertex indices
-            weight = calculate_clique_weight(clique, weight_matrix)
-            if weight > 0:
-                clique_weights.append((clique, weight))
-
-        # Step 3: Sort cliques by their summed edge weights in descending order
-        clique_weights.sort(key=lambda x: x[1], reverse=True)
-        logger.info(f"Initially found {len(clique_weights)} cliques in the whole graph")
-
-        # Step 4: Assign nodes to cliques ensuring no overlaps
-        assigned_nodes = set()
-        reassign_nodes = set()
-
-        for clique, weight in clique_weights:
-            if not any(node in assigned_nodes for node in clique):
-                final_cliques.append(set(clique))
-                assigned_nodes.update(clique)
-                assigned_nodes = assigned_nodes - reassign_nodes
-            else:
-                # Try to reassign remaining nodes
-                reassign_nodes.update(set([node for node in clique if node not in assigned_nodes]))
-
-        logger.info(f"There are still {len(reassign_nodes)} nodes that could not be assigned to any clique")
-
-        # Step 5: Iteratively find cliques for reassign_nodes
-        while len(reassign_nodes) > 0:
-            subgraph = gt.GraphView(graph, vfilt=lambda v: v in reassign_nodes)
-            sub_maximal_cliques = list(gt.max_cliques(subgraph))
-
-            sub_clique_weights = []
-            for clique in sub_maximal_cliques:
-                weight = calculate_clique_weight(clique, weight_matrix)
-                if weight > 0:
-                    sub_clique_weights.append((clique, weight))
-
-            if not sub_clique_weights:
-                logger.info(f"Cannot find anymore cliques in the subgraph for the remaining {len(reassign_nodes)} nodes")
-                break
-            else:
-                logger.info(f"Found {len(sub_clique_weights)} cliques in the subgraph for the remaining {len(reassign_nodes)} nodes")
-
-            sub_clique_weights.sort(key=lambda x: x[1], reverse=True)
-
-            new_reassign_nodes = set()
-            for clique, weight in sub_clique_weights:
-                if not any(node in assigned_nodes for node in clique):
-                    final_cliques.append(set(clique))
-                    assigned_nodes.update(clique)
-                else:
-                    new_reassign_nodes.update(set(node for node in clique if node not in assigned_nodes))
-
-            if reassign_nodes == new_reassign_nodes:
-                break
-
-            reassign_nodes = new_reassign_nodes
-
-        if len(reassign_nodes) > 0:
-            logger.warning(f"There are still {len(reassign_nodes)} nodes that could not be assigned to any clique")
-            for node in reassign_nodes:
-                final_cliques.append(set([node]))
-
-    return final_cliques
-
-
-
 @numba.njit
 def find_neg_one_indices_with_mask(matrix, mask):
     rows, cols = matrix.shape
@@ -2046,66 +1647,6 @@ def row_wise_sum_with_mask_nb(matrix, index_mask, mask_values = np.array([-1.0, 
         row_sum_values[i] = np.sum(row_arr[row_mask])
 
     return row_sum_values
-
-
-'''
-Below two functions are deprecated
-
-@numba.njit(types.float32[:](types.float32[:, :], types.boolean[:], types.float32[:]), fastmath=True)
-def row_wise_max_with_mask_nb(matrix, index_mask, mask_values = np.array([-1.0, 1.0], dtype = np.float32)):
-    row_max_values = np.empty(matrix.shape[0], dtype=np.float32)
-
-    mask_arr = np.empty((len(mask_values), matrix.shape[0], matrix.shape[1]), dtype=np.bool_)
-    for i in prange(len(mask_values)):
-        mask_value = mask_values[i]
-        mask_matrix = matrix != mask_value
-        mask_arr[i] = mask_matrix
-    final_mask_matrix = mask_arr[0]
-    for i in prange(1, mask_arr.shape[0]):
-        # 2d bool & 2d bool
-        final_mask_matrix = final_mask_matrix & mask_arr[i]
-
-    for i in prange(matrix.shape[0]):
-        row_arr = matrix[i]
-        row_mask = index_mask & final_mask_matrix[i]
-        row_mask[i] = False
-        # print(f"Row mask is {row_mask}")
-        if numba_sum(row_mask) == 0:
-            row_max_values[i] = 0
-        else:
-            row_max_values[i] = numba_max(row_arr, row_mask)
-
-    return row_max_values
-
-
-
-@numba.njit(types.float32[:](types.float32[:, :], types.boolean[:], types.float32[:]), fastmath=True, parallel=True)
-def para_row_wise_max_with_mask_nb(matrix, index_mask, mask_values = np.array([-1.0, 1.0], dtype = np.float32)):
-    row_max_values = np.empty(matrix.shape[0], dtype=np.float32)
-
-    mask_arr = np.empty((len(mask_values), matrix.shape[0], matrix.shape[1]), dtype=np.bool_)
-    for i in prange(len(mask_values)):
-        mask_value = mask_values[i]
-        mask_matrix = matrix != mask_value
-        mask_arr[i] = mask_matrix
-    final_mask_matrix = mask_arr[0]
-    for i in prange(1, mask_arr.shape[0]):
-        # 2d bool & 2d bool
-        final_mask_matrix = final_mask_matrix & mask_arr[i]
-
-    for i in prange(matrix.shape[0]):
-        row_arr = matrix[i]
-        row_mask = index_mask & final_mask_matrix[i]
-        row_mask[i] = False
-        # print(f"Row mask is {row_mask}")
-        if numba_sum(row_mask) == 0:
-            row_max_values[i] = 0
-        else:
-            row_max_values[i] = numba_max(row_arr, row_mask)
-
-    return row_max_values
-'''
-
 
 @numba.njit(types.float32[:](types.float32[:, :], types.boolean[:], types.float32[:]), fastmath=True)
 def row_wise_max_with_mask_nb(matrix, index_mask, mask_values):
@@ -2265,58 +1806,6 @@ def solve_min_dropped_sum(pairs_array, logger = logger):
     return dropped_values, remain_values
 
 
-
-def submatrix_locate_without_neg_values(weight_matrix, index_mask = None, logger = logger):
-    '''
-    Input weight matrix:
-    1. Symmetric across diagonal
-    2. Diagonal values are all 1
-    3. Some cells contain -1 values
-    4. Other cells contain values ranged from 0-1
-    5. Try to filter out rows and columns containing -1 cells and make the rest matrix biggest.
-    6. biggest determined by total summed values
-
-    For every -1 cell, we need to decide whether to drop the row or the column
-    To decide drop row or column, we need to calculate the total summed values for that row/column, and drop the smaller one to keep the rest of the matrix has bigger summed values
-    (P.S. An alternative approach is drop the row/column with smaller max values because you hate to break the bonds between two vertices with high weights)
-    Until we find no -1 values in the remaining matrix.
-
-    The dropped indices can be used as the root matrix for the next round of filtering.
-    For the index_mask 1D array:
-    1. True means the row/column index is in the inspection range.
-    2. False means the row/column index is ignored.
-
-    Deprecated
-    '''
-
-    if index_mask is None:
-        index_mask = np.ones(weight_matrix.shape[0], dtype=bool)
-
-    # First identify all the -1 cell locations in the weight matrix
-    indices = find_neg_one_indices_with_mask(weight_matrix, index_mask) # Returned is a 2-column 2D array first column is row indices and the second column is column indices
-
-    # Find the row-wise maximum values for the matrix
-    row_sum_values = row_wise_sum_with_mask_np(weight_matrix, 1, index_mask)
-
-    # extract the per-row/column max values for the 2-column indices array
-    # row_max_values might contain NaN values in the middle. And the indices should not contain index of row_max_values that the corresponding value is NaN
-    pairs = row_sum_values[indices]
-    # Assert entire pairs should not contain NaN values
-    assert not np.isnan(pairs).any(), f"The pairs should not contain NaN values. The row_max_values is \n{row_sum_values.tolist()}\n And the indices is \n{indices}\n"
-
-    # Solve the minimum dropped sum problem
-    logger.info(f"There are {pairs.shape[0]} pairs of -1 values in the masked_matrix")
-    drop_values, remain_values = solve_min_dropped_sum(pairs, logger = logger)
-    # returned values are the edge weights that need to be dropped and the edge weights that need to be kept
-    # use row_max_values to find the row/column indices that need to be remained
-    remain_indices = numba_isin_idx(row_sum_values, remain_values)
-    drop_mask = numba_isin(row_sum_values, drop_values)
-    # In this mask, True means the index of row/column is decided to be removed from the biggest clique. They are remained to be inspected in the next round
-
-    return remain_indices, drop_mask
-
-
-
 def pretty_print_matrix(matrix, precision=3):
     """
     Pretty prints a 2D NumPy array.
@@ -2360,7 +1849,7 @@ def iteratively_find_largest_cliques(selected_indices,
         if matrix_size == 0:
             logger.warning(f"Found that in this iteration, the subgraph size is already 0")
             break
-        # clique_indices, drop_mask = submatrix_locate_without_neg_values(weight_matrix, index_mask, logger = logger)
+
         clique_indices, drop_mask = heuristic_find_largest_edge_weight_clique_sparse(sparse_matrix_data,
                                                                                      sparse_matrix_indices,
                                                                                      sparse_matrix_indptr,
@@ -2996,8 +2485,6 @@ def build_phasing_graph(bam_file,
 
     for qname_idx, paired_reads in ncls_read_dict.items():
         qname = ncls_qname_dict[qname_idx]
-        # if qname == "HISEQ1:59:HB66DADXX:1:2211:18731:60316:PC98":
-        #     logger.info(f"Found the qname {qname} in the ncls_read_dict")
         assert len(dict.fromkeys(r.query_name for r in paired_reads)) == 1, f"The query names of the reads in the paired_reads are not the same: {paired_reads}"
 
         # Check if the query name already exists in the graph
@@ -3006,7 +2493,6 @@ def build_phasing_graph(bam_file,
             qv = g.add_vertex()
             qname_prop[qv] = qname
             qname_to_node[qname] = int(qv)
-            # logger.debug(f"Added a new node {v} for qname {qname} to the graph. The current vertices are {g.get_vertices()}")
         else:
             qv = g.vertex(qname_to_node[qname])
 
@@ -3053,8 +2539,6 @@ def build_phasing_graph(bam_file,
             if len(overlap_intervals) == 0:
                 continue
 
-            # logger.info("These are the overlapping intervals: {}".format("\n".join([f"{oi}: {[get_read_id(r) for r in (read1, read2)]}" for oi, (read1, read2) in overlap_intervals.items()])))
-
             qname_bools = np.zeros(4, dtype=np.int32)
             n = 0
             pair_weight = None
@@ -3079,28 +2563,18 @@ def build_phasing_graph(bam_file,
                         qname_bools[n] = 0
                     elif bool_res:
                         qname_bools[n] = 1
-                        # logger.info(f"Weight is {read_weight}. Found the reads {read1.query_name} ({read1.reference_name}:{read1.reference_start}-{read1.reference_end}) and {read2.query_name} ({read2.reference_name}:{read2.reference_start}-{read2.reference_end}) are in the same haplotype, overlap region ({overlap_start}-{overlap_end})")
-                        # assert read_weight is not None, f"The read weight {read_weight} is not calculated for the reads {read1.query_name} and {read2.query_name}"
-                        # logger.info(f"Found the reads {read1.query_name} ({read1.reference_name}:{read1.reference_start}-{read1.reference_end}) and {read2.query_name} ({read2.reference_name}:{read2.reference_start}-{read2.reference_end}) are in the same haplotype, overlap region ({overlap_start}-{overlap_end})")
                     else:
                         qname_bools[n] = -1
-                        # logger.info(f"Found the reads {read1.query_name} ({read1.reference_name}:{read1.reference_start}-{read1.reference_end}) and {read2.query_name} ({read2.reference_name}:{read2.reference_start}-{read2.reference_end}) are in different haplotypes, overlap region ({overlap_start}-{overlap_end})")
-
+                        
                     if read_weight is not None:
                         read_weight = read_weight if read_weight > 0 else 1
                         norm_weight = read_weight/(mean_read_length * 10)
-                        # norm_weight = norm_weight if norm_weight < 1 else 1 - 1e-6
-                        # assert norm_weight is not None, f"The normalized weight {norm_weight} is not calculated while the raw weight is {read_weight} for the reads {read1.query_name} and {read2.query_name}"
-                        # logger.info(f"Found the reads {read1.query_name} ({read1.reference_name}:{read1.reference_start}-{read1.reference_end}) and {read2.query_name} ({read2.reference_name}:{read2.reference_start}-{read2.reference_end}) are in the same haplotype, overlap region ({overlap_start}-{overlap_end}) with weight {norm_weight} (raw score {read_weight})")
                         if pair_weight is None:
                             pair_weight = norm_weight
                         else:
                             pair_weight += norm_weight
                     else:
                         norm_weight = None
-
-                    # if read1.query_name in vis_qnames and read2.query_name in vis_qnames:
-                    #     logger.info(f"Found the qname {get_read_id(read1)} and other_qname {get_read_id(read2)} might overlap with each other at {uncovered_start}, {uncovered_end} with a norm weight {norm_weight}")
 
                 inspected_overlaps.addi(overlap_start, overlap_end)
                 n += 1
@@ -3113,14 +2587,9 @@ def build_phasing_graph(bam_file,
                 if pair_weight > edge_weight_cutoff:
                     e = g.add_edge(qv, oqv)
                     weight[e] = pair_weight
-                # if not pair_weight:
-                #     logger.error(f"Found the reads {qname_prop[qv]} and {qname_prop[oqv]} are in the same haplotype, but the pair weight is {pair_weight} not calculated. Qname_bools are {qname_bools}")
-                # logger.info(f"Though the pair weight not exceeding the cutoff {edge_weight_cutoff}, Found the reads {qname_prop[qv]} and {qname_prop[oqv]} are overlapping in region ({overlap_start}-{overlap_end}) with weight {pair_weight}")
                 weight_matrix[int(qv), int(oqv)] = pair_weight
                 weight_matrix[int(oqv), int(qv)] = pair_weight
-                # logger.info(f"Qname_bools are {qname_bools}, Added an edge between {qname_prop[qv]} and {qname_prop[oqv]} (overlap span {overlap_start} -- {overlap_end}) with weight {pair_weight}\n")
             elif any_false_numba(qname_bools):
-                # logger.info(f"Qname_bools are {qname_bools}, Found two pairs {qname_prop[qv]} and {qname_prop[oqv]} are in different haplotypes, Removing the edge with the biggest weight")
                 weight_matrix[int(qv), int(oqv)] = -1
                 weight_matrix[int(oqv), int(qv)] = -1
 
@@ -3130,32 +2599,6 @@ def build_phasing_graph(bam_file,
 
     logger.info(f"Now we finished building up the edges in the graph. There are currently {g.num_vertices()} vertices and {g.num_edges()} edges in the graph")
     return g, weight_matrix, qname_to_node, read_hap_vectors
-
-
-
-def extract_subgraphs(g, vertex_list):
-    vfilt = g.new_vertex_property('bool')
-    vfilt.a[vertex_list] = True
-
-    g_filt = gt.GraphView(g, vfilt=vfilt)
-    components, hist = gt.label_components(g_filt, directed=False)
-
-    subgraphs = []
-    processed_components = set()  # Store processed components
-    for v in vertex_list:
-        comp = components[v]
-        if comp not in processed_components:
-            processed_components.add(comp)  # Mark this component as processed
-            vfilt_comp = g_filt.new_vertex_property('bool')
-            for u in g_filt.vertices():
-                if components[u] == comp:
-                    vfilt_comp[u] = True
-
-            sub = gt.GraphView(g_filt, vfilt=vfilt_comp)
-            subgraphs.append(sub)
-
-    return subgraphs
-
 
 @numba.njit
 def is_nan(x):
@@ -3435,112 +2878,6 @@ def record_haplotype_rank(haplotype_dict, mean_read_length = 150):
     return np.column_stack((starts, ends, total_depth_col, hap_ids, hap_depths, var_counts, indel_counts))
 
 
-
-def choose_haplotypes(haplotype_dict,
-                      genome_haps,
-                      hap_qname_info,
-                      read_level_vard_cutoff,
-                      varno_cutoff = 3,
-                      logger = logger):
-    '''
-    Deprecated at 31/05/2024. Now need to consider the haplotype ranking at all regions using binary integer linear programming.
-    This function is used to choose 2 most likely haplotypes from the haplotype dictionary
-    The haplotype dictionary should be in the format of {haplotype_id: (haplotype_seq, reads)}
-    '''
-
-    for hid, (seq, reads, span) in haplotype_dict.items():
-        region_size = seq.size
-        region_str = "-".join([str(x) for x in span])
-        region_str = f"{reads[0].reference_name}:{region_str}"
-        break
-
-    if region_size > 148:
-        varno_cutoff = float(varno_cutoff) * region_size/150
-
-    max_varno = read_level_vard_cutoff * region_size
-
-    mismap_qnames = set([])
-    mismap_hapids = set([])
-    varcount_hap_dict = {}
-    for hid, (seq, reads, span) in haplotype_dict.items():
-        var_count = count_var(seq)
-        # var_density_arr = count_window_var_density(seq, padding_size=padding_size)
-        # read_vard_arr = count_window_var_density(seq, padding_size=74)
-        # if numba_sum(var_density_arr >= var_density_cutoff) > 0 or numba_sum(read_vard_arr >= read_level_vard_cutoff) > 0:
-        #     mismap_qnames.add(reads[0].query_name)
-        #     mismap_hapids.add(hid)
-        # if var_count/region_size > 1/20:
-        #     mismap_qnames.add(reads[0].query_name)
-        #     mismap_hapids.add(hid)
-        haplotype_dict[hid] = (seq, reads, span, var_count)
-        varcount_hap_dict[var_count] = varcount_hap_dict.get(var_count, []) + [(hid, seq, reads)]
-
-    for hid in mismap_hapids:
-        mismap_qnames.update(hap_qname_info[hid])
-
-    uniq_varcounts = sorted(list(dict.fromkeys([vc for hid, (seq, reads, span, vc) in haplotype_dict.items()])))
-
-    if len(uniq_varcounts) == 1:
-        return mismap_qnames
-    elif len(uniq_varcounts) == 2:
-        if uniq_varcounts[1] <= 1:
-            return mismap_qnames
-        elif uniq_varcounts[1] < max_varno:
-            haps = varcount_hap_dict[uniq_varcounts[1]]
-            mismap_haps = []
-            for hid, hapseq, reads in haps:
-                if come_from_elsewhere(hapseq, genome_haps, 0, logger = logger):
-                    mismap_haps.append((hid, hapseq, reads))
-                    mismap_hapids.add(hid)
-                    mismap_qnames.update(hap_qname_info[hid])
-            mismap_qnames.update(set([r.query_name for hid, seq, reads in mismap_haps for r in reads]))
-            return mismap_qnames
-        else:
-            haps = varcount_hap_dict[uniq_varcounts[1]]
-            hap_count = len(haps)
-            hap_ids = set([hid for hid, seq, reads in haps])
-            for hid in hap_ids:
-                mismap_qnames.update(hap_qname_info[hid])
-            mismap_qnames.update(set([r.query_name for hid, seq, reads in haps for r in reads]))
-            # logger.debug(f"At region {region_str}, there are {hap_count} haplotypes with {uniq_varcounts[1]} variants. The haplotypes are:\n{hap_seqs}\n")
-            return mismap_qnames
-    else:
-        # The uniq_varcounts > 2
-        if uniq_varcounts[-1] >= 2 and uniq_varcounts[-1] < varno_cutoff:
-            haps = varcount_hap_dict[uniq_varcounts[-1]]
-            mismap_haps = []
-            for hid, hapseq, reads in haps:
-                if come_from_elsewhere(hapseq, genome_haps, 0, logger = logger):
-                    mismap_haps.append((hid, hapseq, reads))
-                    mismap_hapids.add(hid)
-                    mismap_qnames.update(hap_qname_info[hid])
-            mismap_qnames.update(set([r.query_name for hid, seq, reads in mismap_haps for r in reads]))
-            return mismap_qnames
-        else:
-            high_var_counts = [vc for vc in uniq_varcounts if vc >= varno_cutoff]
-            for hvc in high_var_counts:
-                haps = varcount_hap_dict[hvc]
-                hap_count = len(haps)
-                hap_ids = set([hid for hid, seq, reads in haps])
-                for hid in hap_ids:
-                    mismap_qnames.update(hap_qname_info[hid])
-                mismap_qnames.update(set([r.query_name for hid, seq, reads in haps for r in reads]))
-                # logger.debug(f"At region {region_str}, there are {hap_count} haplotypes with {hvc} variants. The haplotypes are:\n{hap_seqs}\n")
-
-            atleast_2_var_counts = [vc for vc in uniq_varcounts if vc >= 2]
-            mismap_haps = []
-            for avc in atleast_2_var_counts:
-                haps = varcount_hap_dict[avc]
-                for hid, hapseq, reads in haps:
-                    if come_from_elsewhere(hapseq, genome_haps, 0, logger = logger):
-                        mismap_haps.append((hid, hapseq, reads))
-                        mismap_hapids.add(hid)
-                        mismap_qnames.update(hap_qname_info[hid])
-            mismap_qnames.update(set([r.query_name for hid, seq, reads in mismap_haps for r in reads]))
-            return mismap_qnames
-
-
-
 def group_by_dict_optimized(vprop, vertices):
     grouped_keys = {}
     for v, rs in vertices.items():
@@ -3552,77 +2889,6 @@ def group_by_dict_optimized(vprop, vertices):
         grouped_keys[label][1].append(q)
         grouped_keys[label][2].append(rs)
     return grouped_keys
-
-
-
-def find_components_in_subgraph(g, subgraph_vertices, weight_matrix, clique_sep_component_idx, final_components, logger = logger):
-    sub_verts_arr = np.array([sv for sv in subgraph_vertices], dtype=np.int32)
-    # logger.info(f"sub_verts_arr is {sub_verts_arr}, {type(sub_verts_arr)}, {sub_verts_arr.shape}")
-    final_cliques = iteratively_find_largest_cliques(sub_verts_arr, weight_matrix, logger = logger)
-
-    # logger.info(f"There are {len(final_cliques)} cliques found in the graph. There vertex indices are: {final_cliques}")
-
-    # Now we need to remove the 0 weight edges and find the connected components
-    final_components, clique_sep_component_idx = find_components_inside_filtered_cliques(final_cliques, g, clique_sep_component_idx, final_components, logger=logger)
-
-    logger.info(f"Found these components in the graph: \n{final_components}")
-    # Returned is a list of sets.
-    return final_components, clique_sep_component_idx
-
-
-
-def calculate_depth_intervals(intervals, fixed_interval):
-    # Find the total region range from min(start) to max(end)
-    min_start = min(interval[0] for interval in intervals)
-    max_end = max(interval[1] for interval in intervals)
-
-    # Initialize an array for positions within the total region
-    position_depth = np.zeros(max_end - min_start + 1)
-
-    # Increment depth for each covered position within the intervals
-    for start, end in intervals:
-        position_depth[start - min_start : end - min_start] += 1
-
-    # Convert positions to BED intervals with the same depth value
-    bed_intervals = np.empty((len(intervals)*10, 5), dtype=np.int32)
-    current_depth = position_depth[0]
-    interval_start = min_start
-
-    count = 0
-    for i in range(1, len(position_depth)):
-        if position_depth[i] != current_depth:
-            bed_intervals[count, 0] = interval_start
-            bed_intervals[count, 1] = min_start + i
-            bed_intervals[count, 2] = current_depth
-            interval_start = min_start + i
-            current_depth = position_depth[i]
-            count += 1
-
-    # Append the last interval
-    bed_intervals[count, 0] = interval_start
-    bed_intervals[count, 1] = max_end
-    bed_intervals[count, 2] = current_depth
-
-    bed_intervals = bed_intervals[:count+1]
-    bed_intervals[:,3] = (bed_intervals[:,1] - bed_intervals[:,0])
-    bed_intervals[:,4] = bed_intervals[:,2] * bed_intervals[:,3]
-
-    # Sort rows based on the 4th column values in descending order
-    sorted_indices = np.argsort(bed_intervals[:, 4])[::-1]
-    sorted_bed_intervals = bed_intervals[sorted_indices]
-
-    overlap1 = fixed_interval[0] < sorted_bed_intervals[:, 1]
-    overlap2 = fixed_interval[1] > sorted_bed_intervals[:, 0]
-
-    overlapping_intervals = sorted_bed_intervals[overlap1 & overlap2]
-    logger.debug(f"The haplotype covered depth stat looks like: \n{pretty_print_matrix(overlapping_intervals)}\n")
-
-    overlap_interval_list = []
-    for i in range(overlapping_intervals.shape[0]):
-        overlap_interval_list.append((overlapping_intervals[i, 0], overlapping_intervals[i, 1]))
-    return overlap_interval_list
-
-
 
 def extract_continuous_regions_dict(reads):
     # Sort reads by reference start position
@@ -3736,12 +3002,6 @@ def identify_misalignment_per_region(region,
         vertices[(vert_idx, qname)].append(read)
         vert_inds.add(vert_idx)
 
-    # qnames = set(dict.fromkeys([r.query_name for r in overlap_reads]))
-    # There might be some qname with low_qualities
-    # vertices = [phasing_graph.vertex(qname_to_node[qname]) for qname in qnames if not qname in lowqual_qnames and qname in qname_to_node]
-    # The qname_hap_info, should be a dictionary that maps every vert idx to the component idx
-    # qname_hap_info, clique_sep_component_idx = find_components_in_subgraph(phasing_graph, vert_inds, weight_matrix, clique_sep_component_idx, qname_hap_info, logger = logger)
-    # logger.debug(f"The qname_hap_info looks like {qname_hap_info}")
     subgraphs = group_by_dict_optimized(qname_hap_info, vertices)
 
     if len(subgraphs) == 0:
@@ -3754,14 +3014,10 @@ def identify_misalignment_per_region(region,
     # overlap_haplotype_info = {}
     inspect_results = []
     for subgraph_id, (subgraph_vertices, qnames, read_pair_lists) in subgraphs.items():
-        # Extract the qnames for the vertices in the subgraph
-        # qnames = [phasing_graph.vp.qname[v] for v in subgraph_vertices]
-        # Extract the reads corresponding to the qnames
         reads = []
         for read_pair_list in read_pair_lists:
             reads += read_pair_list
-        # reads = [r for r in overlap_reads if r.query_name in qnames]
-        # Sort the reads by their start positions
+        # Sort the reads by start positions
         continuous_covered_regions = extract_continuous_regions_dict(reads)
 
         for span, sreads in continuous_covered_regions.items():
@@ -3769,8 +3025,6 @@ def identify_misalignment_per_region(region,
                 region_haplotype_info[span] = (sreads, set([qname_to_node[r.query_name] for r in sreads]), subgraph_id, qnames)
             else:
                 inspect_results.append((subgraph_id, qnames, span, sreads, (min(span[1], region[2]) - max(span[0], region[1])) / (region[2] - region[1])))
-                # logger.warning(f"The assembled haplotype spanning {region[0]},{span} is not enwrapping the region {region}.")
-                # overlap_haplotype_info[span] = sreads
 
     if len(region_haplotype_info) <= 2:
         logger.info(f"At region {region}, only found {len(region_haplotype_info)} haplotype clusters enwrapping the whole region. Try recover some regions.\n")
@@ -3848,83 +3102,6 @@ def convert_list_to_dict(vprop):
         for q_idx in group:
             label_dict[q_idx] = label
     return label_dict
-
-
-
-def refine_inspect_region(var_df, region, varno_cutoff=3, logger = logger):
-    chrom, start, end = region
-    chrom_df = var_df[var_df["chrom"] == chrom]
-    var_df = chrom_df[(chrom_df["start"] <= end) & (chrom_df["end"] >= start)]
-
-    refined_regions = set([region])
-
-    while var_df.shape[0] >= varno_cutoff:
-        # Inspect the first and last variant's distance with their adjacent variant
-        first_var_end = var_df.iloc[0, 2]
-        second_var_start = var_df.iloc[1, 1]
-        first_var_distance = second_var_start - first_var_end
-
-        last_var_start = var_df.iloc[-1, 1]
-        second_last_var_end = var_df.iloc[-2, 2]
-        last_var_distance = last_var_start - second_last_var_end
-
-        if first_var_distance > last_var_distance:
-            var_df = var_df.iloc[1:, :]
-        else:
-            var_df = var_df.iloc[:-1, :]
-        refined_regions.add((chrom, var_df.iloc[0, 1] - 1, var_df.iloc[-1, 2] + 1))
-
-    # Continuous sweep of tri-variant regions
-    for i in range(var_df.shape[0]):
-        var1_start = var_df.iloc[i, 1]
-        if i + 3 < var_df.shape[0]:
-            var4_end = var_df.iloc[i + 3, 2]
-            if var4_end - var1_start <= 100:
-                refined_regions.add((chrom, var1_start - 1, var4_end + 1))
-            else:
-                var3_end = var_df.iloc[i + 2, 2]
-                if var3_end - var1_start <= 100:
-                    refined_regions.add((chrom, var1_start - 1, var3_end + 1))
-                else:
-                    var2_end = var_df.iloc[i + 1, 2]
-                    if var2_end - var1_start < 100:
-                        if var2_end - var1_start < 40:
-                            refined_regions.add((chrom, var1_start - 20, var2_end + 20))
-                        else:
-                            refined_regions.add((chrom, var1_start - 1, var2_end + 1))
-                    else:
-                        refined_regions.add((chrom, var1_start - 40, var1_start + 40))
-                        refined_regions.add((chrom, var2_end - 40, var2_end + 40))
-        elif i + 2 < var_df.shape[0]:
-            var3_end = var_df.iloc[i + 2, 2]
-            if var3_end - var1_start <= 100:
-                refined_regions.add((chrom, var1_start - 1, var3_end + 1))
-            else:
-                var2_end = var_df.iloc[i + 1, 2]
-                if var2_end - var1_start < 100:
-                    if var2_end - var1_start < 40:
-                        refined_regions.add((chrom, var1_start - 20, var2_end + 20))
-                    else:
-                        refined_regions.add((chrom, var1_start - 1, var2_end + 1))
-                else:
-                    refined_regions.add((chrom, var1_start - 40, var1_start + 40))
-                    refined_regions.add((chrom, var2_end - 40, var2_end + 40))
-        elif i + 1 < var_df.shape[0]:
-            var2_end = var_df.iloc[i + 1, 2]
-            if var2_end - var1_start < 100:
-                if var2_end - var1_start < 40:
-                    refined_regions.add((chrom, var1_start - 20, var2_end + 20))
-                else:
-                    refined_regions.add((chrom, var1_start - 1, var2_end + 1))
-            else:
-                refined_regions.add((chrom, var1_start - 40, var1_start + 40))
-                refined_regions.add((chrom, var2_end - 40, var2_end + 40))
-        else:
-            refined_regions.add((chrom, var1_start - 40, var1_start + 40))
-
-    logger.info(f"The input region is {region}. The refined regions are \n{refined_regions}\n")
-    return refined_regions
-
 
 @numba.njit(types.int32[:,:](types.boolean[:]), fastmath=True)
 def extract_true_stretches(bool_array):
@@ -4341,24 +3518,13 @@ def inspect_by_haplotypes(input_bam,
                     hread_hap_vector = get_hapvector_from_cigar(hread.cigartuples, logger = logger)
                     total_genomic_haps[hread_id] = hread_hap_vector
 
-                # logger.info(f"The hread_hap_vector from {hread_id} has a length of {len(hread_hap_vector)}. The cigar is {hread.cigartuples}. Then the overlap slicing command is [{overlap_span[0] - hread_start}:{overlap_span[1] - hread_start}].")
-
                 try:
                     interval_genomic_hap = hread_hap_vector[overlap_span[0] - hread_start:overlap_span[1] - hread_start]
                 except IndexError:
                     continue
-                # else:
-                    # genomic_haps[genomic_hap_count] = interval_genomic_hap
-                    # genomic_hap_count += 1
-                # genomic_haps = genomic_haps[:genomic_hap_count, :]
                 interval_con_seq = consensus_sequence[overlap_span[0] - span[0]:overlap_span[1] - span[0]]
                 # logger.info(f"Inspect the conesensus sequence (length {len(consensus_sequence)})\n{consensus_sequence.tolist()}\nwith the genomic haplotype (length {len(interval_genomic_hap)})\n{interval_genomic_hap.tolist()}\n")
                 varcount, alt_varcount = ref_genome_similarity(interval_con_seq, interval_genomic_hap)
-                # logger.info(f"For haplotype {hid}, at covered region {chrom}:{overlap_span}, the ref genome similarity is {similarity}.")
-                # logger.info(f"The region interval consensus sequence: {interval_con_seq.tolist()}. \nThe region interval genomic haplotype: {interval_genomic_hap.tolist()}.")
-                # if not np.isnan(similarity):
-                #     max_similarity = max(similarity, max_similarity)
-                # logger.info(f"Found a genomic haplotype read {hread_id} ({hread_start}, {hread_end}) overlapping the region {span} from {hid}. \nThe interval_con_seq is {interval_con_seq.tolist()} and the interval_genomic_hap is {interval_genomic_hap.tolist()}. The similarity is {similarity}.")
                 if hread_qname in ref_genome_similarities[hid]:
                     ref_genome_similarities[hid][hread_qname].append((varcount, alt_varcount))
                 else:
@@ -4571,29 +3737,6 @@ def main_function(bam,
                                                                                            logger = logger)
     if phased_graph is None:
         return None
-
-    # vis_qnames = ["HISEQ1:21:H9V1VADXX:1:1207:20778:56848:PC23",
-    #               "HISEQ1:21:H9V1VADXX:1:1201:6122:57532:PC23"]
-
-    # vis_qids = []
-    # for vis_qname in vis_qnames:
-    #     vis_qid = qname_to_node.get(vis_qname, -1)
-    #     dict_qid = qname_idx_dict.get(vis_qname, -1)
-    #     if vis_qid >= 0:
-    #         logger.info(f"The read {vis_qname} is in the graph with node id {vis_qid}")
-    #         logger.info(f"The read {vis_qname} is in the graph with qname_idx {dict_qid} in qname_dict")
-    #         logger.info(f"The read qname is {qname_dict[dict_qid]} based on the dict_qid and the qname is {qname_dict[vis_qid]} based on th vis_qid")
-    #         vis_qids.append(vis_qid)
-
-    # # Extract the weight edge matrix value for each pair in the vis_qids
-    # for i in range(len(vis_qids)):
-    #     for j in range(i+1, len(vis_qids)):
-    #         if i == j:
-    #             continue
-    #         qid1 = vis_qids[i]
-    #         qid2 = vis_qids[j]
-    #         logger.info(f"The edge weight between {qid1} and {qid2} is {weight_matrix[qid1, qid2]}")
-
 
     logger.info(f"Now succesfully built the phasing graph with {phased_graph.num_vertices()} vertices and {phased_graph.num_edges()} edges. Save it to {bam_graph}\n\n")
     # Now we need to extract the components in the phased graph
