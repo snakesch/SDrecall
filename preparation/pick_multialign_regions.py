@@ -54,6 +54,7 @@ def calculate_inferred_coverage(bam_file,
                               target_region,
                               target_tag = "FCRs",
                               genome_file = "",
+                              output_bed = "",
                               logger = logger):
     '''
     Multiple filter tags are supported as comma-delimited strings. E.g. XA,XS
@@ -138,10 +139,10 @@ def pick_region_by_depth(input_bam: str,
     Consolidate read depths computed with 4 different settings and derive a set of recall regions
     '''
     # Compute the inferred coverage of individual bases within target region by different qualities
-    parallel_args = [ (input_bam, 0,            "",     target_region, target_tag, genome_file, logger), 
-                      (input_bam, MQ_threshold, "",     target_region, target_tag, genome_file, logger),
-                      (input_bam, 0,            "XA",   target_region, target_tag, genome_file, logger),
-                      (input_bam, 0,            "XS",   target_region, target_tag, genome_file, logger) ]
+    parallel_args = [ (input_bam, 0,            "",     target_region, target_tag, genome_file, output_bed, logger), 
+                      (input_bam, MQ_threshold, "",     target_region, target_tag, genome_file, output_bed, logger),
+                      (input_bam, 0,            "XA",   target_region, target_tag, genome_file, output_bed, logger),
+                      (input_bam, 0,            "XS",   target_region, target_tag, genome_file, output_bed, logger) ]
 
     with mp.Pool(min(4, threads)) as pool:
         raw_depth, high_mq_depth, raw_xa_depth, raw_xs_depth = pool.starmap(calculate_inferred_coverage, parallel_args)

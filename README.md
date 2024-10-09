@@ -2,105 +2,38 @@
 
 ## TODO
 - [ ] Three separate directories at top level (preparation, phasing, shell_utils)
-- [ ] Need a way to locate target shell scripts (Alternatively: source shell_utils.sh; check_bam_validity?)
+- [x] Need a way to locate target shell scripts (Alternatively: source shell_utils.sh; check_bam_validity?)
+- [ ] **Preparation done. Moving `sd_pairs.py` and `convert_nodes_into_hierachical_beds.py` soon.**
 - [ ] Numba not yet in env
 - [ ] README not fixed
 - [ ] conda YAML lacking some libraries (e.g. intervaltree)
 - [ ] Extra documentation for ad-hoc tools for intrinsic variant calling
 - [ ] Review license
- 
-< -- README under construction -- >
-SDrecall is the prototype of a tool for calling short variants that may be missed by GATK best practice by ascertaining segmental duplication regions. This pipeline is implemented in python3. 
 
-## Prerequisites
-* [samtools](http://www.htslib.org/) v1.15
-* [BEDTools](https://bedtools.readthedocs.io/en/latest/) v2.30.0
-* [BISER](https://github.com/0xTCG/biser) v1.1
-* [seqkit](https://github.com/shenwei356/seqkit) v2.2.0
-* [seqtk](https://github.com/lh3/seqtk) v1.3
-* [GATK](https://gatk.broadinstitute.org/hc/en-us) v4.2.6.1
-* [bwa](https://github.com/lh3/bwa) v0.7.17
-* [Python](https://www.python.org/downloads/) v3.9.2
-* [HTSlib](http://www.htslib.org/download/) v1.14
-* [mosdepth](https://github.com/brentp/mosdepth) v0.3.3
-* [bcftools](http://www.htslib.org/download/) v1.14
-
-Note: We do not guarantee compatibility for softwares of more updated versions.
 
 ## Installation
 ### Using conda/mamba
 Users should first clone this repository to a local directory.
 
-For conda users, create an environment from YAML.
+For mamba users, create an environment from YAML.
 ```{bash}
-conda env create -f ./setup/environment.yml
-conda activate SDrecall
+mamba env create -f ./env/SDrecall.yml
+mamba activate SDrecall
 ```
+
+## Usage
+(help message of driver code)
+
+### Inputs
+Users need to provide a QC-ed BAM file and an optional BED regions of selected variant recall regions.
+
+### Outputs
 
 ### Using docker/singularity
 Given the long list of dependencies of SDrecall, we are still working on a docker file / singularity recipe. Any contributions are most welcome. 
 
-## Input files
-
-* Base Quality Score Recalibrated (BQSR) BAM file
-* A panel of genes of interest ([step 1](https://github.com/snakesch/SDrecall/blob/main/doc/customRun.md#1-get-relevant-sd-regions))
-* A prioritized VCF (v4.2; from other variant callers) (optional)
-
-## Quick run
-```{bash}
-usage: SDrecall.py [-h] -i INPUT_BAM [-p PVCF] -r REF_GENOME -o OUTPUT -b BUILD -l LIST -a TABLE [-t THREAD] [--length LENGTH]
-                   [--lower LOWER] [-f FRAGLEN] [-g GAPLEN] [--keep_trimmed] [-v VERBOSE]
-
-SDrecall wrapper.
-
-Options:
-  -h, --help            show this help message and exit
-  -i INPUT_BAM, --input_bam INPUT_BAM
-                        Input BAM file
-  -p PVCF, --pvcf PVCF  Path of prioritized VCF
-  -r REF_GENOME, --ref_genome REF_GENOME
-                        reference genome to extract SD regions
-  -o OUTPUT, --output OUTPUT
-                        output directory of resulting BED files
-  -b BUILD, --build BUILD
-                        reference genome assembly
-  -l LIST, --list LIST  customized gene list
-  -t THREAD, --thread THREAD
-                        number of threads used with BISER (default = 8)
-  --length LENGTH       BED window size for extracting reads from homologous regions (default: 250)
-  --lower LOWER         lower bound for unlikely intrinsic variants
-  -f FRAGLEN, --fraglen FRAGLEN
-                        expected fragment length (default: 300)
-  -g GAPLEN, --gaplen GAPLEN
-                        small gap cutoff value (default: 10)
-  --keep_trimmed        keep trimmed SD BED file for debugging
-  -v VERBOSE, --verbose VERBOSE
-                        verbosity level (default: INFO)
-
-```
-Note: If `--verbose` is specified as DEBUG, all intermediate files will be retained.
-
-## Custom run
-Users may run individual steps separately with script indexed 0-4. Although quick run is recommended for most use cases, custom run is helpful for debugging. Users can also allocate different number of threads for each step. Details of individual steps are described [here](doc/customRun.md).
-
-## Workflow
-<p align="center">
-  <img src="doc/SDrecall.png" />
-</p>
+## Code development and feature request
+SDrecall is under active development. We welcome all kinds of suggestions and collaborations.
 
 ## Contact and correspondance
-Xingtian Yang (u3005579@connect.hku.hk), Louis She (snakesch@connect.hku.hk)
-
-## Simulation and benchmarking
-
-To be implemented.
-
-## Future improvements
-- [ ] Change the source of annotation table
-- [ ] Keep all homologous coordinates in a single file (avoid creating separate directories)
-- [ ] Replace `samtools depth` with `mosdepth` or other faster algorithms
-- [ ] Uplift dependencies
-- [ ] Simulation and benchmarking
-- [ ] Unit test
-
-
+Xingtian Yang (yangyxt@hku.hk), Louis She (snakesch@connect.hku.hk)

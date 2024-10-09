@@ -15,9 +15,9 @@ def executeCmd(cmd, logger = logging.getLogger('SDrecall')) -> None:
     if code != 0:
         cmd_lst = cmd.split(" ")
         if cmd_lst[1][0] != "-":
-            raise RuntimeError("Error in " + " ".join(cmd_lst))
+            raise RuntimeError("Error in " + " ".join(cmd_lst) + f"\nError message: {proc.stderr.decode()}")
         else:
-            raise RuntimeError("Error in {}".format(cmd_lst))
+            raise RuntimeError("Error in {}\nError message: {proc.stderr.decode()}".format(cmd_lst))
     
     return proc.stdout.decode()
 

@@ -10,7 +10,6 @@ import pybedtools as pb
 import networkx as nx
 import graph_tool.all
 
-from build_regions_from_PC_clusters import establish_beds_per_PC_cluster
 from preparation.seq import get_bam_frag_size
 from preparation.extract_SD_pairs_from_bam_json import extract_sd_coordinates_from_json
 from preparation.pick_multialign_regions import pick_region_by_depth
@@ -35,30 +34,22 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
                                  err_rate = 0.05, 
                                  threads = 10,
                                  mq_cutoff = 20,
-                                 target_tag = "target",
-                                 profile_file = None):
+                                 target_tag = "target"):
 
-    
-
-    # if profile_file:
-    #     pr = cProfile.Profile()
-    #     pr.enable()
-    
     os.makedirs(work_dir, exist_ok=True)
 
     rg = Genome(path=ref_genome)
     genome_file = rg.fai_index
 
     # Step 0: Calculate the distribution of fragment sizes
-    # avg_frag_size, std_frag_size = get_bam_frag_size(input_bam)
-    avg_frag_size, std_frag_size = 570.4, 150.7
+    avg_frag_size, std_frag_size = get_bam_frag_size(input_bam)
     logger.info(f"BAM {input_bam} has an average fragment size of {avg_frag_size}bp (std: {std_frag_size}bp)")
     
     ## Define names of intermediate files. Intermediate / final outputs will be written to work_dir.
-    basename = os.path.basename(input_bam)
-    qname_lst = os.path.join(work_dir, basename).replace(".bam", f".{target_tag}.qname.lst")
-    bam_json = os.path.join(work_dir, basename).replace(".bam", f".{target_tag}.json")   
-    multi_align_bed = os.path.join(work_dir, basename).replace(".bam", f".{target_tag}.multialign.bed")
+    basename = os.path.basename(input_bam).replace(".bam", "")
+    qname_lst = os.path.join(work_dir, basename + f".{target_tag}.qname.lst")
+    bam_json = os.path.join(work_dir, basename + f".{target_tag}.json")   
+    multi_align_bed = os.path.join(work_dir, basename + f".{target_tag}.multialign.bed")
     
     # Step 1 : Pick the multi_aligned regions within the target regions
     if not os.path.exists(multi_align_bed) or not is_file_up_to_date(multi_align_bed, [input_bam, target_bed]):
@@ -125,7 +116,7 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
     reverse_sd_df = sd_map_df.loc[:, ["chr_counterparts", "start_counterparts", "end_counterparts", "chr", "start", "end"]].rename(columns={"chr_counterparts":"chr", "start_counterparts":"start", "end_counterparts":"end", "chr":"chr_counterparts", "start":"start_counterparts", "end":"end_counterparts"})
     merged_sd_df = pd.concat([sd_map_df, reverse_sd_df], axis=0, ignore_index=True).loc[:,["chr", "start", "end"]].drop_duplicates()
     sd_map_bed = pb.BedTool.from_dataframe(merged_sd_df)
-    bam_sd_bed = os.path.join(work_dir, basename).replace(".bam", f".{target_tag}.bamsd.bed")
+    bam_sd_bed = os.path.join(work_dir, basename + f".{target_tag}.bamsd.bed")
     sd_map_bed.saveas(bam_sd_bed)
     logger.info(f"SD regions from primary contigs are written to {bam_sd_bed} (covering {sd_map_bed.sort().total_coverage()}bp). ")
     logger.debug(f"Primary contig SD map: {sd_map_df.head(10).to_string(index=False)}")
@@ -212,8 +203,8 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
     query_nodes = intersect_df.loc[:, ["chrA", "startA", "endA", "strandA"]].drop_duplicates().rename(columns={"chrA":"chr", "startA":"start", "endA":"end", "strandA":"strand"})
     if logger.level == logging.DEBUG:
         final_query_bed = pb.BedTool.from_dataframe(query_nodes)
-        final_query_bed.intersect(multi_align_bed_obj, wo=True).saveas(os.path.join(work_dir, basename).replace(".bam", "target_overlapping_query_SD.bed")) # renamed from coding_query_nodes.bed
-        logger.debug("Target-overlapping SD regions saved to: {}".format(os.path.join(work_dir, basename).replace(".bam", "target_overlapping_query_SD.bed")))
+        final_query_bed.intersect(multi_align_bed_obj, wo=True).saveas(os.path.join(work_dir, basename + "target_overlapping_query_SD.bed")) # renamed from coding_query_nodes.bed
+        logger.debug("Target-overlapping SD regions saved to: {}".format(os.path.join(work_dir, basename + "target_overlapping_query_SD.bed")))
     logger.info("Identified {} distinct target-overlapping SDs from graph".format(query_nodes.shape[0]))
 
     # Step 7. Pool all SD nodes and the corresponding paralogous regions from the SD + PO graph
@@ -251,11 +242,7 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
                                         nthreads = threads,
                                         avg_frag_size = avg_frag_size,
                                         std_frag_size = std_frag_size)
-
-    # if profile_file:
-    #     pr.disable()
-    #     pr.dump_stats(profile_file)
-    
+   
     
 def main():
     parser = argparse.ArgumentParser(description='Deploy PCs for SDrecall.')
@@ -269,7 +256,6 @@ def main():
     parser.add_argument('-t', '--threads', type=int, default=10, help='Number of threads to use.')
     parser.add_argument('--mq_cutoff', type=int, default=20, help='Mapping quality cutoff.')
     parser.add_argument('--target_tag', type=str, default="target", help='Optional target tag for filtering.')
-    parser.add_argument('-p', '--profile_file', type=str, default=None, help='Optional profile file for tuning.')
     parser.add_argument('-v', '--verbose', type=str, default="INFO", help='Level of verbosity (default = INFO).')
 
     args = parser.parse_args()
@@ -292,7 +278,6 @@ def main():
         threads=args.threads,
         mq_cutoff=args.mq_cutoff,
         target_tag=args.target_tag,
-        profile_file=args.profile_file
     )
 
 if __name__ == "__main__":
