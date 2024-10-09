@@ -203,9 +203,66 @@ def migrate_bam_to_ncls(bam_file,
                         basequal_median_filter = 20,
                         paired = True,
                         logger = logger):
-    '''
-    For NCLS, ends are exclusive
-    '''
+    """
+    Migrate BAM file data to NCLS (Nested Containment List) format for efficient interval querying.
+
+    This function processes a BAM file, filters reads based on quality criteria, and organizes the data
+    into NCLS structures for fast overlap queries. It's particularly useful for handling genomic interval
+    data in large-scale sequencing projects.
+
+    It completely put all alignment info into memory, thus faster than pysam disk IO based query.
+
+    Parameters:
+    -----------
+    bam_file : str
+        Path to the input BAM file.
+    mapq_filter : int, optional
+        Minimum mapping quality threshold for reads (default is 25).
+    basequal_median_filter : int, optional
+        Minimum median base quality threshold for reads (default is 20).
+    paired : bool, optional
+        If True, process as paired-end data; if False, as single-end (default is True).
+    logger : logging.Logger, optional
+        Logger object for output messages.
+
+    Returns:
+    --------
+    tuple
+        A tuple containing:
+        - ncls_dict : dict
+            Dictionary of NCLS objects, keyed by chromosome names.
+        - read_dict : dict
+            Dictionary of read objects, keyed by query name indices.
+        - qname_dict : dict
+            Dictionary mapping query name indices to query names. (qname_idx -> qname) The qname_idx is determined by the growing variable n with the iteration of all reads
+        - qname_idx_dict : dict
+            Dictionary mapping query names to query name indices. (qname -> qname_idx)
+        - noisy_qnames : set
+            Set of query names identified as noisy and filtered out.
+
+    Notes:
+    ------
+    - The function uses pysam for BAM file processing and NCLS for interval data structure.
+    - Reads are filtered based on mapping quality, median base quality, and other criteria.
+    - For paired-end data, additional checks ensure proper pairing and orientation.
+    - The NCLS structure allows for O(log n + m) time complexity for overlap queries, where n is the
+      number of intervals and m is the number of overlaps found.
+
+    Example:
+    --------
+    >>> bam_file = "path/to/aligned_reads.bam"
+    >>> ncls_dict, read_dict, qname_dict, qname_idx_dict, noisy_qnames = migrate_bam_to_ncls(bam_file)
+    >>> # Now you can use ncls_dict for efficient interval queries
+    >>> chrom = "chr1"
+    >>> start, end = 1000, 2000
+    >>> overlapping_reads = ncls_dict[chrom].find_overlap(start, end)
+
+    See Also:
+    ---------
+    pysam.AlignmentFile : For BAM file handling
+    ncls.NCLS : Nested Containment List Structure for interval queries
+    """
+
     bam = pysam.AlignmentFile(bam_file, "rb")
     chroms = bam.references
     # print(chroms)
@@ -295,6 +352,35 @@ def migrate_bam_to_ncls(bam_file,
 
 
 def get_overlapping_reads(ncls_dict, read_dict, qname_dict, chrom, start, end):
+    """
+    Retrieve overlapping reads for a given genomic interval using NCLS.
+
+    Parameters:
+    -----------
+    ncls_dict : dict
+        Dictionary of NCLS objects, keyed by chromosome names.
+    read_dict : dict
+        Dictionary of read objects, keyed by query name indices.
+    qname_dict : dict
+        Dictionary mapping query name indices to query names.
+    chrom : str
+        Chromosome name.
+    start : int
+        Start position of the interval (0-based, inclusive).
+    end : int
+        End position of the interval (0-based, exclusive).
+
+    Returns:
+    --------
+    list
+        List of overlapping read objects (pysam.AlignedSegment).
+
+    Notes:
+    ------
+    This function is deprecated and not used in the current implementation.
+    Use lazy_get_overlapping_reads instead for better memory efficiency.
+    """
+
     if chrom not in ncls_dict:
         return []
 
@@ -309,10 +395,35 @@ def get_overlapping_reads(ncls_dict, read_dict, qname_dict, chrom, start, end):
 
 
 def lazy_get_overlapping_qname_idx(ncls_dict, read_dict, qname_dict, chrom, start, end):
-    '''
-    After reviewing the source code in https://github.com/pyranges/ncls/blob/master/ncls/src/ncls.pyx
-    I confirm that start is inclusive and end is exclusive
-    '''
+    """
+    Generator function to lazily yield query name indices of overlapping reads.
+
+    Parameters:
+    -----------
+    ncls_dict : dict
+        Dictionary of NCLS objects, keyed by chromosome names.
+    read_dict : dict
+        Dictionary of read objects, keyed by query name indices.
+    qname_dict : dict
+        Dictionary mapping query name indices to query names.
+    chrom : str
+        Chromosome name.
+    start : int
+        Start position of the interval (0-based, inclusive).
+    end : int
+        End position of the interval (0-based, exclusive).
+
+    Yields:
+    -------
+    int
+        Query name index of an overlapping read.
+
+    Notes:
+    ------
+    This function uses NCLS for efficient overlap queries.
+    The start position is inclusive, and the end position is exclusive.
+    """
+
     # Perform an overlap query on the NCLS tree
     if chrom not in ncls_dict:
         yield from ()
@@ -324,7 +435,38 @@ def lazy_get_overlapping_qname_idx(ncls_dict, read_dict, qname_dict, chrom, star
         for qname_idx in dict.fromkeys(overlapping_read_qnames):
             yield qname_idx
 
+
+
 def lazy_get_overlapping_reads(ncls_dict, read_dict, qname_dict, chrom, start, end):
+    """
+    Generator function to lazily yield overlapping read objects.
+
+    Parameters:
+    -----------
+    ncls_dict : dict
+        Dictionary of NCLS objects, keyed by chromosome names.
+    read_dict : dict
+        Dictionary of read objects, keyed by query name indices.
+    qname_dict : dict
+        Dictionary mapping query name indices to query names.
+    chrom : str
+        Chromosome name.
+    start : int
+        Start position of the interval (0-based, inclusive).
+    end : int
+        End position of the interval (0-based, exclusive).
+
+    Yields:
+    -------
+    pysam.AlignedSegment
+        Overlapping read object.
+
+    Notes:
+    ------
+    This function uses NCLS for efficient overlap queries and yields individual reads.
+    It filters reads to ensure they actually overlap with the given interval.
+    """
+
     # Perform an overlap query on the NCLS tree
     if chrom not in ncls_dict:
         yield from ()
@@ -353,7 +495,7 @@ def check_edge(u, v, adj_set):
 @numba.njit(types.int32(types.int32[:]), fastmath=True)
 def count_continuous_indel_blocks(array):
     """
-    This function counts the number of continuous blocks of negative numbers in a 1D array.
+    This function counts the number of continuous (consecutive) blocks of negative numbers in a 1D array.
 
     Args:
     array (list or numpy array): Input array containing numbers.
@@ -385,7 +527,7 @@ def count_continuous_indel_blocks(array):
 @numba.njit(types.int32(types.bool_[:]), fastmath=True)
 def count_continuous_blocks(array):
     """
-    This function counts the number of continuous blocks of negative numbers in a 1D array.
+    This function counts the number of continuous (consecutive) blocks of True values in a 1D boolean array.
 
     Args:
     array (list or numpy array): Input array containing numbers.
@@ -411,6 +553,8 @@ def count_continuous_blocks(array):
     block_count = numba_sum(block_bools)
 
     return block_count
+
+
 
 @numba.njit(types.int32(types.int32[:]), fastmath=True)
 def count_snv(array):
@@ -495,10 +639,12 @@ def get_hapvector_from_cigar(cigar_tuples,
                              logger = logger):
     '''
     Convert CIGAR tuples to a haplotype vector with penalties for matches, mismatches, and gaps.
+    Note that the length of the haplotype vector is strictly aligned to the covered reference genome span, only this way we can ensure that comparison between overlapping reads are strictly aligned to each other.
     Uses NumPy for efficient array operations.
 
     Arguments:
-    - cigar_tuples: List of tuples representing CIGAR operations.
+    - cigar_tuples: List of tuples representing CIGAR operations. (generated from pysam.AlignedSegment.cigartuples)
+    - query_sequence: The query sequence of the read. (generated from pysam.AlignedSegment.query_sequence)
     - logger: Logger for logging information or errors.
 
     Returns:
@@ -582,7 +728,56 @@ def get_hapvector_from_cigar(cigar_tuples,
 def get_errorvector_from_cigar(read, cigar_tuples, logger=logger):
     '''
     read.reference_start position is 0-indexed and it is including the soft-clipped bases
-    when I convert the
+    Generate an error vector from a read's CIGAR string and base qualities.
+
+    This function creates an error vector representing the probability of errors
+    at each position in the read's alignment to the reference. It uses the CIGAR
+    string to determine the alignment structure and the base qualities to estimate
+    error probabilities.
+
+    Parameters:
+    -----------
+    read : pysam.AlignedSegment
+        The read object containing alignment information.
+    cigar_tuples : list of tuples
+        List of CIGAR operations, each tuple contains (operation, length).
+    logger : logging.Logger, optional
+        Logger object for output messages.
+
+    Returns:
+    --------
+    numpy.ndarray
+        An array of float values representing error probabilities for each
+        position in the read's alignment to the reference. Values range from
+        0 to 1, where 0 indicates high confidence and 1 indicates low confidence
+        or gaps in the alignment.
+
+    Notes:
+    ------
+    - The function assumes that the CIGAR string separates matches (7) from
+      mismatches (8).
+    - Insertions and deletions are initially marked with a placeholder value (99),
+      which is later converted to 0 (high confidence) in the error vector.
+    - The final error vector is scaled based on the Phred quality scores,
+      converting them to error probabilities.
+    - The error probabilities are intended to represent the expected deviation
+      from the original haplotype.
+
+    Raises:
+    -------
+    AssertionError
+        If the CIGAR string contains unexpected operations or if the resulting
+        error vector length doesn't match the read's aligned length.
+
+    Example:
+    --------
+    >>> read = pysam.AlignedSegment()
+    >>> read.cigartuples = [(7, 10), (8, 1), (1, 2), (7, 5)]
+    >>> read.query_qualities = [30] * 18
+    >>> error_vector = get_errorvector_from_cigar(read, read.cigartuples)
+    >>> print(error_vector)
+    [0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.
+     0.001 0.001 0.001 0.001 0.001]
     '''
     errorvector = np.empty(read.reference_end - read.reference_start, dtype=float)
     base_qualities = np.array(read.query_qualities, dtype=np.int32)
@@ -628,7 +823,34 @@ def get_errorvector_from_cigar(read, cigar_tuples, logger=logger):
 
 
 def get_read_id(read):
+    """
+    Generate a unique identifier for a read.
+
+    This function creates a unique identifier for a read by combining its query name
+    and flag. The flag is included because:
+
+    1. It distinguishes between reads in a pair: For paired-end sequencing, each pair
+       of reads will have the same query name but different flags.
+
+    2. It provides information about the read's properties: The flag contains important
+       information such as whether the read is paired, mapped, secondary alignment, etc.
+
+    3. It ensures uniqueness: In cases where the same read might appear multiple times
+       (e.g., secondary alignments), the flag helps to differentiate these instances.
+
+    Parameters:
+    -----------
+    read : pysam.AlignedSegment
+        The read object from which to generate the ID.
+
+    Returns:
+    --------
+    str
+        A string in the format "query_name:flag" that uniquely identifies the read.
+    """
     return f"{read.query_name}:{read.flag}"
+
+
 
 # @numba.njit()
 def prepare_ref_query_idx_map(qseq_ref_pos_arr):
@@ -1607,7 +1829,6 @@ def find_uncovered_regions(existing_intervals, new_interval):
 
 
 def build_phasing_graph(bam_file,
-                        bam_ncls,
                         ncls_read_dict,
                         ncls_qname_dict,
                         ncls_qname_idx_dict,
@@ -1615,9 +1836,61 @@ def build_phasing_graph(bam_file,
                         edge_weight_cutoff = 0.201,
                         logger = logger):
     '''
-    The ncls_read_dict looks like:
-    { qname1: [read1, read2],
-      qname2: [read1, read2] }
+    Construct a phasing graph from BAM data for efficient haplotype identification.
+
+    This function builds a graph where each vertex represents a read pair and each edge
+    represents the confidence that two read pairs originated from the same haplotype.
+    The graph is used for subsequent haplotype identification through clique finding.
+
+    Parameters:
+    -----------
+    bam_file : str
+        Path to the input BAM file.
+
+    ncls_read_dict : dict
+        Dictionary of read objects, keyed by query name indices.
+        The ncls_read_dict looks like:
+                                        { qname1: [read1, read2],
+                                          qname2: [read1, read2]  }
+
+    ncls_qname_dict : dict
+        Dictionary mapping query name indices to query names. (qname_indices -> qnames)
+
+    ncls_qname_idx_dict : dict
+        Dictionary mapping query names to query name indices. (qnames -> qname_indices)
+
+    mean_read_length : float
+        Average read length in the BAM file.
+    edge_weight_cutoff : float, optional
+        Minimum edge weight threshold for including an edge in the graph (default is 0.201).
+    logger : logging.Logger, optional
+        Logger object for output messages.
+
+    Returns:
+    --------
+    tuple
+        A tuple containing:
+        - phased_graph : graph_tool.Graph
+            The constructed phasing graph.
+        - weight_matrix : numpy.ndarray
+            Matrix of edge weights between read pairs. (adjacency matrix)
+        - qname_to_node : dict
+            Dictionary mapping query names to graph vertices. (qnames -> graph_vertices_indices)
+        - total_readhap_vector : dict
+            Dictionary of read haplotype vectors. (read_ids -> haplotype_vectors), please refer read_ids to function get_read_id
+
+    Notes:
+    ------
+    - The function uses the graph-tool library for efficient graph operations.
+    - Edge weights are calculated based on two factors:
+        1. The total overlapping span between two read pairs
+        2. The number of variants (SNVs and small indels) shared by two read pairs
+    - The resulting graph is used for subsequent haplotype identification through clique finding (Bron-Kerbosch algorithm).
+
+    See Also:
+    ---------
+    migrate_bam_to_ncls : For creating the NCLS data structures.
+    find_cliques_in_every_component : For identifying haplotypes in the constructed graph.
     '''
 
     logger.info(f"There are totally {len(ncls_read_dict)} pair of reads, mean read length is {mean_read_length}. with adequate mapping or base quality which can be used to build the graph")
@@ -1632,16 +1905,10 @@ def build_phasing_graph(bam_file,
     read_prop = g_reads.new_vertex_property("string")
     weight = g.new_edge_property("float")
 
-    # Create a dictionary to map query names to their corresponding nodes
-    qname_to_node = {}
-
-    # Create a set to store the hap_vectors corresponding to each read
-    read_hap_vectors = {}
-
-    # Create a dictionary to store the start and end positions for each read pair
-    read_ref_pos_dict = {}
-
-    # Build up an AD query dict by bcftools mpileup
+    # When we try to identify a mismatch between two reads are due to a true variant or due to sequencing errors,
+    # we need to know the allele depth at the mismatch site. This allows us to estimate the sequencing artifact likelihood by observing the allele's depth fraction at this site.
+    # We would like an efficient way to extract AD info for all covered sites across this BAM. So we chose bcftools mpileup + bcftools query.
+    # The output file is stored in the same directory as the input BAM file
     bam_ad_file = f"{bam_file}.ad"
     cmd = f"""bcftools mpileup -Ou --no-reference -a FORMAT/AD --indels-2.0 -q 10 -Q 15 {bam_file} | \
               bcftools query -f '%CHROM\\t%POS\\t%ALT\\t[%AD]\\n' - > {bam_ad_file}"""
@@ -1658,10 +1925,17 @@ def build_phasing_graph(bam_file,
     logger.info("\n{}\n{}\n".format(ad_expanded.loc[~ad_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False),
                                     alt_expanded.loc[~alt_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False)))
 
+    # After getting the table, we seek to organize the AD info by chromsome, pos, and alt into a nested dictionary
+    # The dict structure is like:
+    # nested_dict[chrom][pos][alt] = ad
+    # nested_dict[chrom][pos]["DP"] = total_dp
     # Initialize the nested dictionary
     nested_dict = {chrom: {} for chrom in ad_table["chrom"].unique()}
     column_width = alt_expanded.shape[1]
     inspected_overlaps = IntervalTree()
+
+    # Create a dictionary to map query names to their corresponding nodes (qnames -> graph_vertices_indices)
+    qname_to_node = {}
 
     # Iterate over the rows of dfA and dfB
     for i in range(len(ad_table)):
@@ -1696,6 +1970,17 @@ def build_phasing_graph(bam_file,
     total_qname_num = len(ncls_read_dict)
     weight_matrix = np.eye(total_qname_num, dtype=np.float32)
     score_arr = np.array([mean_read_length * 1 - 50 + mean_read_length * i for i in range(50)])
+
+    # Create a dictionary to store the haplotype vectors corresponding to each read (read_ids -> haplotype_vectors), please refer read_ids to function get_read_id
+    # This is a temporary data hub to avoid repeated hapvector extraction from the same read
+    # The variable is primarily aggregated in the iterative calling of function determine_same_haplotype
+    read_hap_vectors = {}
+
+    # Create a dictionary to store the start and end positions for each read pair
+    # This is a temporary data hub to avoid repeated read pair start and end position extraction from the same read
+    # The variable is primarily aggregated in the iterative calling of function determine_same_haplotype
+    read_ref_pos_dict = {}
+
 
     for qname_idx, paired_reads in ncls_read_dict.items():
         qname = ncls_qname_dict[qname_idx]
@@ -2011,13 +2296,11 @@ def identify_misalignment_per_region(region,
                                     phasing_graph,
                                     qname_hap_info,
                                     hap_qname_info,
-                                    read_level_vard_cutoff,
                                     weight_matrix,
                                     qname_to_node,
                                     lowqual_qnames,
                                     clique_sep_component_idx,
                                     var_df,
-                                    varno_cutoff = 3,
                                     viewed_regions = {},
                                     total_hapvectors = {},
                                     total_errvectors = {},
@@ -2378,8 +2661,6 @@ def inspect_by_haplotypes(input_bam,
                           total_err_vectors,
                           total_genomic_haps,
                           var_df,
-                          read_level_vard_cutoff,
-                          varno_cutoff = 3,
                           compare_haplotype_meta_tab = "",
                           mean_read_length = 150,
                           logger = logger):
@@ -2509,13 +2790,11 @@ def inspect_by_haplotypes(input_bam,
                                                                                                                                                         phased_graph,
                                                                                                                                                         qname_hap_info,
                                                                                                                                                         hap_qname_info,
-                                                                                                                                                        read_level_vard_cutoff,
                                                                                                                                                         weight_matrix,
                                                                                                                                                         qname_to_node,
                                                                                                                                                         total_lowqual_qnames,
                                                                                                                                                         clique_sep_component_idx,
                                                                                                                                                         var_df,
-                                                                                                                                                        varno_cutoff = varno_cutoff,
                                                                                                                                                         total_hapvectors = total_hap_vectors,
                                                                                                                                                         total_errvectors = total_err_vectors,
                                                                                                                                                         total_genomic_haps = total_genomic_haps,
@@ -2598,16 +2877,40 @@ def main_function(bam,
                   intrinsic_bam = None,
                   raw_vcf = None,
                   bam_region_bed = None,
-                  varno_cutoff = 3,
                   max_varno = 5,
                   mapq_cutoff = 20,
                   basequal_median_cutoff = 15,
                   edge_weight_cutoff = 0.201,
-                  logger=logger,
-                  raw_intrinsic_bam = "/paedyl01/disk1/yangyxt/public_data/SD_from_SEDEF/hg19/test_BISER/assembly_intrinsic_align.WGAC.hg19.reformat.bam"):
+                  logger=logger):
     '''
-    Input bam is the BAM file to be filtered.
-    Input highqual_bam is the BAM file containing high quality reads used to calculate the editing distance distribution of reads
+    Main function for processing and analyzing BAM files to identify and filter misaligned reads.
+
+    This function performs the following main tasks:
+    1. Migrates BAM files to NCLS format for efficient query of reads or read pairs overlapping a query genomic region
+    2. Builds a read-pair graph from the BAM data for phasing, where each vertex represents a read pair and each edge represents the confidence that two read pairs are originated from the same haplotype
+    3. Identifies haplotypes in the graph by finding non-overlapping maximal cliques iteratively (using an approximate but not exact algorithm for efficient clique search, basically we iteratively run Bron-Kerbosch algorithm)
+    4. After read pair grouped into different haplotypes, we put them into a binary integer linear programming model to solve the haplotype-level misalignment with HiGHs solver.
+    5. Generates output BAM files with filtered and annotate haplotype index assigned to each read pairs.
+
+    Parameters:
+    - bam (str): Path to the input BAM file
+    - output_bam (str, optional): Path for the output filtered BAM file, if not specified, output_bam will be the input bam with .clean.bam suffix
+    - filter_out_bam (str, optional): Path for the BAM file containing filtered-out reads, if not specified, we do not output the filtered BAM file
+    - intrinsic_bam (str): Path to the intrinsic BAM file, generated earlier in the SDrecall workflow (basically it aligns the reference sequence of one SD to the other SD)
+    - raw_vcf (str): Path to the raw VCF file, the variants detected in the raw pooled alignments.
+    - bam_region_bed (str, optional): Path to the BED file defining covered regions of the processing bam file, if not specified, bam_region_bed will be generated with a name after the input bam with .coverage.bed suffix
+    - max_varno (float): Maximum variant number allowed
+    - mapq_cutoff (int): Mapping quality cutoff to be included in the analysis
+    - basequal_median_cutoff (int): Base quality median cutoff to be included in the analysis (if the median BQ of a read is lower than this cutoff, we will discard this read because it is too noisy)
+    - edge_weight_cutoff (float): Edge weight cutoff separating two rounds of BK clique searches
+    - logger (Logger object): Logger for output messages
+
+    Returns:
+    - phased_graph (Graph object): The constructed phasing graph
+
+    This function integrates various analysis steps including BAM processing,
+    graph construction, haplotype identification, and read filtering to improve
+    the quality of genomic alignments and identify potential misalignments.
     '''
 
     # Given the top 1% mismatch count per read (one structrual variant count as 1 mismatch)
@@ -2634,46 +2937,32 @@ def main_function(bam,
     check_odd_num = 0
     zero_odd_num = 0
 
-    # The intrinsic bam might not be covering all the regions so we need to merge it with raw_intrinsic_bam directly generated by raw SD map
-    merged_intrin_bam = intrinsic_bam.replace(".bam", ".merged.bam")
-    if os.path.exists(merged_intrin_bam) and \
-       os.path.getmtime(merged_intrin_bam) > os.path.getmtime(raw_intrinsic_bam) and \
-       os.path.getmtime(merged_intrin_bam) > os.path.getmtime(intrinsic_bam):
-        logger.info(f"The merged intrinsic bam {merged_intrin_bam} is already up-to-date.")
-    else:
-        tmp_output_bam = prepare_tmp_file(suffix = ".bam").name
-        cmd = f"samtools merge -f {tmp_output_bam} {intrinsic_bam} {raw_intrinsic_bam} && \
-                samtools index {tmp_output_bam} && \
-                mv {tmp_output_bam} {merged_intrin_bam} && \
-                mv {tmp_output_bam}.bai {merged_intrin_bam}.bai"
-        executeCmd(cmd, logger = logger)
-        logger.info(f"Successfully merged the intrinsic bam {intrinsic_bam} with the raw intrinsic bam {raw_intrinsic_bam} to {merged_intrin_bam}.\n")
-
-
     bam_ncls = migrate_bam_to_ncls(bam,
                                    mapq_filter = mapq_cutoff,
                                    basequal_median_filter = basequal_median_cutoff,
                                    logger=logger)
 
-    total_lowqual_qnames = bam_ncls[-1]
-    bam_ncls = bam_ncls[:-1]
-    ncls_dict, read_dict, qname_dict, qname_idx_dict = bam_ncls
+    # parse the results from the tuple returned by migrate_bam_to_ncls
+    ncls_dict, read_dict, qname_dict, qname_idx_dict, total_lowqual_qnames = bam_ncls
     logger.info(f"Successfully migrated the BAM file {bam} to NCLS format\n\n")
-    intrin_bam_ncls = migrate_bam_to_ncls(merged_intrin_bam,
+
+    # Now migrate the intrinsic BAM file to NCLS format
+    intrin_bam_ncls = migrate_bam_to_ncls(intrinsic_bam,
                                           mapq_filter = 0,
                                           basequal_median_filter = 0,
                                           paired = False,
                                           logger=logger)
+    # Since intrinsic BAM reads are reference sequences, therefore there are no low quality reads
     intrin_bam_ncls = intrin_bam_ncls[:-1]
     logger.info(f"Successfully migrated the intrinsic BAM file {intrinsic_bam} to NCLS format\n")
     logger.info(f"Containing {len(intrin_bam_ncls[1])} reads in total.\n\n")
     bam_graph = bam.replace(".bam", ".phased.graphml")
 
+    # Calculate the mean read length of the input bam file, which can be used for read pair similarity calculation
     mean_read_length = calculate_mean_read_length(bam)
-    read_level_vard_cutoff = max_varno/mean_read_length
-    logger.info(f"The read level variant density cutoff is {read_level_vard_cutoff}\n")
 
-    # Create the phasing (local assembly) graph
+    # Create the read-pair graph used for phasing
+    # Detailed description of the graph construction can be found in the function docstring.
     phased_graph, weight_matrix, qname_to_node, total_readhap_vector = build_phasing_graph(bam,
                                                                                            *bam_ncls,
                                                                                            mean_read_length,
@@ -2742,8 +3031,6 @@ def main_function(bam,
                                                           total_readerr_vector,
                                                           total_genomic_haps,
                                                           var_df,
-                                                          read_level_vard_cutoff,
-                                                          varno_cutoff = 3,
                                                           compare_haplotype_meta_tab = compare_haplotype_meta_tab,
                                                           mean_read_length = mean_read_length,
                                                           logger = logger )
