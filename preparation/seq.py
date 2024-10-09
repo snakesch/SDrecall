@@ -1,4 +1,4 @@
-from utils import executeCmd, prepare_tmp_file
+from src.utils import executeCmd, prepare_tmp_file
 
 def getRawseq(bedf_path: str, fastq_path: str, ref_genome: str, padding = 0):
     if padding > 0:

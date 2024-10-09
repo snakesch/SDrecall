@@ -6,7 +6,7 @@ import multiprocessing as mp
 import pandas as pd
 import pysam
 import pybedtools as pb
-from utils import executeCmd
+from src.utils import executeCmd
 
 logger = logging.getLogger("SDrecall")
 

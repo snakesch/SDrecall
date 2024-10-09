@@ -3128,20 +3128,6 @@ def build_phasing_graph(bam_file,
     g.vertex_properties["qname"] = qname_prop
     g.edge_properties["weight"] = weight
 
-
-    # vis_qnames = ["HISEQ1:59:HB66DADXX:2:1213:10506:28883:PC98",
-    #               "HISEQ1:63:HB65FADXX:1:1201:6669:32930:PC98",
-    #               "HISEQ1:59:HB66DADXX:1:1112:3025:49296:PC98",
-    #               "HISEQ1:66:HB7AUADXX:1:1205:5681:81591:PC98"]
-    # vids = [27969, 27943, 28149, 28143]
-    # vis_qnames = ["HISEQ1:59:HB66DADXX:1:2211:18731:60316:PC98"]
-
-    # vq_indices = [int(qname_to_node[vq]) for vq in vis_qnames]
-    # logger.info(f"The visualization query names are {vis_qnames} and their corresponding node indices are {vq_indices}")
-    # vis_matrix = weight_matrix[np.ix_(vq_indices, vq_indices)]
-    # assert vis_matrix.shape[0] == vis_matrix.shape[1] == len(vq_indices), f"The visualization matrix should be a square matrix, but the shape is {vis_matrix.shape}"
-    # logger.info(f"Here is the visualization matrix for the query names {vis_qnames}:\n{pretty_print_matrix(vis_matrix)}\n")
-
     logger.info(f"Now we finished building up the edges in the graph. There are currently {g.num_vertices()} vertices and {g.num_edges()} edges in the graph")
     return g, weight_matrix, qname_to_node, read_hap_vectors
 
@@ -3406,8 +3392,6 @@ def get_intervals_per_chrom(chrom_df):
 
 def extract_var_pos(raw_vcf,
                     bam_region_bed,
-                    padding_size = 70,
-                    density_cutoff = 1/75,
                     logger = logger):
     cmd = f"bcftools view -R {bam_region_bed} -Ou {raw_vcf} | \
             bcftools sort -Ou - | \
@@ -3419,35 +3403,7 @@ def extract_var_pos(raw_vcf,
     df = pd.read_table(StringIO(var_pos_str), header = None, sep = "\t", names = ["chrom", "start", "end"], dtype = {"chrom": str, "start": int, "end": int})
     logger.info(f"The variant positions are extracted from the VCF file. There are {df.shape[0]} variants in total. They looks like :\n{df[:5].to_string(index=False)}\n")
     gc.collect()
-    # # Extract relevant data for the specific chromosome
-    # all_chroms = df["chrom"].drop_duplicates().tolist()
-    # # Initialize a list to store density information
-    # density_intervals = {chrom: set([]) for chrom in all_chroms}
 
-    # for chrom in all_chroms:
-    #     # Get the range of positions to calculate density
-    #     # Both ends are inclusive
-    #     chrom_df = df[df["chrom"] == chrom]
-    #     # Split the chrom_df into smaller pieces. The delimiter is between two variants with a distance larger than 3000 bp
-    #     # The chrom_df is already sorted when read into dataframe, no need to sort again
-    #     chrom_intervals = get_intervals_per_chrom(chrom_df.loc[:, ["start", "end"]].drop_duplicates().to_numpy())
-    #     # Test if the returned 2D array has only 2 rows and the second row is empty
-    #     density_intervals[chrom] = chrom_intervals
-
-    #     # logger.info(f"For chromosome {chrom}. Now the density information looks like this \n{pretty_print_matrix(density_info[chrom][:10])}\n")
-
-    # Convert the density information to a DataFrame
-    # density_intervals = {chrom:set([]) for chrom in all_chroms}
-    # for chrom in all_chroms:
-    #     chrom_df = df[df["chrom"] == chrom]
-    #     chrom_density_info = density_info[chrom]
-    #     high_den_vars = chrom_density_info[:, 1] >= density_cutoff
-    #     high_den_poss = chrom_density_info[high_den_vars, 0]
-    #     high_den_intervals = positions_to_intervals(high_den_poss)
-    #     chrom_density_intervals = polish_intervals_per_chrom(high_den_intervals, chrom_df.loc[:, ["start", "end"]].to_numpy())
-    #     density_intervals[chrom] = chrom_density_intervals
-
-    # return density_intervals, df
     return df
 
 
@@ -3883,164 +3839,8 @@ def identify_misalignment_per_region(region,
     record_df = pd.DataFrame(record_2d_arr, columns = ["start", "end", "total_depth", "hap_id", "hap_depth", "var_count", "indel_count"])
     record_df["chrom"] = region[0]
 
-    # assert (record_df["coefficient"] == 0).sum() == 0, f"Found 0 coefficient in the dataframe. The dataframe looks like :\n{record_df.to_string(index=False)}\n"
-
     logger.info(f"Found {len(final_clusters)} haplotype clusters for region {region_str}. The dataframe recording the haplotypes in this region looks like :\n{record_df.to_string(index=False)}\n")
     return record_df, total_hapvectors, total_errvectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx
-
-
-'''
-Deprecated
-def identify_misalignment_per_read_cov( read,
-                                        bam_ncls,
-                                        intrin_bam_ncls,
-                                        phasing_graph,
-                                        weight_matrix,
-                                        qname_to_node,
-                                        lowqual_qnames,
-                                        varno_cutoff = 3,
-                                        viewed_regions = {},
-                                        total_hapvectors = {},
-                                        total_errvectors = {},
-                                        total_genomic_haps = {},
-                                        logger = logger ):
-    bam_ncls, read_pair_dict, qname_dict, qname_idx_dict = bam_ncls
-    # read pair dict use internal qname_idx (created when executing function migrate bam to ncls) as keys instead of qnames
-    # qname_dict is a dictionary that maps qname_idx to qname
-
-    if len(list(lazy_get_overlapping_regions(viewed_regions, read.reference_name, read.reference_start, read.reference_end))) > 0:
-        # logger.info(f"The region {region_str} has been viewed before. Skip this region.")
-        return set([]), viewed_regions, total_hapvectors, total_errvectors, total_genomic_haps
-
-
-    # qname_idx_dict = {qname: qname_idx for qname_idx, qname in qname_dict.items()}
-    overlap_reads_iter = lazy_get_overlapping_reads(bam_ncls,
-                                                    read_pair_dict,
-                                                    qname_dict,
-                                                    read.reference_name,
-                                                    read.reference_start,
-                                                    read.reference_end)
-
-    vertices = defaultdict(list)
-    vert_inds = set()
-    for read in overlap_reads_iter:
-        qname = read.query_name
-        if qname in lowqual_qnames or qname not in qname_to_node:
-            continue
-        vert_idx = qname_to_node[qname]
-        vertices[(vert_idx, qname)].append(read)
-        vert_inds.add(vert_idx)
-
-    qname_hap_info = find_components_in_subgraph(phasing_graph, vert_inds, weight_matrix, logger = logger)
-    # qnames = set(dict.fromkeys([r.query_name for r in overlap_reads]))
-    # There might be some qname with low_qualities
-    # vertices = [phasing_graph.vertex(qname_to_node[qname]) for qname in qnames if not qname in lowqual_qnames and qname in qname_to_node]
-    # The qname_hap_info, should be a dictionary that maps every vert idx to the component idx
-    subgraphs = group_by_dict_optimized(qname_hap_info, vertices)
-
-    if len(subgraphs) == 0:
-        logger.info(f"No haplotype clusters are found for read {read.query_name}. Skip this read.\n")
-        return set([]), viewed_regions, total_hapvectors, total_errvectors, total_genomic_haps
-
-    # For each subgraph, we need to generate the consensus sequence for the reads
-    # Each subgraph is a connected component in the phasing graph and it represents a haplotype
-    region_haplotype_info = {}
-    for subgraph_id, (subgraph_vertices, qnames, read_pair_lists) in subgraphs.items():
-        # Extract the qnames for the vertices in the subgraph
-        # qnames = [phasing_graph.vp.qname[v] for v in subgraph_vertices]
-        # Extract the reads corresponding to the qnames
-        reads = []
-        for read_pair_list in read_pair_lists:
-            reads += read_pair_list
-        # reads = [r for r in overlap_reads if r.query_name in qnames]
-        # Sort the reads by their start positions
-        span = (min(r.reference_start for r in reads), max(r.reference_end for r in reads))
-        region_haplotype_info[span] = reads
-
-    # Now we need to get the overlapping region of all the spans and use that to determine the misalignment
-    spans = list(region_haplotype_info.keys())
-
-    overlapping_spans = calculate_depth_intervals(spans, (read.reference_start, read.reference_end))
-    core_overlap_span = overlapping_spans[0]
-
-    total_mismap_qnames = set([])
-    # Test if the region has been reviewed before
-    for overlapping_span in overlapping_spans:
-        region_str = f"{read.reference_name}:{overlapping_span[0]}-{overlapping_span[1]}"
-
-        if len(list(lazy_get_overlapping_regions(viewed_regions, read.reference_name, overlapping_span[0], overlapping_span[1]))) > 0:
-            # logger.info(f"The region {region_str} has been viewed before. Skip this region.")
-            continue
-        else:
-            logger.info(f"Found {len(subgraphs)} haplotype clusters for read {read.query_name} at region {region_str}.")
-
-        # Get the genomic haplotype vectors for the overlapping region
-        genomic_haps = []
-        for hread in lazy_get_overlapping_reads(*intrin_bam_ncls[:-1], read.reference_name, overlapping_span[0], overlapping_span[1]):
-            hread_id = get_read_id(hread)
-            if hread_id in total_genomic_haps:
-                hread_hap_vector = total_genomic_haps[hread_id]
-            else:
-                hread_hap_vector = get_hapvector_from_cigar(hread.cigartuples, logger = logger)
-                total_genomic_haps[hread_id] = hread_hap_vector
-
-            try:
-                interval_genomic_hap = hread_hap_vector[overlapping_span[0] - hread.reference_start:overlapping_span[1] - hread.reference_start + 1]
-            except IndexError:
-                continue
-            else:
-                genomic_haps.append(interval_genomic_hap)
-
-        final_clusters = {}
-        haplotype_idx = 0
-        for span, reads in region_haplotype_info.items():
-            hap_vectors = []
-            err_vectors = []
-            for r in reads:
-                rid = get_read_id(r)
-                if rid in total_hapvectors:
-                    hap_vector = total_hapvectors[rid]
-                else:
-                    hap_vector = get_hapvector_from_cigar(r.cigartuples, logger = logger)
-                    total_hapvectors[rid] = hap_vector
-
-                hap_vectors.append(hap_vector)
-
-                if rid in total_errvectors:
-                    err_vector = total_errvectors[rid]
-                else:
-                    err_vector = get_errorvector_from_cigar(r, r.cigartuples, logger = logger)
-                    total_errvectors[rid] = err_vector
-
-                err_vectors.append(err_vector)
-            # logger.info(f"Haplotype across {span} contains {len(reads)} reads.")
-
-            consensus_sequence = assemble_consensus(hap_vectors, err_vectors, reads)
-            overlapping_con_seq = consensus_sequence[overlapping_span[0] - span[0]:overlapping_span[1] - span[0] + 1]
-            final_clusters[haplotype_idx] = (overlapping_con_seq, reads, overlapping_span)
-            haplotype_idx += 1
-
-        mismap_qnames = choose_haplotypes(final_clusters,
-                                        genomic_haps,
-                                        varno_cutoff = varno_cutoff,
-                                        logger = logger)
-        total_mismap_qnames.update(mismap_qnames)
-
-    if read.reference_name not in viewed_regions:
-        viewed_regions[read.reference_name] = NCLS([overlapping_span[0]], [overlapping_span[1]], [hash(region_str)])
-    else:
-        chrom_ncls = viewed_regions[read.reference_name]
-        starts, ends, ids = zip(*chrom_ncls.intervals())
-        new_starts = starts + tuple([read.reference_start])
-        new_ends = ends + tuple([read.reference_end])
-        new_ids = ids + tuple([hash(region_str)])
-        viewed_regions[read.reference_name] = NCLS( np.array(new_starts),
-                                                    np.array(new_ends),
-                                                    np.array(new_ids) )
-
-    return total_mismap_qnames, viewed_regions, total_hapvectors, total_errvectors, total_genomic_haps
-'''
-
 
 def convert_list_to_dict(vprop):
     label_dict = {}

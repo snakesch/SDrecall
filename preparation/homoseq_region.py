@@ -1,7 +1,7 @@
 import logging
 import numpy as np
 
-from utils import executeCmd
+from src.utils import executeCmd
 
 logger = logging.getLogger("SDrecall")
 

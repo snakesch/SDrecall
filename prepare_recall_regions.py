@@ -11,19 +11,19 @@ import networkx as nx
 import graph_tool.all
 
 from build_regions_from_PC_clusters import establish_beds_per_PC_cluster
-from seq import get_bam_frag_size
-from extract_SD_pairs_from_bam_json import extract_sd_coordinates_from_json
-from pick_multialign_regions import pick_region_by_depth
-from genome import Genome
-from homoseq_region import HOMOSEQ_REGION
-from graph_build import read_graphml, create_multiplex_graph
-from graph_query import extract_SD_paralog_pairs_from_graph, query_connected_nodes
+from preparation.seq import get_bam_frag_size
+from preparation.extract_SD_pairs_from_bam_json import extract_sd_coordinates_from_json
+from preparation.pick_multialign_regions import pick_region_by_depth
+from preparation.genome import Genome
+from preparation.homoseq_region import HOMOSEQ_REGION
+from preparation.graph_build import read_graphml, create_multiplex_graph
+from preparation.graph_query import extract_SD_paralog_pairs_from_graph, query_connected_nodes
 from convert_nodes_into_hierachical_beds import convert_nodes_into_hierachical_beds
 from sd_pairs import filter_umbrella_pairs
 
-from log import ColoredFormatter
-from suppress_warning import *
-from utils import is_file_up_to_date, executeCmd, filter_bed_by_interval_size
+from src.log import ColoredFormatter
+from src.suppress_warning import *
+from src.utils import is_file_up_to_date, executeCmd, filter_bed_by_interval_size
 
 logger = logging.getLogger('SDrecall')
 
@@ -32,16 +32,13 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
                                  input_bam: str,
                                  reference_sd_map: str,
                                  target_bed = "",
-                                #  fraction_cutoff = 0.7,
                                  err_rate = 0.05, 
                                  threads = 10,
-                                #  aggregation_resolution = .5,
                                  mq_cutoff = 20,
                                  target_tag = "target",
                                  profile_file = None):
 
-    def imap_establish(tup_args):
-        return establish_beds_per_PC_cluster(*tup_args)
+    
 
     # if profile_file:
     #     pr = cProfile.Profile()
@@ -229,28 +226,25 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
                                                                                 threads=threads )
     logger.info("{} SD-paralog pairs pooled from SD + PO graph".format(len(sd_paralog_pairs)))
     
-    # Now we need to test which FC-NFC pairs can be merged together (meaning FCs cannot appear in NFCs covered region)
-    # Step 8: Pass the query nodes to function and get the cluster of SD intervals (The query nodes here is a pandas dataframe object)
-    logger.info("Now we about to use the extract SD-paralog pairs to find out which of them can be put in the same masked genome")
-    all_results, sd_paralog_pairs = query_connected_nodes(sd_paralog_pairs, 
-                                                     connected_qnode_components)
+    # Step 8: Collapse qnodes by identifying qnodes that can be put in the same masked genome
+    grouped_qnode_cnodes = query_connected_nodes(sd_paralog_pairs, connected_qnode_components)
 
-    # Step 8.5: We need to tag the nodes with FC-NFC pair ID
+    # Step 8.5: Enumerate qnodes and cnodes in the graph. (FC -> qnode; NFC -> cnode)
     final_graph = graph.copy()
-    for i, result in enumerate(all_results):
+    for i, result in enumerate(grouped_qnode_cnodes):
         tag = "PC" + str(i)
         for node in result["PCs"]:
-            # Add an attribute "FC" to the node
-            assert type(node) == tuple, f"The counterpart node {node} type is not tuple, the FC nodes are {result['PCs']}"
+            if not isinstance(node, tuple):
+                raise TypeError(f"Expected {node} (type: {type(node)}) to be tuple.")
             final_graph.nodes[node]["FC"] = ",".join([e for e in list(dict.fromkeys(final_graph.nodes[node].get("FC", "").split(",") + [tag])) if len(e) > 0])
         for node in result["SD_counterparts"]:
-            # Add an attribute "NFC" to the node
-            assert type(node) == HOMOSEQ_REGION, f"The counterpart node {node} type is not HOMOSEQ_REGION, the FC nodes are {result['PCs']}"
+            if not isinstance(node, HOMOSEQ_REGION):
+                raise TypeError(f"Expected {node} (type: {type(node)}) to be HOMOSEQ_REGION. ")
             final_graph.nodes[node.data]["NFC"] = ",".join([e for e in list(dict.fromkeys(final_graph.nodes[node.data].get("NFC", "").split(",") + [tag])) if len(e) > 0])
     nx.write_graphml(final_graph, final_graph_path)
-    sys.exit()
+
     # Step 9: Create beds and masked genomes
-    convert_nodes_into_hierachical_beds(all_results = all_results,
+    convert_nodes_into_hierachical_beds(grouped_qnode_cnodes = grouped_qnode_cnodes,
                                         sd_paralog_pairs = sd_paralog_pairs,
                                         output_folder = work_dir,
                                         ref_genome = ref_genome,

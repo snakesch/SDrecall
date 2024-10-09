@@ -1,10 +1,6 @@
 import os
 import subprocess
 import logging
-import hashlib
-import shutil
-import tempfile
-import ast
 import uuid
 
 from pybedtools import BedTool

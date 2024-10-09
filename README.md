@@ -1,5 +1,15 @@
 # SDrecall
 
+## TODO
+- [ ] Three separate directories at top level (preparation, phasing, shell_utils)
+- [ ] Need a way to locate target shell scripts (Alternatively: source shell_utils.sh; check_bam_validity?)
+- [ ] Numba not yet in env
+- [ ] README not fixed
+- [ ] conda YAML lacking some libraries (e.g. intervaltree)
+- [ ] Extra documentation for ad-hoc tools for intrinsic variant calling
+- [ ] Review license
+ 
+< -- README under construction -- >
 SDrecall is the prototype of a tool for calling short variants that may be missed by GATK best practice by ascertaining segmental duplication regions. This pipeline is implemented in python3. 
 
 ## Prerequisites
@@ -18,6 +28,7 @@ SDrecall is the prototype of a tool for calling short variants that may be misse
 Note: We do not guarantee compatibility for softwares of more updated versions.
 
 ## Installation
+### Using conda/mamba
 Users should first clone this repository to a local directory.
 
 For conda users, create an environment from YAML.
@@ -25,16 +36,9 @@ For conda users, create an environment from YAML.
 conda env create -f ./setup/environment.yml
 conda activate SDrecall
 ```
-For [Singularity](https://docs.sylabs.io/guides/3.0/user-guide/quick_start.html) users, please build a container with the provided image file and set up accordingly.
 
-```{bash}
-cd setup 
-singularity build svsd.sif svsd.def # This step may take some time
-singularity shell svsd.sif # Create a Singularity shell
-conda init && source ~/.bashrc
-conda activate SDrecall
-```
-Note: Please use singularity version 3.8+.
+### Using docker/singularity
+Given the long list of dependencies of SDrecall, we are still working on a docker file / singularity recipe. Any contributions are most welcome. 
 
 ## Input files
 

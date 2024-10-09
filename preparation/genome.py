@@ -9,7 +9,7 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 
 from pybedtools import BedTool
-from utils import executeCmd, update_plain_file_on_md5
+from src.utils import executeCmd, update_plain_file_on_md5
 
 logger = logging.getLogger("SDrecall")
 
