@@ -74,70 +74,9 @@ def numba_sum(data):
 def numba_and(arr1, arr2):
     return np.logical_and(arr1, arr2)
 
-
-@numba.njit(types.bool_[:](types.bool_[:], types.bool_[:]), fastmath = True, parallel=True)
-def para_numba_and(arr1, arr2):
-    return np.logical_and(arr1, arr2)
-
-
-@numba.njit(types.bool_[:](types.bool_[:], types.bool_[:]), fastmath = True)
-def numba_or(arr1, arr2):
-    return np.logical_or(arr1, arr2)
-
-
-@numba.njit(types.bool_[:](types.bool_[:], types.bool_[:]), fastmath = True, parallel=True)
-def para_numba_or(arr1, arr2):
-    return np.logical_or(arr1, arr2)
-
-
 @numba.njit(types.bool_[:](types.bool_[:]), fastmath=True)
 def numba_not(arr):
     return np.logical_not(arr)
-
-
-@numba.njit(types.bool_[:](types.bool_[:]), fastmath=True, parallel=True)
-def para_numba_not(arr):
-    return np.logical_not(arr)
-
-
-@numba.njit
-def numba_occurence(arr, mask, value):
-    '''
-    This function is used to count the occurence of a specific value in the array
-    '''
-    value_mask = (arr == value)
-    occurence = numba_sum(value_mask & mask)
-    return occurence
-
-
-@numba.njit
-def smallest_delta_with_max(arr):
-    max_value = np.max(arr)
-    differences = np.abs(arr - max_value)
-    return np.min(differences)
-
-
-@numba.njit(parallel=True)
-def numba_equal(arr1, arr2):
-    if arr1.size != arr2.size:
-        return False
-    return np.all(arr1 == arr2)
-
-
-@numba.njit
-def numba_min(arr):
-    return np.min(arr)
-
-
-@numba.njit
-def numba_nansum(data):
-    return np.nansum(data, axis=1)
-
-
-@numba.njit
-def numba_abs(data):
-    return np.absolute(data)
-
 
 @numba.njit(types.float32(types.float32[:], types.boolean[:]), fastmath=True)
 def numba_max(data, index_mask=None):
@@ -145,48 +84,6 @@ def numba_max(data, index_mask=None):
         return np.max(data[index_mask])
     else:
         return np.max(data)
-
-@numba.njit(types.Tuple((types.int32, types.float32))(types.float32[:], types.boolean[:]), fastmath=True)
-def numba_max_idx_mem(data, index_mask=None):
-    max_val = -np.inf
-    max_idx = -1
-
-    if index_mask is None:
-        for i in range(data.size):
-            if data[i] >= max_val:
-                max_idx = i
-                max_val = data[i]
-    else:
-        for i in range(data.size):
-            if index_mask[i]:
-                if data[i] >= max_val:
-                    max_idx = i
-                    max_val = data[i]
-
-    return max_idx, max_val
-
-
-
-@numba.njit(types.int32(types.float32[:], types.boolean[:]), fastmath=True)
-def pure_numba_max_idx_mem(data, index_mask=None):
-    max_val = -np.inf
-    max_idx = -1
-
-    if index_mask is None:
-        for i in range(data.size):
-            if data[i] >= max_val:
-                max_idx = i
-                max_val = data[i]
-    else:
-        for i in range(data.size):
-            if index_mask[i]:
-                if data[i] >= max_val:
-                    max_idx = i
-                    max_val = data[i]
-
-    return max_idx
-
-
 
 @numba.njit(types.int32(types.float32[:,:], types.boolean[:], types.boolean[:]), fastmath=True)
 def find_row_index_of_max(matrix, row_index_mask, column_index_mask):
@@ -201,8 +98,6 @@ def find_row_index_of_max(matrix, row_index_mask, column_index_mask):
 
     # Return the actual row index in the original matrix
     return np.where(row_index_mask)[0][row_index]
-
-
 
 @numba.njit
 def custom_all_numba(array):
@@ -225,41 +120,6 @@ def any_false_numba(array):
             return True
     return has_false
 
-
-@numba.njit
-def find_neg_one_indices(matrix):
-    rows, cols = matrix.shape
-    max_size = rows * cols
-    row_indices = np.empty(max_size, dtype=np.int32)
-    col_indices = np.empty(max_size, dtype=np.int32)
-    count = 0
-    for i in range(rows):
-        for j in range(cols):
-            if matrix[i, j] == -1:
-                row_indices[count] = i
-                col_indices[count] = j
-                count += 1
-    return row_indices[:count], col_indices[:count]
-
-
-@numba.njit
-def calculate_row_sums(matrix, row_indices):
-    return matrix[row_indices, :].sum(axis=1)
-
-
-@numba.njit(parallel=True)
-def numba_isin_idx(arr, uniq_vals):
-    '''
-    return the index of the array that their corresponding value is in another array
-    '''
-    mask = np.zeros(arr.shape, dtype=np.bool_)
-    uniq_set = set(uniq_vals)
-    for i in prange(arr.size):
-        if arr[i] in uniq_set:
-            mask[i] = True
-    return np.where(mask)[0]
-
-
 @numba.njit(parallel=True)
 def numba_isin(arr, uniq_vals):
     '''
@@ -271,38 +131,13 @@ def numba_isin(arr, uniq_vals):
         if arr[i] in uniq_set:
             mask[i] = True
     return mask
-
-
-@numba.njit
-def numba_sum_with_mask(data, mask, mask_values):
-    value_mask = numba_not(numba_isin(data, mask_values))
-    mask = numba_and(mask, value_mask)
-    return numba_sum(data[mask])
-
-
-
-@numba.njit
-def isin_numba(a, b):
-    b_set = set(b)
-    result = np.empty(a.shape, dtype=np.bool_)
-    for i in prange(a.shape[0]):
-        result[i] = a[i] in b_set
-    return result
-
-
-@numba.njit
-def clip_array(arr, min_val, max_val):
-    return np.clip(arr, min_val, max_val)
-
-
-
+ 
 @numba.njit(types.boolean[:](types.int32, types.int32[:]), fastmath=True)
 def boolean_mask(total_rows, row_indices):
     boolean_mask = np.zeros(total_rows, dtype=np.bool_)
     for index in row_indices:
         boolean_mask[index] = True
     return boolean_mask
-
 
 
 @numba.njit(types.boolean[:](types.int32, types.int32[:]), fastmath=True)
@@ -312,22 +147,9 @@ def reverse_boolean_mask(total_rows, row_indices):
         boolean_mask[index] = False
     return boolean_mask
 
-
-
-@numba.njit(types.boolean[:](types.int32, types.int32[:]), fastmath=True, parallel=True)
-def para_reverse_boolean_mask(total_rows, row_indices):
-    boolean_mask = np.ones(total_rows, dtype=np.bool_)
-    for index in row_indices:
-        boolean_mask[index] = False
-    return boolean_mask
-
-
-
 @numba.njit(types.float32[:,:](types.float32[:,:], types.boolean[:]), fastmath=True)
 def numba_ix(matrix, mask):
     return matrix[mask, :][:, mask]
-
-
 
 class HashableAlignedSegment(pysam.AlignedSegment):
     def __init__(self, aligned_segment):
@@ -344,8 +166,6 @@ class HashableAlignedSegment(pysam.AlignedSegment):
 
     def __hash__(self):
         return hash((self.query_name, self.flag))
-
-
 
 def executeCmd(cmd, stdout_only = False, logger=logger):
     logger.info("About to run this command in shell invoked within python: \n{}\n".format(cmd))
@@ -396,8 +216,6 @@ def calculate_mean_read_length(bam_file_path, sample_size=1000000):
 
     mean_length = total_length / read_count
     return mean_length
-
-
 
 
 def migrate_bam_to_ncls(bam_file,
@@ -510,44 +328,6 @@ def get_overlapping_reads(ncls_dict, read_dict, qname_dict, chrom, start, end):
     return overlapping_reads
 
 
-
-def get_overlapping_qnames(ncls_dict, read_dict, qname_dict, chrom, start, end):
-    '''
-    After reviewing the source code in https://github.com/pyranges/ncls/blob/master/ncls/src/ncls.pyx
-    I confirm that start is inclusive and end is exclusive
-    '''
-    # Perform an overlap query on the NCLS tree
-    if chrom not in ncls_dict:
-        return []
-
-    if ncls_dict[chrom] is None:
-        return []
-
-    _, overlapping_read_qnames = ncls_dict[chrom].all_overlaps_both(np.array([start]), np.array([end]), np.array([0]))
-    overlapping_qnames = [qname_dict[qname_idx] for qname_idx in dict.fromkeys(overlapping_read_qnames)]
-
-    return overlapping_qnames
-
-
-
-def lazy_get_overlapping_qnames(ncls_dict, read_dict, qname_dict, chrom, start, end):
-    '''
-    After reviewing the source code in https://github.com/pyranges/ncls/blob/master/ncls/src/ncls.pyx
-    I confirm that start is inclusive and end is exclusive
-    '''
-    # Perform an overlap query on the NCLS tree
-    if chrom not in ncls_dict:
-        yield from ()
-    elif ncls_dict[chrom] is None:
-        yield from ()
-    else:
-        _, overlapping_read_qnames = ncls_dict[chrom].all_overlaps_both(np.array([start]), np.array([end]), np.array([0]))
-        # overlapping_read_qnames = ncls_dict[chrom].find_overlap(start, end)
-        for qname_idx in dict.fromkeys(overlapping_read_qnames):
-            yield qname_dict[qname_idx]
-
-
-
 def lazy_get_overlapping_qname_idx(ncls_dict, read_dict, qname_dict, chrom, start, end):
     '''
     After reviewing the source code in https://github.com/pyranges/ncls/blob/master/ncls/src/ncls.pyx
@@ -564,8 +344,6 @@ def lazy_get_overlapping_qname_idx(ncls_dict, read_dict, qname_dict, chrom, star
         for qname_idx in dict.fromkeys(overlapping_read_qnames):
             yield qname_idx
 
-
-
 def lazy_get_overlapping_reads(ncls_dict, read_dict, qname_dict, chrom, start, end):
     # Perform an overlap query on the NCLS tree
     if chrom not in ncls_dict:
@@ -581,61 +359,6 @@ def lazy_get_overlapping_reads(ncls_dict, read_dict, qname_dict, chrom, start, e
                     yield read
 
 
-
-def lazy_get_overlapping_regions(viewed_regions, chrom, start, end):
-    # Perform an overlap query on the NCLS tree
-    if chrom not in viewed_regions:
-        yield from ()
-    elif viewed_regions[chrom] is None:
-        yield from ()
-    else:
-        _, overlapping_region_ids = viewed_regions[chrom].all_overlaps_both(np.array([start]), np.array([end]), np.array([0]))
-        for region_id in list(dict.fromkeys(overlapping_region_ids)):
-            yield region_id
-
-
-
-def count_mismatches_per_read(aln, start, end):
-    '''
-    Use CIGAR strings from the BAM file to count the mismatches and gaps in the given interval
-    One prerequisite here:
-        The input alignment should completely enclose the interval
-        So the aln.reference_start should be <= start and aln.reference_end should be >= end
-    '''
-    assert start <= end, f"The start position should be smaller than the end position, but the actually input are start: {start}, end: {end}"
-    mismatch_count = 0
-    gap_count = 0
-    ref_pos = aln.reference_start
-    assert ref_pos <= start
-    query_pos = 0
-
-    for operation, length in aln.cigartuples:
-        assert length >= 0, f"The length of one cigar block is negative, which is odd. Check the original values: {aln.cigartuples}"
-        # CIGAR string should start with a match
-        if operation in [0, 7, 8]:  # Match/Mismatch
-            overlap_start = max(start, ref_pos)
-            overlap_end = min(end, ref_pos + length)
-            if operation == 8:  # Mismatch
-                mismatch_count += 1
-            ref_pos += length
-            query_pos += length
-        elif operation == 1:  # Insertion to the reference
-            if ref_pos >= start and ref_pos < end:
-                gap_count += 1
-            query_pos += length
-        elif operation == 2:  # Deletion from the reference
-            if ref_pos >= start and ref_pos < end:
-                gap_count += 1
-            ref_pos += length
-        # Adjust ref_pos and query_pos for other operations as needed
-
-        # Early exit if the end of the interval is passed
-        if ref_pos >= end:
-            break
-
-    return mismatch_count + gap_count
-
-
 def check_edge(u, v, adj_set):
     '''
     1 means not sure
@@ -645,15 +368,6 @@ def check_edge(u, v, adj_set):
     Cant use 0 here because python treats 0 as False
     '''
     return adj_set.get((u, v), False) or adj_set.get((v, u), False)
-
-
-def rm_edge(u, v, adj_set):
-    if (u, v) in adj_set:
-        adj_set.remove((u, v))
-    elif (v, u) in adj_set:
-        adj_set.remove((v, u))
-    return adj_set
-
 
 
 @numba.njit(types.int32(types.int32[:]), fastmath=True)
@@ -718,40 +432,15 @@ def count_continuous_blocks(array):
 
     return block_count
 
-
-
-@numba.njit(types.int32(types.int32[:]), fastmath=True)
-def count_var_size(array):
-    del_snv = numba_sum(array < 0)
-    ins_pos = array[array >= 2]
-    ins = numba_sum(ins_pos) - ins_pos.size
-
-    return del_snv + ins
-
-
-
 @numba.njit(types.int32(types.int32[:]), fastmath=True)
 def count_snv(array):
     snv_bools = array == -4
     return count_continuous_blocks(snv_bools)
 
 
-@numba.njit(types.int32(types.int32[:]), fastmath=True, parallel=True)
-def para_count_snv(array):
-    snv_bools = array == -4
-    return numba_sum(snv_bools)
-
-
-
 @numba.njit(types.int32(types.int32[:]), fastmath=True)
 def count_var(array):
     return count_snv(array) + count_continuous_indel_blocks(array)
-
-
-
-@numba.njit(types.float32(types.int32[:]), fastmath=True)
-def count_avg_var_density(array):
-    return count_var(array)/array.size
 
 
 
@@ -794,142 +483,6 @@ def count_window_var_density(array, padding_size = 25):
         density_arr[i] = density
 
     return density_arr
-
-
-
-@numba.njit(types.float32[:](types.int32[:], types.int32), fastmath=True, parallel=True)
-def para_count_window_var_density(array, padding_size = 25):
-    is_var = array != 1
-    is_var_size = numba_sum(is_var)
-    if is_var_size == 0:
-        return np.zeros(array.size, dtype=np.float32)
-
-    density_arr = np.empty(array.size, dtype = np.float32)
-    for i in prange(array.size):
-        start = max(i-padding_size, 0)
-        end = min(i+padding_size, array.size)
-        iter_arr = array[start:end]
-        var_count = count_var(iter_arr)
-        density = var_count/(padding_size *2 + 1)
-        density_arr[i] = density
-
-    return density_arr
-
-
-
-@numba.njit(types.Tuple((types.float32[:], types.bool_[:]))(types.int32[:], types.int32, types.int32), fastmath=True)
-def count_local_var_density(array, padding_size=25, var_threshold=3):
-    is_var = array != 1
-    is_var_size = numba_sum(is_var)
-    if is_var_size == 0:
-        return np.zeros(array.size, dtype=np.float32), np.zeros(array.size, dtype=np.bool_)
-
-    is_indel = (array == -6) | (array > 1)
-
-    density_arr = np.empty(array.size, dtype=np.float32)
-    contain_indel = np.empty(array.size, dtype=np.bool_)
-    for i in prange(array.size):
-        start = max(i - padding_size, 0)
-        end = min(i + padding_size, array.size)
-        iter_arr = array[start:end]
-        iter_is_indel = is_indel[start:end]
-        contain_indel[i] = numba_sum(iter_is_indel) > 0
-        var_count = numba_sum(iter_arr != 1)
-        density = var_count / iter_arr.size
-        density_arr[i] = density
-    return density_arr, contain_indel
-
-
-
-def count_true_segments(arr):
-    consecutive_count = 0
-    isolated_count = 0
-
-    i = 0
-    while i < len(arr):
-        if arr[i]:
-            if i + 1 < len(arr) and arr[i + 1]:
-                # Found consecutive True values
-                start = i
-                while i < len(arr) and arr[i]:
-                    i += 1
-                consecutive_count += 1
-            else:
-                # Found an isolated True value
-                isolated_count += 1
-                i += 1
-        else:
-            i += 1
-
-    return consecutive_count, isolated_count
-
-
-
-def count_gaps(array):
-    '''
-    This function is used to count the continuous negative value blocks.
-
-    For example:
-    [1 1 1 1 1 -2 -2 1 1 1 -3 1] should returns a values of 2 because there are two continuous negative value blocks:
-    -2 -2 and -3
-
-    array should be 1D array
-    '''
-    array = np.array(array)
-    nega_bools = array < 0
-    insert_bools = array > 1.5
-    dels, snvs = count_true_segments(nega_bools)
-    _, inserts = count_true_segments(insert_bools)
-
-    gaps = dels + inserts
-    return gaps
-
-
-
-def come_from_elsewhere(query_read_vector,
-                        genomic_hap_vectors,
-                        max_vector_distance,
-                        logger = logger):
-    '''
-    This function is used to identify the haplotypes that the query read vector belongs to.
-    The genomic_hap_vectors is a 2D numpy array
-    The query_read_vector is a 1D numpy array
-    The max_vector_distance is a float reflecting the max manhattan distance between a read and a genomic haplotype
-    '''
-    if len(genomic_hap_vectors) == 0:
-        return False
-
-    assert len(genomic_hap_vectors.shape) == 2, f"The input genomic haplotype vectors should be a 2D numpy array, but the actual input is {genomic_hap_vectors}"
-    # Remove the reference haplotype first
-    genomic_hap_vectors = [v for v in genomic_hap_vectors if numba_sum(v != 1) >= 2]
-
-    if len(genomic_hap_vectors) == 0:
-        return False
-
-    # Calculate the manhattan distance between the query read vector and each genomic haplotype
-    manhattan_distances = [numba_sum(numba_abs(query_read_vector - genomic_hap_vector)) for genomic_hap_vector in genomic_hap_vectors]
-
-    # We can say that the query read vector belongs to one haplotype vector if it is only close to the one haplotype vector (close by definition is distance smaller than the cutoff)
-    # If the query read vector is close to multiple haplotype vectors, we cannot say it belongs to any of them
-    belonged_haplotypes = [i for i, d in enumerate(manhattan_distances) if d <= max_vector_distance]
-    if len(belonged_haplotypes) == 1:
-        logger.info(f"The query read vector {list(query_read_vector)} is close to only one genomic haplotype vector {list(genomic_hap_vectors[belonged_haplotypes[0]])}")
-        return True
-    else:
-        return False
-
-
-
-@numba.njit
-def remove_reference_haplotypes(genomic_hap_vectors):
-    # Manually implement np.any with axis=1
-    mask = np.zeros(genomic_hap_vectors.shape[0], dtype=np.bool_)
-    for i in range(genomic_hap_vectors.shape[0]):
-        for j in range(genomic_hap_vectors.shape[1]):
-            if genomic_hap_vectors[i, j] != 1:
-                mask[i] = True
-                break
-    return genomic_hap_vectors[mask]
 
 
 
@@ -1097,12 +650,6 @@ def get_errorvector_from_cigar(read, cigar_tuples, logger=logger):
 def get_read_id(read):
     return f"{read.query_name}:{read.flag}"
 
-
-
-def get_ori_qname(read):
-    return ":".join(read.query_name.split(":")[:-1])
-
-
 # @numba.njit()
 def prepare_ref_query_idx_map(qseq_ref_pos_arr):
     # numba_dict = Dict.empty(key_type=types.int32, value_type=types.int32)
@@ -1200,46 +747,6 @@ def get_interval_seq_qual(read, interval_start, interval_end, read_ref_pos_dict 
     qidx_ridx_arr = qseq_ref_positions[interval_start_qidx:interval_end_qidx]
 
     return interval_read_seq, interval_qual_seq, read_ref_pos_dict, qidx_ridx_arr
-
-
-
-def get_interval_basequal(read, interval_start, interval_end, read_ref_pos_dict = {}):
-    # Both interval_start and interval_end are inclusive
-    # Input interval_start and interval_end are both 0-indexed
-    # get_reference_positions() also returns 0-indexed positions (a list)
-    read_id = get_read_id(read)
-    if read_id in read_ref_pos_dict:
-        ref_positions = read_ref_pos_dict[read_id]
-    else:
-        ref_positions = read.get_reference_positions(full_length=True)
-        ref_positions = { element: idx for idx, element in enumerate(ref_positions) if element is not None }
-        read_ref_pos_dict[read_id] = ref_positions
-    size = interval_end - interval_start + 1
-    preseq = []
-    try:
-        interval_start_qidx = ref_positions[interval_start]
-    except KeyError:
-        while interval_start not in ref_positions and interval_start <= interval_end:
-            preseq = preseq + [99]
-            interval_start += 1
-        if interval_start > interval_end:
-            return_seq = preseq
-            return return_seq, read_ref_pos_dict
-        interval_start_qidx = ref_positions[interval_start]
-
-    try:
-        interval_end_qidx = ref_positions[interval_end] + 1
-    except KeyError:
-        while interval_end not in ref_positions:
-            interval_end -= 1
-        interval_end_qidx = ref_positions[interval_end] + 1
-
-    interval_read_qual = list(read.query_qualities[interval_start_qidx:interval_end_qidx])
-
-    return_seq = interval_read_qual
-
-    return return_seq, read_ref_pos_dict
-
 
 
 def seq_err_det_stacked_bases(target_read,
@@ -1461,16 +968,6 @@ def determine_same_haplotype(read, other_read,
     #     logger.info(f"The raw read sequence is {read_hap_vector.tolist()} for {read_id} with cigar {read.cigartuples} and query_sequence {read.query_sequence} \nand the other read sequence is {other_read_hap_vector.tolist()} for other read_id {other_read_id} with cigar {other_read.cigartuples} and query sequence {other_read.query_sequence}")
 
     if total_match:
-        # if var_size >= 3:
-        #     return True, read_ref_pos_dict, read_hap_vectors, overlap_span
-        # elif var_size >= 1 and (overlap_end - overlap_start) > 80:
-        #     return True, read_ref_pos_dict, read_hap_vectors, overlap_span
-        # elif var_size >= 2 and (overlap_end - overlap_start) > 60:
-        #     return True, read_ref_pos_dict, read_hap_vectors, overlap_span
-        # elif (overlap_end - overlap_start) > 90:
-        #     return True, read_ref_pos_dict, read_hap_vectors, overlap_span
-        # else:
-        #     return np.nan, read_ref_pos_dict, read_hap_vectors, None
         if overlap_span >= mean_read_length - 50:
             return True, read_ref_pos_dict, read_hap_vectors, overlap_span
         else:
@@ -1501,16 +998,6 @@ def determine_same_haplotype(read, other_read,
 
         if tolerate:
             overlap_span = overlap_span - tolerated_count * 20
-            # if var_size >= 3:
-            #     return True, read_ref_pos_dict, read_hap_vectors, overlap_span
-            # elif var_size >= 1 and overlap_end - overlap_start > 90:
-            #     return True, read_ref_pos_dict, read_hap_vectors, overlap_span
-            # elif var_size >= 2 and overlap_end - overlap_start > 70:
-            #     return True, read_ref_pos_dict, read_hap_vectors, overlap_span
-            # elif overlap_end - overlap_start > 100:
-            #     return True, read_ref_pos_dict, read_hap_vectors, overlap_span
-            # else:
-            #     return np.nan, read_ref_pos_dict, read_hap_vectors, None
             if overlap_span >= mean_read_length - 50:
                 return True, read_ref_pos_dict, read_hap_vectors, overlap_span
             else:
@@ -1518,135 +1005,6 @@ def determine_same_haplotype(read, other_read,
         else:
             return False, read_ref_pos_dict, read_hap_vectors, None
 
-
-
-def get_edge_node_qnames(e, name_prop):
-    source = name_prop[e.source()]
-    target = name_prop[e.target()]
-    return source, target
-
-
-
-def accumulated_edge_weights(node, weight):
-    total_weight = sum(weight[edge] for edge in node.all_edges())
-    return total_weight
-
-@numba.njit
-def find_neg_one_indices_with_mask(matrix, mask):
-    rows, cols = matrix.shape
-    max_size = rows * cols
-    indices = np.empty((max_size, 2), dtype=np.int32)
-    count = 0
-    pair_set = set()
-    for i in range(rows):
-        for j in range(cols):
-            recorded = (i, j) in pair_set or (j, i) in pair_set
-            if matrix[i, j] == -1 and mask[i] and mask[j] and not recorded:
-                indices[count, 0] = i
-                indices[count, 1] = j
-                pair_set.add((i, j))
-                count += 1
-    return indices[:count]
-
-
-
-@numba.njit
-def sort_indices_by_row(indices):
-    return indices[np.argsort(indices[:, 0])]
-
-
-
-def row_wise_max_with_mask_np(matrix, mask_value, index_mask = None):
-    '''
-    For the convenience of the following BILP solver, we need to generate values that are unique to each index.
-    There might be many cases that different indices have the same value, so we need to add a very small value to each value to make them unique.
-    '''
-    # Regarding the input index_mask. True means the row/column index is in the inspection range.
-    # False means the row/column index is ignored.
-    # Create a masked array with -inf where mask_value is present
-    # Here matrix == mask_value, True means the cell is masked and ignored, False means, the cell is in our inspection range. Its opposite to the index_mask
-    value_occurence = defaultdict(int)
-    masked_matrix = np.where(matrix == mask_value, np.nan, matrix)
-
-    if index_mask is not None:
-        index_mask_2d = np.outer(index_mask, index_mask)
-        masked_matrix[~index_mask_2d] = np.nan
-
-    # Compute the maximum value for each row using NumPy's max function
-    row_max_values = np.nanmax(masked_matrix, axis=1)
-    uniq_row_max_values = np.empty(row_max_values.size, dtype=np.double)
-
-    for i in range(matrix.shape[0]):
-        if not np.isnan(row_max_values[i]):
-            uniq_row_max_values[i] = row_max_values[i] + value_occurence[row_max_values[i]] * 1e-10
-            value_occurence[row_max_values[i]] = 1 + value_occurence[row_max_values[i]]
-        else:
-            uniq_row_max_values[i] = np.nan
-
-    return uniq_row_max_values
-
-
-
-def row_wise_sum_with_mask_np(matrix, mask_value, index_mask = None):
-    '''
-    For the convenience of the following BILP solver, we need to generate values that are unique to each index.
-    There might be many cases that different indices have the same value, so we need to add a very small value to each value to make them unique.
-    '''
-    # Regarding the input index_mask. True means the row/column index is in the inspection range.
-    # False means the row/column index is ignored.
-    # Create a masked array with -inf where mask_value is present
-    # Here matrix == mask_value, True means the cell is masked and ignored, False means, the cell is in our inspection range. Its opposite to the index_mask
-    value_occurence = defaultdict(int)
-    masked_matrix = np.where(matrix == mask_value, np.nan, matrix)
-
-    if index_mask is not None:
-        index_mask_2d = np.outer(index_mask, index_mask)
-        masked_matrix[~index_mask_2d] = np.nan
-
-    # Compute the maximum value for each row using NumPy's max function
-    row_sum_values = np.nansum(masked_matrix, axis=1)
-    row_sum_values = row_sum_values - (np.nanmin(row_sum_values) - 1e-6)
-    uniq_row_sum_values = np.empty(row_sum_values.size, dtype=np.double)
-
-    for i in range(matrix.shape[0]):
-        if not np.isnan(row_sum_values[i]):
-            uniq_row_sum_values[i] = row_sum_values[i] + value_occurence[row_sum_values[i]] * 1e-10
-            value_occurence[row_sum_values[i]] = 1 + value_occurence[row_sum_values[i]]
-        else:
-            uniq_row_sum_values[i] = np.nan
-
-    return uniq_row_sum_values
-
-
-
-@numba.njit(types.float32[:](types.float32[:, :], types.boolean[:], types.float32[:]), fastmath=True)
-def row_wise_sum_with_mask_nb(matrix, index_mask, mask_values = np.array([-1.0, 1.0])):
-    '''
-    For the convenience of the following BILP solver, we need to generate values that are unique to each index.
-    There might be many cases that different indices have the same value, so we need to add a very small value to each value to make them unique.
-    '''
-    # Regarding the input index_mask. True means the row/column index is in the inspection range.
-    # False means the row/column index is ignored.
-    # Create a masked array with -inf where mask_value is present
-    # Here matrix == mask_value, True means the cell is masked and ignored, False means, the cell is in our inspection range. Its opposite to the index_mask
-    row_sum_values = np.empty(matrix.shape[0], dtype=np.float32)
-
-    mask_arr = np.empty((len(mask_values), matrix.shape[0], matrix.shape[1]), dtype=np.bool_)
-    for i in prange(len(mask_values)):
-        mask_value = mask_values[i]
-        mask_matrix = matrix != mask_value
-        mask_arr[i] = mask_matrix
-    final_mask_matrix = mask_arr[0]
-    for i in prange(1, mask_arr.shape[0]):
-        final_mask_matrix = final_mask_matrix & mask_arr[i]
-
-    for i in prange(matrix.shape[0]):
-        row_arr = matrix[i]
-        row_mask = numba_and(index_mask, final_mask_matrix[i])
-        row_mask[i] = False
-        row_sum_values[i] = np.sum(row_arr[row_mask])
-
-    return row_sum_values
 
 @numba.njit(types.float32[:](types.float32[:, :], types.boolean[:], types.float32[:]), fastmath=True)
 def row_wise_max_with_mask_nb(matrix, index_mask, mask_values):
@@ -1682,129 +1040,6 @@ def para_row_wise_max_with_mask_nb(matrix, index_mask, mask_values):
         row_max_values[i] = max_val if max_val != -np.inf else 0
 
     return row_max_values
-
-
-
-def solve_min_dropped_sum(pairs_array, logger = logger):
-    """
-    Solves the minimum dropped sum problem for a given set of pairs using HiGHS.
-
-    Args:
-        pairs_array (numpy.ndarray): 2D array where each row is a pair of values.
-
-    Returns:
-        tuple: Dropped values and the sum of dropped values.
-    """
-    # Convert array to list of tuples
-    unique_values, inverse_indices = np.unique(pairs_array, return_inverse=True)
-
-    # Create a unique list of values
-    unique_values = np.unique(pairs_array)
-    num_values = len(unique_values)
-
-    if num_values > 300:
-        # we need some heuristic optimization
-        reject_vert_graph = gt.Graph(directed=False)
-        value_prop = reject_vert_graph.new_vertex_property("float")
-        value_dict = defaultdict(int)
-        for i in range(pairs_array.shape[0]):
-            value1 = pairs_array[i, 0]
-            value2 = pairs_array[i, 1]
-            if not value1 in value_dict:
-                v1 = reject_vert_graph.add_vertex()
-                value_prop[v1] = value1
-                value_dict[value1] = v1
-            else:
-                v1 = value_dict[value1]
-            if not value2 in value_dict:
-                v2 = reject_vert_graph.add_vertex()
-                value_prop[v2] = value2
-                value_dict[value2] = v2
-            else:
-                v2 = value_dict[value2]
-
-            if reject_vert_graph.edge(v1, v2) is None:
-                reject_vert_graph.add_edge(v1, v2)
-
-        reject_vert_graph.vertex_properties["value"] = value_prop
-        components, _ = gt.label_components(reject_vert_graph)
-        logger.info(f"There are {np.unique(components.a).size} components in the pair composed graph ({reject_vert_graph.num_vertices()} nodes and {reject_vert_graph.num_edges()} edges)")
-
-
-    # Create a map from value to index
-    value_to_index = {value: idx for idx, value in enumerate(unique_values)}
-
-    # Initialize the HiGHS model
-    highs = Highs()
-
-    # Set the output_flag to False to suppress output
-    highs.setOptionValue('output_flag', False)
-    # Create a constraint matrix
-    num_pairs = pairs_array.shape[0]
-    A = np.zeros((num_pairs, num_values))
-
-    # Then we need to fill the constraint matrix A properly to correctly specify start indices, row_indices, and values in the future function calls.
-    for i in range(num_pairs):
-        value1, value2 = pairs_array[i]
-        index1 = value_to_index[value1]
-        index2 = value_to_index[value2]
-        A[i, index1] = 1
-        A[i, index2] = 1
-
-    lower_bounds = np.zeros(num_values, dtype=np.int32)
-    upper_bounds = np.ones(num_values, dtype=np.int32)
-    col_costs = clip_array(unique_values.astype(np.double), 1e-10, None)
-
-    # Add Vars
-    highs.addVars(num_values, lower_bounds, upper_bounds)
-
-    # Change column costs
-    highs.changeColsCost(num_values, np.arange(num_values, dtype=np.int32), col_costs)
-
-    # Set variable types to integer
-    integrality = np.ones(num_values, dtype=np.int32)  # 1 for integer variables
-    highs.changeColsIntegrality(num_values, np.arange(num_values, dtype=np.int32), integrality)
-
-    # Adding rows
-    for i in range(num_pairs):
-        value1, value2 = pairs_array[i]
-        # Column index extraction
-        index1 = value_to_index[value1]
-        index2 = value_to_index[value2]
-        if index1 != index2:
-            status = highs.addRow(1, 2, 2, np.array([index1, index2], dtype=np.int32), np.array([1, 1], dtype=np.double))
-        else:
-            status = highs.addRow(1, 2, 1, np.array([index1], dtype=np.int32), np.array([1], dtype=np.double))
-        logger.debug(f"The addrow status is {status}")
-
-
-    # Run solver
-    highs.run()
-    solution = highs.getSolution()
-    info = highs.getInfo()
-    num_var = highs.getNumCol()
-    model_status = highs.getModelStatus()
-    basis = highs.getBasis()
-
-    # Access and print the constraint matrix
-    lp = highs.getLp()
-    # logger.info(f"column coefficients: {lp.col_cost_}")
-
-    logger.info(f"Model status = {highs.modelStatusToString(model_status)}")
-    logger.debug(f"Optimal objective = {info.objective_function_value}")
-    logger.info(f"Iteration count = {info.simplex_iteration_count}")
-    logger.info(f"Primal solution status = {highs.solutionStatusToString(info.primal_solution_status)}")
-
-    # Get solution
-    solution = np.array(highs.getSolution().col_value)
-    # print(f"Solution is {solution}")
-    dropped_indices = np.where(solution == 1)[0]
-    remain_indices = np.where(solution == 0)[0]
-    dropped_values = unique_values[dropped_indices]
-    remain_values = unique_values[remain_indices]
-
-    return dropped_values, remain_values
-
 
 def pretty_print_matrix(matrix, precision=3):
     """
@@ -1917,7 +1152,6 @@ def sparse_mask_selection(data, indices, indptr, mask):
             new_indptr[row_idx + 1] = len(new_data)
             row_idx += 1
     return new_data, new_indices, new_indptr, new_size
-
 
 
 @numba.njit(types.Tuple((types.int32[:], types.boolean[:]))(types.float32[:, :], types.boolean[:], types.int32[:], types.float32), fastmath=True)
@@ -2600,21 +1834,6 @@ def build_phasing_graph(bam_file,
     logger.info(f"Now we finished building up the edges in the graph. There are currently {g.num_vertices()} vertices and {g.num_edges()} edges in the graph")
     return g, weight_matrix, qname_to_node, read_hap_vectors
 
-@numba.njit
-def is_nan(x):
-    return x != x
-
-
-@numba.njit
-def numba_isna(arr):
-    bool_arr = np.empty(arr.size, dtype=np.bool_)
-    for i in prange(arr.size):
-        if is_nan(arr[i]):
-            bool_arr[i] = True
-        else:
-            bool_arr[i] = False
-    return bool_arr
-
 
 @numba.njit(types.int32[:](types.int32[:,:], types.float32[:,:], types.int32[:,:]), fastmath=True)
 def assemble_consensus(seq_arrays, qual_arrays, reads):
@@ -2673,164 +1892,11 @@ def assemble_consensus(seq_arrays, qual_arrays, reads):
 
 
 @numba.njit
-def positions_to_intervals(positions):
-    """
-    Convert a sorted list of positions into a list of intervals.
-
-    Parameters:
-    positions (list or array): A sorted list or array of positions.
-
-    Returns:
-    list of tuples: Each tuple represents an interval (start, end).
-    """
-    intervals = np.empty((len(positions), 2), dtype=np.int32)
-    start = positions[0]
-    end = positions[0]
-
-    count=0
-    for pos in positions[1:]:
-        if pos == end + 1:
-            end = pos
-        else:
-            intervals[count, 0] = start
-            intervals[count, 1] = end
-            count += 1
-            start = pos
-            end = pos
-
-    intervals[count, 0] = start
-    intervals[count, 1] = end
-    # These returned intervals are inclusive on both ends
-    return intervals[:count+1]
-
-
-@numba.njit(types.float32[:](types.int32, types.int32[:, :], types.float32[:, :], types.int32), fastmath=True)
-def cal_var_density_per_chrom(chrom_span, chrom_df, chrom_density_info, padding_size):
-    chrom_density_arr = np.empty(chrom_span, dtype=np.float32)
-    # Calculate local variant density for each base position
-    for i in prange(chrom_span):
-        pos = chrom_density_info[i, 0]
-        interval_start = pos - padding_size
-        interval_end = pos + padding_size
-        interval_variants = chrom_df[(chrom_df[:, 0] <= interval_end) & (chrom_df[:, 1] >= interval_start)]
-        interval_count = interval_variants.shape[0]
-        interval_length = interval_end - interval_start
-        density = interval_count / interval_length
-        chrom_density_arr[i] = density
-    return chrom_density_arr
-
-
-@numba.njit
 def find_row_index(array, value):
     for i in prange(array.shape[0]):
         if array[i] == value:
             return i
     return -1
-
-
-@numba.njit
-def extend_intervals(interval, raw_array, extend_size = 2):
-    start, end = interval
-    start_index = find_row_index(raw_array[:, 0], start)
-    end_index = find_row_index(raw_array[:, 1], end)
-    for i in range(extend_size):
-        start_index -= 1
-        ups_value = raw_array[start_index, 0]
-        end_index += 1
-        down_value = raw_array[end_index, 1]
-        if start - ups_value < down_value - end:
-            end_index -= 1
-        else:
-            start_index += 1
-    return raw_array[start_index, 0], raw_array[end_index, 1]
-
-
-
-# @numba.njit(types.int32[:, :](types.int32[:, :], types.int32[:, :]), fastmath=True)
-def polish_intervals_per_chrom(high_den_intervals, chrom_df):
-    max_possible_interval_no = high_den_intervals[-1, 1] - high_den_intervals[0, 0]
-    chrom_density_intervals = np.empty((max_possible_interval_no, 2), dtype=np.int32)
-    count = 0
-    for start, end in high_den_intervals:
-        # Find all the overlapping variants
-        # Shrink the interval to a smaller one starting from the left-most variant to the right-most variant
-        interval_variants = chrom_df[(chrom_df[:, 0] <= end) & (chrom_df[:, 0] >= start)]
-        if interval_variants.shape[0] >= 3:
-            left_start = interval_variants[:, 0].min()
-            right_end = interval_variants[:, 1].max()
-            if right_end - left_start <= 200:
-                chrom_density_intervals[count, 0] = left_start
-                chrom_density_intervals[count, 1] = right_end
-                count += 1
-            else:
-                # Split the interval into smaller pieces
-                interval_variants = interval_variants[np.argsort(interval_variants[:, 0])]
-                delimiter_rows = np.where((interval_variants[1:, 0] - interval_variants[:-1, 1]) > 75)[0]
-                groups = np.split(interval_variants, delimiter_rows)
-                for group in groups:
-                    if interval_variants.shape[0] >= 3:
-                        left_start = group[:, 0].min()
-                        right_end = group[:, 1].max()
-                        if right_end - left_start <= 200:
-                            chrom_density_intervals[count, 0] = left_start
-                            chrom_density_intervals[count, 1] = right_end
-                            count += 1
-                        else:
-                            delimiter_rows = np.where((group[1:, 0] - group[:-1, 1]) > 35)[0]
-                            subgroups = np.split(group, delimiter_rows)
-                            for subgroup in subgroups:
-                                logger.info(f"Subgroup is \n{pretty_print_matrix(subgroup)}\n")
-                                if subgroup.shape[0] >= 3:
-                                    left_start = subgroup[:, 0].min()
-                                    right_end = subgroup[:, 1].max()
-                                    chrom_density_intervals[count, 0] = left_start
-                                    chrom_density_intervals[count, 1] = right_end
-                                    count += 1
-                                else:
-                                    ext_start, ext_end = extend_intervals(subgroup[0], interval_variants, 4 - subgroup.shape[0])
-                                    chrom_density_intervals[count, 0] = ext_start
-                                    chrom_density_intervals[count, 1] = ext_end
-                                    count += 1
-    return chrom_density_intervals[:count]
-
-
-
-@numba.njit(types.int32[:, :](types.int32[:, :]), fastmath=True)
-def get_intervals_per_chrom(chrom_df):
-    chrom_intervals = np.empty((chrom_df.shape[0], 2), dtype=np.int32)
-    if chrom_df.shape[0] == 1:
-        chrom_intervals[0, 0] = chrom_df[0, 0] - 30
-        chrom_intervals[0, 1] = chrom_df[0, 1] + 30
-        return chrom_intervals[:1]
-    i = 0
-    interval_count = 0
-    while True:
-        start = chrom_df[i, 0]
-        end = chrom_df[i, 1]
-        next_end = end
-        var_count = 1
-        while True:
-            next_start = chrom_df[i+1, 0]
-            if (next_start - next_end < 20 or next_start - end < 120) and (next_start - next_end < 65):
-                next_end = chrom_df[i+1, 1]
-                i += 1
-                var_count += 1
-                if i == chrom_df.shape[0] - 1:
-                    next_end = chrom_df[i, 1]
-                    chrom_intervals[interval_count, 0] = start - 1
-                    chrom_intervals[interval_count, 1] = next_end + 1
-                    interval_count += 1
-                    break
-            else:
-                i += 1
-                if var_count >= 3:
-                    chrom_intervals[interval_count, 0] = start - 1
-                    chrom_intervals[interval_count, 1] = next_end + 1
-                    interval_count += 1
-                break
-        if i == chrom_df.shape[0] - 1:
-            break
-    return chrom_intervals[:interval_count]
 
 
 def extract_var_pos(raw_vcf,
@@ -3096,12 +2162,6 @@ def identify_misalignment_per_region(region,
     logger.info(f"Found {len(final_clusters)} haplotype clusters for region {region_str}. The dataframe recording the haplotypes in this region looks like :\n{record_df.to_string(index=False)}\n")
     return record_df, total_hapvectors, total_errvectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx
 
-def convert_list_to_dict(vprop):
-    label_dict = {}
-    for label, group in enumerate(vprop):
-        for q_idx in group:
-            label_dict[q_idx] = label
-    return label_dict
 
 @numba.njit(types.int32[:,:](types.boolean[:]), fastmath=True)
 def extract_true_stretches(bool_array):
@@ -3286,96 +2346,6 @@ def lp_solve_remained_haplotypes(total_record_df,
     select_hap_ids = hap_id_coefficients.iloc[select_hap_indices, 0]
     drop_hap_ids = hap_id_coefficients.iloc[drop_hap_indices, 0]
     return set(select_hap_ids), set(drop_hap_ids), highs.modelStatusToString(model_status)
-
-
-
-@numba.njit(types.int32[:, :](types.boolean[:]), fastmath=True)
-def contiguous_regions(condition):
-    # returned indices are half-open intervals. Ends are exclusive
-    idx = np.empty((len(condition), 2), dtype=np.int32)
-    i = 0
-    region_count = 0
-    while i < len(condition):
-        x1 = i + condition[i:].argmax()
-        if x1 == len(condition):
-            break
-        try:
-            x2 = x1 + condition[x1:].argmin()
-        except:
-            x2 = x1 + 1
-        if x1 == x2:
-            if condition[x1] == True:
-                x2 = len(condition)
-            else:
-                break
-        idx[region_count, 0] = x1
-        idx[region_count, 1] = x2
-        region_count += 1
-        i = x2
-    return idx[:region_count]
-
-
-@numba.njit
-def bin_interval(start, end, window_size=100):
-    """
-    Bins an interval (start, end) into continuous smaller windows of a specified size.
-
-    Parameters:
-    - start (int): The start of the interval.
-    - end (int): The end of the interval.
-    - window_size (int): The size of each window. Default is 100.
-
-    Returns:
-    - List of tuples: Each tuple represents a window (window_start, window_end).
-    """
-    windows = np.empty((end - start, 2), dtype = np.int32)
-    current_start = start
-
-    region_count = 0
-    while current_start < end:
-        current_end = min(current_start + window_size, end)
-        # windows.append((current_start, current_end))
-        windows[region_count, 0] = current_start
-        windows[region_count, 1] = current_end
-        region_count += 1
-        current_start += window_size
-
-    return windows[:region_count]
-
-
-
-def split_var_regions(var_df, delimiter_size = 1500):
-    chroms = var_df["chrom"]
-    final_regions = {}
-    for chrom in chroms:
-        chrom_df = var_df[var_df["chrom"] == chrom]
-        distances = chrom_df.iloc[1:, 1].to_numpy() - chrom_df.iloc[:-1, 2].to_numpy()
-        split_inds = np.where(distances > delimiter_size)[0]
-        # Split the dataframe into multiple dataframes by the split_inds
-        splitted_intervals = set([])
-        start = chrom_df.iloc[0, 1]
-        end = chrom_df.iloc[0, 2]
-        if 0 in split_inds:
-            splitted_intervals.add((start, end))
-        for i in range(1, chrom_df.shape[0]):
-            if i in split_inds:
-                end = chrom_df.iloc[i, 2]
-                splitted_intervals.add((start, end))
-                start = chrom_df.iloc[i+1, 1]
-            if i == chrom_df.shape[0] - 1:
-                end = chrom_df.iloc[i, 2]
-                splitted_intervals.add((start, end))
-
-        total_binned_intervals = np.empty((chrom_df["end"].max() - chrom_df["start"].min(), 2), dtype = np.int32)
-        bin_count = 0
-        for interval in splitted_intervals:
-            binned_intervals = bin_interval(interval[0]-500, interval[1]+500, window_size = 74)
-            total_binned_intervals[bin_count:bin_count+binned_intervals.shape[0], :] = binned_intervals
-            bin_count += binned_intervals.shape[0]
-        total_binned_intervals = total_binned_intervals[:bin_count, :]
-        final_regions[chrom] = total_binned_intervals
-    return final_regions
-
 
 
 def calulate_coefficient_per_group(record_df, logger=logger):
