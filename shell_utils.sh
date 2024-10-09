@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 self=$(realpath ${BASH_SOURCE[0]})
 
-function timestamp() {
-	echo $(date +"%Y-%m-%d %H:%M:%S")
-}
 
 function log() {
     local msg="$1"
@@ -65,7 +62,7 @@ function display_table {
         display_vcf ${1} ${rows}
         return;
     fi
-    
+
     ## Another dependency?
     local tsv_pretty=/home/yangyxt/software/tsv-utils-v2.2.0_linux-x86_64_ldc2/bin/tsv-pretty
     local row_num=$(tail -n +2 ${1} | wc -l)
@@ -80,7 +77,7 @@ function display_table {
     fi
 
 
-    >&2 echo "$(timestamp): ${1} has ${row_num} rows and ${col_num} columns. It looks like:"
+    log  "${1} has ${row_num} rows and ${col_num} columns. It looks like:"
     if [[ ${rows} -le 0 ]]; then
         ${tsv_pretty} -u ${del_arg} -m 5000 -l 200 -a ${input} >&2 2> /dev/null
     else
@@ -205,12 +202,11 @@ function check_bam_index {
     fi
 }
 
+
 function modify_bam_sq_lines () {
     local input_bam=${1}
     local ref_fasta=${2}
     local output_header=${3}
-
-    local sq_lines=$()
 
     samtools view -H ${input_bam} | grep -v "@SQ" | grep -v "@PG" > ${output_header} && \
     generate_sq_lines ${ref_fasta} >> ${output_header} && \
@@ -267,17 +263,16 @@ function modify_masked_genome_coords () {
                                    $0 !~ /^@/ {printf "%s:%s", $1, pc_tag; \
                                                for (i=2;i<NF;i++) printf "\t%s", $i;
                                                printf "\t%s\n", $NF;}' - | uniq -
- }
+}
 
 
 function independent_minimap2_masked () {
-     local OPTIND f r s g o p t e z m i b a c
-     while getopts f::r::p::s::g::o::t::e::z::m::i::b::a::c:: args
+     local OPTIND f r s g o p t e z m i a c
+     while getopts f::r::s::g::o::t::e::z::m::i::a::c:: args
      do
          case ${args} in
              f) local forward_reads=$OPTARG ;;
              r) local reverse_reads=$OPTARG ;;
-             p) local merged_pair_reads=$OPTARG ;;
              g) local ref_genome=$OPTARG ;;
              a) local masked_genome=$OPTARG ;;
              s) local samp_ID=$OPTARG ;;
@@ -287,13 +282,12 @@ function independent_minimap2_masked () {
              z) local ref_contig_sizes=$OPTARG ;;
              m) local mode=$OPTARG ;;
              i) local pc_index=$OPTARG ;;
-             b) local raw_align=$OPTARG ;;
              c) local nm_cutoff=$OPTARG ;;
              *) echo "No argument passed. Pls at least specify -r (ref fasta path) or -b (bed_file path)." ;;
          esac
      done
 
-     if [[ -z ${ref_genome} ]]; then {echo >&2 "No reference genome provided. Exit. " && exit 1}; fi
+     if [[ -z ${ref_genome} ]]; then { echo >&2 "No reference genome provided. Exit. " && exit 1; } fi
      if [[ -z ${samp_ID} ]]; then local samp_ID=$(basename ${forward_reads} | awk '{gsub(/_[a-z]*1\.f[ast]*q[\.gz]*$/, "", $0); printf "%s", $0;}'); fi
      if [[ -z ${output_align} ]]; then local output_align=${samp_ID}.bam; fi
      if [[ -z ${expected_lines} ]]; then local expected_lines=1; fi
@@ -334,4 +328,4 @@ function independent_minimap2_masked () {
          log "Failed to generate a valid bam file ${output_align} from ${forward_reads} and ${reverse_reads} on ${ref_genome}"
          return 1;
      fi
- }
+}
