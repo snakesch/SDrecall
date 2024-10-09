@@ -2,3 +2,4 @@ __pycache__/*
 *.ipynb
 test/*
 src/__pycache__/*
+preparation/__pycache__/*
