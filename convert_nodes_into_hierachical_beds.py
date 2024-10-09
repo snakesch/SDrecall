@@ -1,11 +1,9 @@
 import os
 import sys
-from itertools import repeat
 from multiprocessing import Pool
 import logging
-
 from build_regions_from_PC_clusters import establish_beds_per_PC_cluster
-from src.utils import executeCmd, is_file_up_to_date
+from src.utils import executeCmd, prepare_tmp_file
 from src.const import *
 
 logger = logging.getLogger("SDrecall")
@@ -24,10 +22,10 @@ def convert_nodes_into_hierachical_beds(grouped_qnode_cnodes: list,
     import shutil
     from itertools import repeat
     import re
-    
+
     # We need to restructure the grouped_qnode_cnodes to pass the information of sd-paralog pairs to the establish_beds_per_PC_cluster function
     new_results = []
-    
+
     for result in grouped_qnode_cnodes:
         new_result = {"PCs": {}, "SD_counterparts": {}}
         for i in range(0, len(result["PCs"])):
@@ -39,7 +37,7 @@ def convert_nodes_into_hierachical_beds(grouped_qnode_cnodes: list,
     # Load balancing
     new_results = sorted(new_results, key = lambda x: sum(v[0][2] - v[0][1] for k,v in x["PCs"].items()) * sum(len(v) for k,v in x["SD_counterparts"].items()), reverse=True)
     labels = [ "PC" + str(n) for n in range(0, len(grouped_qnode_cnodes))]
-    
+
     pool = Pool(nthreads)
     results = pool.imap_unordered(imap_establish, zip(new_results,
                                                       repeat(output_folder),
@@ -59,7 +57,7 @@ def convert_nodes_into_hierachical_beds(grouped_qnode_cnodes: list,
         logger.debug(logs)
         logger.debug(f"*********************************** {i}_subprocess_end ***************************************")
         i+=1
-    
+
     pool.close()
     if not all([t[0] for t in results]):
         raise RuntimeError("Error occurred during the parallel execution of establish_beds_per_PC_cluster. Exit.")
@@ -77,18 +75,18 @@ def convert_nodes_into_hierachical_beds(grouped_qnode_cnodes: list,
     cmd = f"source {shell_utils}; modify_bam_sq_lines {intrinsic_bams[0]} {ref_genome} {intrinsic_bam_header}"
     executeCmd(cmd, logger=logger)
 
-    # intrinsic_bam_list = total_intrinsic_bam.replace(".bam", ".bams.list.txt")
-    # with open(intrinsic_bam_list, "w") as f:
-    #     f.write("\n".join(intrinsic_bams))
+    intrinsic_bam_list = total_intrinsic_bam.replace(".bam", ".bams.list.txt")
+    with open(intrinsic_bam_list, "w") as f:
+        f.write("\n".join(intrinsic_bams))
 
-    # cmd = f"samtools merge -@ {nthreads} -h {intrinsic_bam_header} -b {intrinsic_bam_list} -o - | \
-    #         samtools sort -O bam -o {total_intrinsic_bam} && \
-    #         samtools index {total_intrinsic_bam} && \
-    #         ls -lht {total_intrinsic_bam} || \
-    #         echo Failed to concatenate all the filtered realigned BAM files. It wont be a fatal error but brings troubles to debugging and variant tracing."
-    # if execute:
-    #     executeCmd(cmd)
-    
+    cmd = f"samtools merge -@ {nthreads} -h {intrinsic_bam_header} -b {intrinsic_bam_list} -o - | \
+            samtools sort -O bam -o {total_intrinsic_bam} && \
+            samtools index {total_intrinsic_bam} && \
+            ls -lht {total_intrinsic_bam} || \
+            echo Failed to concatenate all the filtered realigned BAM files. It wont be a fatal error but brings troubles to debugging and variant tracing."
+    if execute:
+        executeCmd(cmd)
+
     # Third remove leftover PC folders
     subdir_gen = os.walk(output_folder)
     # Prepare all target folder names in this time's generation, the naming syntax should follow the function called construct_folder
@@ -102,7 +100,7 @@ def convert_nodes_into_hierachical_beds(grouped_qnode_cnodes: list,
         if subdir not in target_folder_names:
             # Remove the subdir forcely
             shutil.rmtree(os.path.join(output_folder, subdir))
-            
+
     # Fourth, extract all PC*_related_homo_regions.bed file and concat them together.
     first_level_dirs = next(os.walk(output_folder))[1]
     # Build a temp file to store the names of all sub files, if directly put all the names following cat, it might cause argument list too long error
@@ -116,23 +114,23 @@ def convert_nodes_into_hierachical_beds(grouped_qnode_cnodes: list,
 
     executeCmd("cat {all} | bedtools sort -i stdin | bedtools merge -i stdin > {total} && ls -lht {total}".format(all = tmp_lst,
                                                                                                         total = os.path.join(output_folder, "all_PC_related_homo_regions.bed")))
-    
+
     executeCmd("cat {all} | bedtools sort -i stdin | bedtools merge -i stdin > {total} && ls -lht {total} && rm {all}".format(all = tmp_lst,
                                                                                                         total = os.path.join(output_folder, "all_PC_regions.bed")))
-    
-    
+
+
     # Fifth, extract all intrinsic vcfs and use bcftools to concat them together
     intrinsic_vcfs = []
     for root, dirs, files in os.walk(output_folder):
         for file in files:
             if re.search(r'PC[0-9]+\.raw\.vcf\.gz$', file):
                 intrinsic_vcfs.append(os.path.join(root, file))
-    
+
     vcf_list_file = os.path.join(output_folder, "intrinsic_vcf.lst")
     final_intrinsic_vcf = os.path.join(output_folder, "all_pc_region_intrinsic_variants.vcf.gz")
     tmp_intrinsic_vcf = os.path.join(output_folder, "all_pc_region_intrinsic_variants.tmp.vcf.gz")
     with open(vcf_list_file, "w") as f:
         for v in intrinsic_vcfs: f.write(v + "\n")
-    
+
     executeCmd(f"bcftools concat -o {tmp_intrinsic_vcf} -a --no-version -Oz -f {vcf_list_file} && bcftools sort --temp-dir /tmp -o {final_intrinsic_vcf} -Oz {tmp_intrinsic_vcf} && ls -lh {final_intrinsic_vcf} && rm {tmp_intrinsic_vcf}")
     return

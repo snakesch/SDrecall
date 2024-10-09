@@ -15,30 +15,22 @@ import graph_tool.all as gt
 import numpy as np
 import pandas as pd
 import pybedtools as pb
-import subprocess
 import pysam
 import logging
-import time
-import datetime
-import sys
 import argparse as ap
-import highspy as highs
-from highspy import Highs, HighsLp
+from highspy import Highs
 import numba
 # numba.config.THREADING_LAYER = 'omp'
 # numba.set_num_threads(4)
 from numba import types, prange, get_num_threads
-from numba.typed import Dict, List
-import tempfile
-import math
 from io import StringIO
 from scipy import sparse
 from ncls import NCLS
 from collections import defaultdict
-from intervaltree import Interval, IntervalTree
+from intervaltree import IntervalTree
 from python_utils import convert_input_value
-from sortedcontainers import SortedList
-from subprocess import PIPE
+from src.utils import executeCmd, prepare_tmp_file
+
 bash_utils_hub = "shell_utils.sh"
 
 logger = logging.getLogger(__name__)
@@ -49,14 +41,6 @@ formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(module)s:%(funcName)s
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
-
-def prepare_tmp_file(tmp_dir="/paedyl01/disk1/yangyxt/test_tmp", **kwargs):
-    try:
-        os.mkdir(tmp_dir)
-    except FileExistsError:
-        pass
-
-    return tempfile.NamedTemporaryFile(dir = "/paedyl01/disk1/yangyxt/test_tmp", delete = False, **kwargs)
 
 
 
@@ -131,7 +115,7 @@ def numba_isin(arr, uniq_vals):
         if arr[i] in uniq_set:
             mask[i] = True
     return mask
- 
+
 @numba.njit(types.boolean[:](types.int32, types.int32[:]), fastmath=True)
 def boolean_mask(total_rows, row_indices):
     boolean_mask = np.zeros(total_rows, dtype=np.bool_)
@@ -151,6 +135,28 @@ def reverse_boolean_mask(total_rows, row_indices):
 def numba_ix(matrix, mask):
     return matrix[mask, :][:, mask]
 
+
+@numba.njit(types.Tuple((types.int32, types.float32))(types.float32[:], types.boolean[:]), fastmath=True)
+def numba_max_idx_mem(data, index_mask=None):
+    max_val = -np.inf
+    max_idx = -1
+
+    if index_mask is None:
+        for i in range(data.size):
+            if data[i] >= max_val:
+                max_idx = i
+                max_val = data[i]
+    else:
+        for i in range(data.size):
+            if index_mask[i]:
+                if data[i] >= max_val:
+                    max_idx = i
+                    max_val = data[i]
+
+    return max_idx, max_val
+
+
+
 class HashableAlignedSegment(pysam.AlignedSegment):
     def __init__(self, aligned_segment):
         # Copy attributes from the input AlignedSegment object
@@ -167,32 +173,6 @@ class HashableAlignedSegment(pysam.AlignedSegment):
     def __hash__(self):
         return hash((self.query_name, self.flag))
 
-def executeCmd(cmd, stdout_only = False, logger=logger):
-    logger.info("About to run this command in shell invoked within python: \n{}\n".format(cmd))
-
-    if stdout_only:
-        result = subprocess.run(cmd, shell=True, executable=shell, capture_output=True)
-
-    else:
-        result = subprocess.run(cmd, shell=True, executable=shell, stderr=subprocess.STDOUT, stdout=PIPE)
-
-    code = result.returncode
-    cmd_lst = cmd.split(" ")
-    if code != 0:
-        if stdout_only:
-            logger.error("Error in \n{}\nAnd the output goes like:\n{}\n".format(" ".join(cmd_lst), result.stderr.decode()))
-        else:
-            logger.error("Error in \n{}\nAnd the output goes like:\n{}\n".format(" ".join(cmd_lst), result.stdout.decode()))
-        if cmd_lst[1][0] != "-":
-            raise RuntimeError
-        else:
-            raise RuntimeError
-
-    if stdout_only:
-        logger.info(f"Ran the following shell command inside python:\n{cmd}\nAnd it receives a return code of {code}\nThe process looks like this:\n{result.stderr.decode()}\n\n")
-    else:
-        logger.info(f"Ran the following shell command inside python:\n{cmd}\nAnd it receives a return code of {code}, the output goes like this:\n{result.stdout.decode()}\n\n")
-    return result.stdout.decode()
 
 
 
@@ -770,7 +750,7 @@ def seq_err_det_stacked_bases(target_read,
         return False, read_ref_pos_dict
 
     chrom = target_read.reference_name
-    
+
     ad = nested_dict.get(target_read.reference_name, {}).get(position0, {}).get(target_base, 0)
     dp = nested_dict.get(target_read.reference_name, {}).get(position0, {}).get("DP", 0)
 
@@ -810,7 +790,7 @@ def tolerate_mismatches_two_seq(read1, read2,
                                                                 nested_dict,
                                                                 read_ref_pos_dict,
                                                                 logger = logger)
-        
+
         seq_err2, read_ref_pos_dict = seq_err_det_stacked_bases(read2,
                                                                 diff_ind,
                                                                 ncls_bam,
@@ -1799,7 +1779,7 @@ def build_phasing_graph(bam_file,
                         qname_bools[n] = 1
                     else:
                         qname_bools[n] = -1
-                        
+
                     if read_weight is not None:
                         read_weight = read_weight if read_weight > 0 else 1
                         norm_weight = read_weight/(mean_read_length * 10)
