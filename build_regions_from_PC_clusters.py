@@ -94,10 +94,8 @@ def establish_beds_per_PC_cluster(cluster_dict={"PCs":{},
     
     contig_sizes = ref_genome.replace(".fasta", ".fasta.fai")
     # Alongside preparing the bed files, we can also perform masked genome preparation
-    masked_genome, updated = Genome(ref_genome).mask(paths["PC_bed"], avg_frag_size = avg_frag_size, std_frag_size=std_frag_size, genome=contig_sizes, logger=logger)
-    if updated:
-        assert os.path.getmtime(masked_genome) > os.path.getmtime(paths["PC_bed"])
-    
+    masked_genome = Genome(ref_genome).mask(paths["PC_bed"], avg_frag_size = avg_frag_size, std_frag_size=std_frag_size, genome=contig_sizes, logger=logger)
+      
     # And we need to prepare the intrinsic VCF based on the masked genome and generated BED files
     bam_path = getIntrinsicVcf( pc_bed = paths["PC_bed"], 
                                 all_homo_regions_bed = paths["All_region_bed"], 

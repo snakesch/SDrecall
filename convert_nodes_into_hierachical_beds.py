@@ -17,19 +17,14 @@ def convert_nodes_into_hierachical_beds(grouped_qnode_cnodes: list,
                                         sd_paralog_pairs: dict,
                                         output_folder,
                                         ref_genome,
-                                        target_region_bed = "",
                                         nthreads = 12,
-                                        length = None,
                                         avg_frag_size = 400,
                                         std_frag_size = 140):
-    # Establish a series of labels for PC-counterparts pairs
-    # For disconnected query nodes cluster, we simply name them collectively as PC0
-    # For connected query nodes cluster, we name them as PC1, PC2, PC3, ...
+    # Label SD-paralog pairs. Name disconnected qnodes as PC0, connected qnodes as PC1, PC2, ...
     import shutil
     from itertools import repeat
     import re
     
-    # logger.info("Start putting beds into the rest of PC-counterparts paired beds into subfolders")
     # We need to restructure the grouped_qnode_cnodes to pass the information of sd-paralog pairs to the establish_beds_per_PC_cluster function
     new_results = []
     
@@ -55,48 +50,44 @@ def convert_nodes_into_hierachical_beds(grouped_qnode_cnodes: list,
     i = 0
     intrinsic_bams = []
     for success, result, logs in results:
-        print(f"\n\n*********************************** {i}_subprocess_start ***************************************", file = sys.stderr)
+        logger.debug(f"*********************************** {i}_subprocess_start ***************************************")
         if not success:
             error_mes, tb_str = result
             logger.error(f"An error occurred: {error_mes}\nTraceback: {tb_str}\n")
         else:
             intrinsic_bams.append(result)
-        print(logs, file = sys.stderr)
-        print(f"*********************************** {i}_subprocess_end ***************************************\n\n", file = sys.stderr)
+        logger.debug(logs)
+        logger.debug(f"*********************************** {i}_subprocess_end ***************************************")
         i+=1
     
     pool.close()
     if not all([t[0] for t in results]):
-        raise RuntimeError("Error happened during the parallel execution of establish_beds_per_PC_cluster. So stop the total python script here.")
+        raise RuntimeError("Error occurred during the parallel execution of establish_beds_per_PC_cluster. Exit.")
 
+    ## Check file validity of merged intrinsic BAM file
     total_intrinsic_bam = os.path.join(output_folder, "total_intrinsic_alignments.bam")
-    test_cmd = f"bash {shell_utils} check_bam_validity {total_intrinsic_bam}"
-    print(test_cmd)
+    test_cmd = f"source {shell_utils}; check_bam_validity {total_intrinsic_bam}"
     try:
         executeCmd(test_cmd)
     except RuntimeError:
-        logger.info(f"The merged intrinsic alignment BAM file {total_intrinsic_bam} is not ready")
-        execute = True
-    else:
-        execute = not (is_file_up_to_date(total_intrinsic_bam, [vb for vb in intrinsic_bams]) and is_file_up_to_date(total_intrinsic_bam, [os.path.abspath(__file__)]))
-        if execute:
-            executeCmd(test_cmd)
+        logger.error(f"The merged intrinsic alignment BAM file {total_intrinsic_bam} is not ready. Exit. ")
+        sys.exit(1)
 
     intrinsic_bam_header = total_intrinsic_bam.replace(".bam", ".bam.header")
-    cmd = f"bash {shell_utils} modify_bam_sq_lines {intrinsic_bams[0]} {ref_genome} {intrinsic_bam_header}"
+    cmd = f"source {shell_utils}; modify_bam_sq_lines {intrinsic_bams[0]} {ref_genome} {intrinsic_bam_header}"
     executeCmd(cmd, logger=logger)
 
-    intrinsic_bam_list = total_intrinsic_bam.replace(".bam", ".bams.list.txt")
-    with open(intrinsic_bam_list, "w") as f:
-        f.write("\n".join(intrinsic_bams))
+    # intrinsic_bam_list = total_intrinsic_bam.replace(".bam", ".bams.list.txt")
+    # with open(intrinsic_bam_list, "w") as f:
+    #     f.write("\n".join(intrinsic_bams))
 
-    cmd = f"samtools merge -@ {nthreads} -h {intrinsic_bam_header} -b {intrinsic_bam_list} -o - | \
-            samtools sort -O bam -o {total_intrinsic_bam} && \
-            samtools index {total_intrinsic_bam} && \
-            ls -lht {total_intrinsic_bam} || \
-            echo Failed to concatenate all the filtered realigned BAM files. It wont be a fatal error but brings troubles to debugging and variant tracing."
-    if execute:
-        executeCmd(cmd)
+    # cmd = f"samtools merge -@ {nthreads} -h {intrinsic_bam_header} -b {intrinsic_bam_list} -o - | \
+    #         samtools sort -O bam -o {total_intrinsic_bam} && \
+    #         samtools index {total_intrinsic_bam} && \
+    #         ls -lht {total_intrinsic_bam} || \
+    #         echo Failed to concatenate all the filtered realigned BAM files. It wont be a fatal error but brings troubles to debugging and variant tracing."
+    # if execute:
+    #     executeCmd(cmd)
     
     # Third remove leftover PC folders
     subdir_gen = os.walk(output_folder)

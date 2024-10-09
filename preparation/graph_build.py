@@ -88,7 +88,7 @@ def compose_PO_graph_per_chr(args):
     gc.collect()
     return (chrom, directed_graph_path)
 
-def create_multiplex_graph(sd_data, graph_filepath=None, threads = 10, target_bed = ""):
+def create_multiplex_graph(sd_data, graph_filepath=None, threads = 10):
     '''
     Inputs:
     sd_data: refined and filtered SD map from previous steps (pd.DataFrame)

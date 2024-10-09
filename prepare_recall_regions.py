@@ -179,10 +179,10 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
     
     # Step 5: Create the SD + PO graph
     graph_path = os.path.join(work_dir, basename + "-multiplexed_homologous_sequences.graphml")
-    if os.path.exists(graph_path) and is_file_up_to_date(graph_path, [input_bam, target_bed, bam_json]):
+    if os.path.exists(graph_path) and is_file_up_to_date(graph_path, [input_bam, bam_json]):
         graph = read_graphml(graph_path)
     else:
-        graph = create_multiplex_graph( total_bin_sd_df, graph_path, threads = threads, target_bed = target_bed)
+        graph = create_multiplex_graph( total_bin_sd_df, graph_path, threads = threads)
 
     # Step 6: Extract SD + PO BED regions with depth issues caused by mapping ambiguity. Mutual overlap exists between intervals.
     ## expanded_total_bin_sd_df is constructed from reference SD map, multi_align_bed_obj is constructed from specified target regions.
@@ -248,7 +248,6 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
                                         sd_paralog_pairs = sd_paralog_pairs,
                                         output_folder = work_dir,
                                         ref_genome = ref_genome,
-                                        target_region_bed=target_bed,
                                         nthreads = threads,
                                         avg_frag_size = avg_frag_size,
                                         std_frag_size = std_frag_size)

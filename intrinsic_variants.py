@@ -2,7 +2,8 @@ import os
 import logging
 
 from preparation.seq import getRawseq
-from src.utils import executeCmd, prepare_tmp_file
+from src.utils import executeCmd, is_file_up_to_date
+from src.const import *
 
 def getIntrinsicVcf(pc_bed, 
                     all_homo_regions_bed, 
@@ -40,20 +41,17 @@ def getIntrinsicVcf(pc_bed,
     logger.info(f"The paired fastq files to get the intrinsic VCF for {pc_bed} is {raw_fq_path}")
     
     # After getting the fastq file it should be used to map against the masked genome and perform straight forward variants calling
-    if not os.path.exists(bam_path) or \
-       (os.path.getmtime(bam_path) < os.path.getmtime(pc_masked)) or \
-       (os.path.getmtime(bam_path) < os.path.getmtime(bash_utils_hub)) or \
-       (os.path.getmtime(bam_path) < os.path.getmtime(os.path.abspath(__file__))):
+    if not os.path.exists(bam_path) or not is_file_up_to_date(bam_path, [pc_masked, shell_utils, os.path.abspath(__file__)]):
         pc_masked_index = pc_masked.replace(".fasta", ".mmi")
-        cmd = f"source {os.path.dirname(__file__)}/shell_utils.sh; independent_minimap2_masked \
-               -f {raw_fq_path} \
-               -a {pc_masked} \
-               -o {bam_path} \
-               -s all_PC \
-               -t {threads} \
-               -i {pc_label} \
-               -m asm20 \
-               -g {ref_genome}"
+        cmd = f"source {shell_utils}; independent_minimap2_masked \
+                -f {raw_fq_path} \
+                -a {pc_masked} \
+                -o {bam_path} \
+                -s all_PC \
+                -t {threads} \
+                -i {pc_label} \
+                -m asm20 \
+                -g {ref_genome}"
         executeCmd(cmd, logger=logger)
 
     os.makedirs(vcf_dir, exist_ok=True)
@@ -66,7 +64,7 @@ def getIntrinsicVcf(pc_bed,
     cmd = f"export OPENBLAS_NUM_THREADS={threads} && bcftools norm -m -both -f {ref_genome} --multi-overlaps 0 --keep-sum AD -a {tmp_vcf} | \
             bcftools norm -d exact - | \
             bcftools view -i 'ALT!=\"*\"' | \
-            bcftools sort --temp-dir /tmp -Oz -o {vcf_path} && tabix -f -p vcf {vcf_path} && rm {tmp_vcf}"
+            bcftools sort -Oz -o {vcf_path} && tabix -f -p vcf {vcf_path} && rm {tmp_vcf}"
     executeCmd(cmd, logger=logger)
     
     logger.info(f"Writing intrinsic VCF to {vcf_path}")

@@ -25,8 +25,6 @@ class Genome:
     def __init__(self, path):
         self.path = path
         self.fai_index = self._create_index("fai", "samtools faidx")
-        # self.bwt_index = self._create_index("bwt", "bwa index")
-        self.total_bed = self._find_total_bed()
         self.contigsize = self.get_contig_genome()
 
     def _create_index(self, ext, cmd):
@@ -35,18 +33,14 @@ class Genome:
             executeCmd(cmd + f" {self.path}")
         return index_path
 
-    def _find_total_bed(self):
-        total_bed_path = ".".join(self.path.split(".")[:-1]) + ".bed"
-        return total_bed_path if os.path.exists(total_bed_path) else ""
-
     def get_contig_genome(self):
         contig_genome_fn = ".".join(self.path.split(".")[:-1]) + ".contigsize.genome"
         pd.read_csv(self.fai_index, sep="\t", header=None).iloc[:, [0, 1]].to_csv(contig_genome_fn, sep="\t", index=False, header=False)
         return contig_genome_fn
 
     def mask(self, bedf: str, avg_frag_size=400, std_frag_size=130, genome="hg19", logger=None):
-        if not os.path.exists(bedf) or not os.path.exists(self.total_bed):
-            raise FileNotFoundError(f"Invalid file: {bedf if not os.path.exists(bedf) else self.total_bed}")
+        if not os.path.exists(bedf):
+            raise FileNotFoundError(f"Invalid BED file: {bedf}")
 
         region = self._extract_region_name(bedf)
         target_bed = self._prepare_target_bed(bedf, avg_frag_size, std_frag_size, genome, logger)
@@ -55,7 +49,6 @@ class Genome:
         masked_genome_contigs = self._mask_intervals(target_bed, ref_genome_seq, logger)
 
         masked_genome = self._write_masked_genome(masked_genome_contigs, region)
-        # self._cleanup_fai_files()
 
         return masked_genome
 
@@ -65,10 +58,10 @@ class Genome:
     def _prepare_target_bed(self, bedf, avg_frag_size, std_frag_size, genome, logger):
         target_bed = (BedTool(bedf)
                       .sort()
-                      .merge(d=2 * (avg_frag_size + 2 * std_frag_size))
+                      .merge(d=2 * int(avg_frag_size + 2 * std_frag_size))
                       .slop(b=int(avg_frag_size + 2 * std_frag_size + 1000), g=genome)
                       .sort())
-        logger.info(f"Target bed {bedf}, after padding: {target_bed.total_coverage()} bp covered.")
+        logger.debug(f"Target bed {bedf}, after padding: {target_bed.total_coverage()} bp covered.")
         return target_bed
 
     def _mask_intervals(self, target_bed, ref_genome_seq, logger):
@@ -79,13 +72,12 @@ class Genome:
         mask_seq = "N" * 1000
         masked_seq = mask_seq + str(interval_seq)[1000:-1000] + mask_seq
         if str(masked_seq) != str(interval_seq):
-            logger.error(f"Sequence already contains Ns at both ends: {interval.chrom}:{interval.start}-{interval.stop}")
-            sys.exit(1)
+            logger.warning(f"Sequence already contains Ns at both ends: {interval.chrom}:{interval.start}-{interval.stop}")
         return Seq(masked_seq)
 
     def _write_masked_genome(self, masked_genome_contigs, region):
         tmp_tag = str(uuid.uuid4())
-        masked_genome = os.path.join(os.path.dirname(self.total_bed),
+        masked_genome = os.path.join(os.path.dirname(self.path),
                                       f"{os.path.basename(self.path).rsplit('.', 1)[0]}.sub.{region}.masked.fasta")
         tmp_genome = masked_genome.replace(".fasta", f".{tmp_tag}.fasta")
 
@@ -99,8 +91,3 @@ class Genome:
         updated = update_plain_file_on_md5(masked_genome, tmp_genome)
         Genome(masked_genome)  # Re-initialize to build indices
         return updated
-
-    # def _cleanup_fai_files(self):
-    #     fai_file = self.path + ".seqkit.fai"
-    #     if os.path.exists(fai_file):
-    #         os.remove(fai_file)

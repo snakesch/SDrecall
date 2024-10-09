@@ -2458,7 +2458,6 @@ def inspect_by_haplotypes(input_bam,
                 err_vectors[i, :err_vector.size] = err_vector
 
             consensus_sequence = assemble_consensus(hap_vectors, err_vectors, read_spans)
-            # logger.info(f"The consensus sequence for the haplotype {hid} across {span} is \n{consensus_sequence.tolist()}\nThe input read_spans are \n{pretty_print_matrix(read_spans)}\nThe input hap_vectors are \n{pretty_print_matrix(hap_vectors)}\nThe input err_vectors are \n{pretty_print_matrix(err_vectors)}\n")
             extreme_vard = judge_misalignment_by_extreme_vardensity(consensus_sequence)
             var_count = count_var(consensus_sequence)
             hid_var_count[hid] += var_count
@@ -2466,12 +2465,8 @@ def inspect_by_haplotypes(input_bam,
             hid_extreme_vard[hid] = extreme_vard or hid_extreme_vard[hid]
             # We need to extract the overlapping genomic haplotype vectors
             # Get the genomic haplotype vectors for the overlapping region
-            # genomic_haps = np.empty((100, span[1] - span[0]), dtype = np.int32)
-            # genomic_hap_count = 0
-            # logger.info(f"The intrin_bam_ncls is {intrin_bam_ncls[:-1]}")
             max_similarity = 0
             for hread in lazy_get_overlapping_reads(*intrin_bam_ncls[:-1], chrom, span[0], span[1]):
-                # logger.info(f"Found intrinsic read {hread.query_name} overlapping the region {chrom}:{span}")
                 hread_start = hread.reference_start
                 hread_end = hread.reference_end
                 hread_qname = hread.query_name
@@ -2681,7 +2676,6 @@ def main_function(bam,
                                    logger=logger)
 
     total_lowqual_qnames = bam_ncls[-1]
-    # logger.info("Here are the query_names eliminated for low_mapping quality or low median base quality:\n{}\n".format("\n".join(total_lowqual_qnames)))
     bam_ncls = bam_ncls[:-1]
     ncls_dict, read_dict, qname_dict, qname_idx_dict = bam_ncls
     logger.info(f"Successfully migrated the BAM file {bam} to NCLS format\n\n")
