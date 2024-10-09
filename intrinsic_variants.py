@@ -5,42 +5,48 @@ from preparation.seq import getRawseq
 from src.utils import executeCmd, is_file_up_to_date
 from src.const import *
 
+logger = logging.getLogger("SDrecall")
+
 def getIntrinsicVcf(pc_bed, 
                     all_homo_regions_bed, 
-                    counter_bed,
                     pc_masked,
                     ref_genome, 
                     avg_frag_size = 400,
                     std_frag_size = 120,
-                    threads = 2,
-                    logger = logging.getLogger('SDrecall')):
-    # Here fp stands for file_path
-    # This function requires an input of:
-    # 1. masked genome
-    # 2. BED file of PC region
-    # 3. BED file of all homologous regions related to the PC region
-    # 4. Reference genomef
-    # 5. Length stands for the read length
+                    threads = 2):
+    '''
+    Generate an intrinsic VCF file from given genomic data.
 
-    homo_sd = os.path.dirname(all_homo_regions_bed)
-    fastq_dir = homo_sd
-    bam_dir = os.path.dirname(pc_bed)
+    This function takes a masked genome and associated BED files to perform variant calling.
+    It maps the counterpart reference sequences against the masked genome and generates a VCF 
+    file containing the identified variants.
+
+    Parameters:
+    - pc_bed (str): Path to the BED file of the PC region.
+    - all_homo_regions_bed (str): Path to the BED file of all homologous regions (SD counterparts) related to the PC region.
+    - pc_masked (str): Path to the masked genome in FASTA format.
+    - ref_genome (str): Path to the reference genome used for mapping.
+    - avg_frag_size (int): Average fragment size of NGS reads. (400)
+    - std_frag_size (int): Standard deviation of fragment size of NGS reads. (120)
+    - threads (int): Number of threads to use for processing. (2)
+
+    Returns:
+    - str: Path to the generated BAM file.
+    '''
+    
+
+    fastq_dir = os.path.dirname(all_homo_regions_bed)
     vcf_dir = os.path.dirname(pc_bed)
-    fq_path = os.path.join(fastq_dir, os.path.basename(all_homo_regions_bed)[:-3] + "fastq")
     raw_fq_path = os.path.join(fastq_dir, os.path.basename(all_homo_regions_bed)[:-3] + "raw.fastq")
-    bam_path = os.path.join(bam_dir, os.path.basename(pc_bed)[:-3] + "raw.bam")
+    bam_path = os.path.join(vcf_dir, os.path.basename(pc_bed)[:-3] + "raw.bam")
     vcf_path = bam_path.replace(".bam", ".vcf.gz")
     pc_label = os.path.basename(pc_bed.replace(".bed",""))
         
-    # Get Fastq files, note that these reference genome sequences are extracted to single-end sequences intead of paired end sequences.
-    # First predetermine the path of the fastq file
-    raw_fq_path = getRawseq(all_homo_regions_bed, 
-                            raw_fq_path, 
-                            ref_genome, 
-                            padding = avg_frag_size + std_frag_size)
-    logger.info(f"The paired fastq files to get the intrinsic VCF for {pc_bed} is {raw_fq_path}")
+    # Reference sequences of SD counterparts are extracted from reference genome
+    raw_fq_path = getRawseq(all_homo_regions_bed, raw_fq_path, ref_genome, padding = avg_frag_size + std_frag_size)
+    logger.info(f"Reference sequences for calling intrinsic variants from {pc_bed} are written to: {raw_fq_path}")
     
-    # After getting the fastq file it should be used to map against the masked genome and perform straight forward variants calling
+    # Retrieved counterpart sequences are mapped against masked genomes using minimap2
     if not os.path.exists(bam_path) or not is_file_up_to_date(bam_path, [pc_masked, shell_utils, os.path.abspath(__file__)]):
         pc_masked_index = pc_masked.replace(".fasta", ".mmi")
         cmd = f"source {shell_utils}; independent_minimap2_masked \
@@ -54,6 +60,7 @@ def getIntrinsicVcf(pc_bed,
                 -g {ref_genome}"
         executeCmd(cmd, logger=logger)
 
+    ## Intrinsic variant calling
     os.makedirs(vcf_dir, exist_ok=True)
     tmp_vcf = vcf_path.replace(".vcf", ".tmp.vcf")
 

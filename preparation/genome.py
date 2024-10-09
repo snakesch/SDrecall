@@ -72,7 +72,10 @@ class Genome:
         mask_seq = "N" * 1000
         masked_seq = mask_seq + str(interval_seq)[1000:-1000] + mask_seq
         if str(masked_seq) != str(interval_seq):
-            logger.warning(f"Sequence already contains Ns at both ends: {interval.chrom}:{interval.start}-{interval.stop}")
+            logger.debug(f"Sequence already contains Ns at both ends: {interval.chrom}:{interval.start}-{interval.stop}")
+            if masked_seq.count("N") < 2000:
+                logger.error("Sequence already contains N at both ends, SDrecall was unable to add N. ")
+                sys.exit(1)
         return Seq(masked_seq)
 
     def _write_masked_genome(self, masked_genome_contigs, region):

@@ -49,7 +49,7 @@ def update_plain_file_on_md5(old_file, new_file, logger=logging.getLogger('SDrec
         return False
     else:
         import shutil
-        logger.info("The new file {} is different from the old one {} so the old one will be replaced with the new one.".format(new_file, old_file))
+        logger.debug("The new file {} is different from the old one {} so the old one will be replaced with the new one.".format(new_file, old_file))
         shutil.move(new_file, old_file)
         executeCmd(f"ls -lht {old_file}", logger=logger)
         return True
@@ -88,11 +88,6 @@ def string_to_tuple(string):
         return ast.literal_eval(string)
     except (ValueError, SyntaxError) as e:
         raise ValueError(f"Failed to convert string to tuple: {string}") from e
-
-def prepare_tmp_file(tmp_dir="/tmp", **kwargs):
-    import tempfile
-    os.makedirs(tmp_dir, exist_ok=True)
-    return tempfile.NamedTemporaryFile(dir = tmp_dir, delete = (tmp_dir == "/tmp"), **kwargs)
 
 def perform_bedtools_sort_and_merge(bed_file,
                                     output_bed_file=None,
