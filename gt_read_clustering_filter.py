@@ -1169,6 +1169,8 @@ def determine_same_haplotype(read, other_read,
     start = read.reference_start
     end = read.reference_end
 
+	# Below we extract the haplotype vector for both reads
+	# Detailed explanation can be found in the docstring of the function get_hapvector_from_cigar
     if read_id in read_hap_vectors:
         read_hap_vector = read_hap_vectors[read_id]
     else:
@@ -2209,6 +2211,8 @@ def build_phasing_graph(bam_file,
                                                                                                           read_ref_pos_dict = read_ref_pos_dict,
                                                                                                           mean_read_length = mean_read_length,
                                                                                                           logger = logger)
+					# If the bool_res is NaN, we assign 0 to record the inspection result within this overlapping interval
+					# Otherwise, we assign 1 or -1 based on the bool_res
                     if np.isnan(bool_res):
                         same_hap_bools[n] = 0
                     elif bool_res:
@@ -2217,22 +2221,38 @@ def build_phasing_graph(bam_file,
                         same_hap_bools[n] = -1
 
                     if read_weight is not None:
+						# Assign 1 (an aritificial very small number) to read_weight unless it a positive value
                         read_weight = read_weight if read_weight > 0 else 1
+						# Normalize the read_weight to adjust the scale of the weight, why denominate by mean_read_length * 10?
+						# mean_read_length * 10 is just a big enough number to make sure ur normal weight is at the scale between 0 and 1, u can understand it as a maximum normalization factor
                         norm_weight = read_weight/(mean_read_length * 10)
                         if pair_weight is None:
+							# If pair_weight is None, assign norm_weight to it
                             pair_weight = norm_weight
                         else:
+							# If pair_weight is not None, add norm_weight to it
                             pair_weight += norm_weight
                     else:
                         norm_weight = None
 
+				# After inspecting the current uncovered interval, we add it to the inspected_overlaps
+				# And adding 1 to n for next overlapping interval.
                 inspected_overlaps.addi(overlap_start, overlap_end)
                 n += 1
+
+			# Now we iterated through all the overlapping intervals, we can trim the same_hap_bools to the actual number of overlapping intervals
             same_hap_bools = same_hap_bools[:n]
+
+			# Because 1 in the adjacency matrix has a special meaning. The diagonal values are all 1 (representing self-self comparison)
+			# So we add a very small number to the pair_weight to distinguish it from 1
             pair_weight = pair_weight if pair_weight != 1 else 1 + 1e-4
-            # if qname in vis_qnames and other_qname in vis_qnames:
+
+            # Below is just a debug code block
+			# if qname in vis_qnames and other_qname in vis_qnames:
             #     logger.info(f"Found the qname {qname} (qv is {int(qv)}) and other_qname {other_qname} (oqv is {int(oqv)}) overlap with each other with pair_weight {pair_weight}. The same_hap_bools are {same_hap_bools}")
-            if custom_all_numba(same_hap_bools):
+
+			# We need to consider all the overlapping intervals between two read pairs to decide the value we record inside the adjacency matrix
+			if custom_all_numba(same_hap_bools):
                 # logger.info(f"The same_hap_bools are {same_hap_bools}")
                 if pair_weight > edge_weight_cutoff:
                     e = g.add_edge(qv, oqv)
@@ -2240,6 +2260,7 @@ def build_phasing_graph(bam_file,
                 weight_matrix[int(qv), int(oqv)] = pair_weight
                 weight_matrix[int(oqv), int(qv)] = pair_weight
             elif any_false_numba(same_hap_bools):
+				# We found clear evidence that two read pairs are not in the same haplotype
                 weight_matrix[int(qv), int(oqv)] = -1
                 weight_matrix[int(oqv), int(qv)] = -1
 
