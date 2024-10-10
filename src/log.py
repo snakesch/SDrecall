@@ -24,11 +24,10 @@ class ColoredFormatter(logging.Formatter):
         return f"{log_color}{formatted_message}{self.RESET}"
 
 def init_logger(handler = logging.StreamHandler(), tag = ""):
-    logger = logging.getLogger("SDrecall")
-    # logger = logging.getLogger(f"Process-{tag}")
-    # handler.setFormatter(ColoredFormatter("%(levelname)s:%(asctime)s:%(module)s:%(funcName)s:%(lineno)s:%(message)s"))
-    # logger.addHandler(handler)
-    # logger.setLevel(logging.INFO)
+    logger = logging.getLogger(f"Process-{tag}")
+    handler.setFormatter(ColoredFormatter("%(levelname)s:%(asctime)s:%(module)s:%(funcName)s:%(lineno)s:%(message)s"))
+    logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG)
     return logger
 
 def log_command(func):

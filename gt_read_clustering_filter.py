@@ -83,6 +83,25 @@ def find_row_index_of_max(matrix, row_index_mask, column_index_mask):
     # Return the actual row index in the original matrix
     return np.where(row_index_mask)[0][row_index]
 
+@numba.njit(types.Tuple((types.int32, types.float32))(types.float32[:], types.boolean[:]), fastmath=True)
+ def numba_max_idx_mem(data, index_mask=None):
+     max_val = -np.inf
+     max_idx = -1
+
+     if index_mask is None:
+         for i in range(data.size):
+             if data[i] >= max_val:
+                 max_idx = i
+                 max_val = data[i]
+     else:
+         for i in range(data.size):
+             if index_mask[i]:
+                 if data[i] >= max_val:
+                     max_idx = i
+                     max_val = data[i]
+
+     return max_idx, max_val
+
 @numba.njit
 def custom_all_numba(array):
     has_true = False

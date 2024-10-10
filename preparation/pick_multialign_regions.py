@@ -1,5 +1,6 @@
 import os
 import uuid
+import sys
 import logging
 import multiprocessing as mp
 
@@ -52,8 +53,8 @@ def calculate_inferred_coverage(bam_file,
                               min_mapq,
                               filter_tags: str,
                               target_region,
-                              target_tag = "FCRs",
                               genome_file = "",
+                              output_bed = "",
                               logger = logger):
     '''
     Multiple filter tags are supported as comma-delimited strings. E.g. XA,XS
@@ -62,11 +63,7 @@ def calculate_inferred_coverage(bam_file,
 
     filter_tags = filter_tags.split(",") if filter_tags != "" else []
 
-    if target_region and not target_tag:
-        target_tag = os.path.basename(target_region).split(".")[0]
-
-    if not target_region:
-        target_tag = None
+    target_tag = os.path.basename(target_region).split(".")[0] if target_region else None
 
     output_prefix = os.path.join(os.path.dirname(output_bed), os.path.basename(bam_file).replace(".bam", ""))
 
@@ -74,18 +71,15 @@ def calculate_inferred_coverage(bam_file,
         output_tsv = output_prefix + f".infercov.minMQ_{min_mapq}.{','.join(filter_tags)}.tsv"
     else:
         output_tsv = output_prefix + f".infercov.minMQ_{min_mapq}.tsv"
-    if target_tag:
-        output_tsv = output_prefix + f".{target_tag}.tsv"
-
+    
+    ## Avoid concurrent writing
     output_bed = output_tsv.replace(".tsv", ".bed")
     tmp_output_bed = output_bed.replace(".bed", f".{uuid.uuid4()}.bed")
-
+    
     # Adjacent intervals might be counted twice, duplicates have to be dropped
-    skip = os.path.exists(output_bed) and os.path.getmtime(output_bed) > os.path.getmtime(bam_file)
-    if skip:
+    if os.path.exists(output_bed) and (os.path.getmtime(output_bed) > os.path.getmtime(bam_file)):
         logger.info("The output bed file {} is newer than the input bam file {}, skipping coverage calculation".format(output_bed, bam_file))
-
-    if not skip:
+    else:
         bed_obj = pb.BedTool(target_region).sort().merge() if target_region else None
 
         with pysam.AlignmentFile(bam_file, "rb") as bam:
@@ -112,10 +106,15 @@ def calculate_inferred_coverage(bam_file,
     logger.debug(f"Start calculating bedtools genomic coverage with MAPQ = {min_mapq}; TAGS = {filter_tags}")
     cmd = f"bedtools genomecov -bg -i {output_bed} -g {genome_file} | \
             sort -k 1,1 -k 2,2n - | \
-            mawk -F '\\t' '{{ for (i=$2+1;i<=$3;i++) {{printf \"%s\\t%i\\t%i\\n\", $1, i, $4;}} }}' - > {output_tsv} && \
-            bgzip -f {output_tsv} && \
-            tabix -f -s 1 -b 2 -e 2 {output_tsv}.gz"
+            mawk -F '\\t' '{{ for (i=$2+1;i<=$3;i++) {{printf \"%s\\t%i\\t%i\\n\", $1, i, $4;}} }}' - > {output_tsv}"
     executeCmd(cmd)
+    if os.path.exists(output_tsv):
+        cmd = f"bgzip -f {output_tsv} && tabix -f -s 1 -b 2 -e 2 {output_tsv}.gz"
+        executeCmd(cmd)
+    else:
+        logger.error(f"Unable to compute genomic coverage. Probably due to corrupted BED files. ")
+        sys.exit(1)
+
     logger.debug(f"Finished calculating bedtools genomic coverage with MAPQ = {min_mapq}; TAGS = {filter_tags}")
 
     depth_df = pd.read_table(output_tsv + '.gz', compression='gzip', header=None, names=['chrom', 'pos', 'depth'], low_memory=False)
@@ -129,7 +128,6 @@ def pick_region_by_depth(input_bam: str,
                 high_quality_depth=10, 
                 minimum_depth=3,
                 target_region=None,
-                target_tag = "FCRs",
                 multialign_frac = 0.7,
                 threads=10,
                 genome_file="",
@@ -138,12 +136,12 @@ def pick_region_by_depth(input_bam: str,
     Consolidate read depths computed with 4 different settings and derive a set of recall regions
     '''
     # Compute the inferred coverage of individual bases within target region by different qualities
-    parallel_args = [ (input_bam, 0,            "",     target_region, target_tag, genome_file, logger), 
-                      (input_bam, MQ_threshold, "",     target_region, target_tag, genome_file, logger),
-                      (input_bam, 0,            "XA",   target_region, target_tag, genome_file, logger),
-                      (input_bam, 0,            "XS",   target_region, target_tag, genome_file, logger) ]
+    parallel_args = [ (input_bam, 0,            "",     target_region, genome_file, output_bed, logger), 
+                      (input_bam, MQ_threshold, "",     target_region, genome_file, output_bed, logger),
+                      (input_bam, 0,            "XA",   target_region, genome_file, output_bed, logger),
+                      (input_bam, 0,            "XS",   target_region, genome_file, output_bed, logger) ]
 
-    with mp.Pool(min(4, threads)) as pool:
+    with mp.Pool(min(1, threads)) as pool:
         raw_depth, high_mq_depth, raw_xa_depth, raw_xs_depth = pool.starmap(calculate_inferred_coverage, parallel_args)
     
     raw_depth = raw_depth.rename(columns={"depth": "raw_depth"})
