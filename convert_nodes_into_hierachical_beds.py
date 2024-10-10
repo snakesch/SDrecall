@@ -9,7 +9,7 @@ from tempfile import NamedTemporaryFile
 
 from pybedtools import BedTool
 
-from src.utils import executeCmd, is_file_up_to_date, construct_folder_struc, perform_bedtools_sort_and_merge, update_plain_file_on_md5
+from src.utils import executeCmd, construct_folder_struc, perform_bedtools_sort_and_merge, update_plain_file_on_md5
 from src.const import *
 from src.log import error_handling_decorator
 from preparation.homoseq_region import HOMOSEQ_REGION
