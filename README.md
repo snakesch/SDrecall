@@ -9,6 +9,7 @@
 - [ ] conda YAML lacking some libraries (e.g. intervaltree)
 - [ ] Extra documentation for ad-hoc tools for intrinsic variant calling
 - [ ] Review license
+- [ ] Cleanup code
 
 
 ## Installation

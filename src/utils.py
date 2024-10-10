@@ -1,7 +1,6 @@
 import os
 import subprocess
 import logging
-import uuid
 
 from pybedtools import BedTool
 
@@ -9,15 +8,12 @@ def executeCmd(cmd, logger = logging.getLogger('SDrecall')) -> None:
     
     proc = subprocess.run(cmd, shell=True, capture_output=True)
 
-    logger.debug(f"Command run:\n{cmd}\nReturn code: {proc.returncode}\nError log:\n{proc.stderr.decode()}")
-    code = proc.returncode
-    
-    if code != 0:
-        cmd_lst = cmd.split(" ")
-        if cmd_lst[1][0] != "-":
-            raise RuntimeError("Error in " + " ".join(cmd_lst) + f"\nError message: {proc.stderr.decode()}")
-        else:
-            raise RuntimeError("Error in {}\nError message: {proc.stderr.decode()}".format(cmd_lst))
+    logger.debug(f"Command run:{cmd}")
+    logger.debug(f"Return code: {proc.returncode}")
+
+    err_msg = proc.stderr.decode()
+    if err_msg != "":
+        logger.debug(proc.stderr.decode())
     
     return proc.stdout.decode()
 
@@ -28,23 +24,18 @@ def is_file_up_to_date(file_to_check, list_of_dependency_files):
 def update_plain_file_on_md5(old_file, new_file, logger=logging.getLogger('SDrecall')):
     import hashlib
     
-    if os.path.exists(old_file):
-        old_md5 = hashlib.md5(open(old_file,'r').read().encode()).hexdigest()
-    else:
-        old_md5 = str(uuid.uuid4())
+    old_md5 = hashlib.md5(open(old_file,'r').read().encode()).hexdigest() if os.path.exists(old_file) else "non_existent"
 
     if not os.path.exists(new_file):
-        raise FileNotFoundError("The new file {} does not exist so no updates should be carried out.".format(new_file))
+        raise FileNotFoundError("File {} does not exist.".format(new_file))
     
     if os.stat(new_file).st_size == 0:
-        raise FileExistsError("The new file {} input is completely empty. Quit using it to update the original file {}".format(new_file, old_file))
+        raise FileExistsError("File {} is empty. Not using it to update the original file {}".format(new_file, old_file))
 
     new_md5 = hashlib.md5(open(new_file,'r').read().encode()).hexdigest()
     
     if new_md5 == old_md5:
-        logger.warning("The new file {} shares the identical content with the old one {} so no updates should be carried out. And the new file {} should be deleted".format(new_file, 
-                                                                                                                                                                                old_file,
-                                                                                                                                                                                new_file))
+        logger.warning("The new file {} is identical to the old one {} so no updates will be carried out. Deleting new file {}".format(new_file, old_file, new_file))
         os.remove(new_file)
         return False
     else:

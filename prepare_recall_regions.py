@@ -42,7 +42,8 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
     genome_file = rg.fai_index
 
     # Step 0: Calculate the distribution of fragment sizes
-    avg_frag_size, std_frag_size = get_bam_frag_size(input_bam)
+    # avg_frag_size, std_frag_size = get_bam_frag_size(input_bam)
+    avg_frag_size, std_frag_size = 570.4, 150.7
     logger.info(f"BAM {input_bam} has an average fragment size of {avg_frag_size}bp (std: {std_frag_size}bp)")
     
     ## Define names of intermediate files. Intermediate / final outputs will be written to work_dir.
@@ -60,7 +61,6 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
                                         minimum_depth=3, 
                                         multialign_frac=0.5,
                                         target_region=target_bed, 
-                                        target_tag="FCRs",
                                         genome_file=genome_file)
 
     multi_align_bed_obj = pb.BedTool(multi_align_bed).sort()

@@ -51,7 +51,8 @@ def convert_nodes_into_hierachical_beds(grouped_qnode_cnodes: list,
                                                       labels,
                                                       repeat(ref_genome),
                                                       repeat(avg_frag_size),
-                                                      repeat(std_frag_size)))
+                                                      repeat(std_frag_size),
+                                                      repeat(logger)))
     i = 0
     intrinsic_bams = []
     for success, result, logs in results:
@@ -75,23 +76,21 @@ def convert_nodes_into_hierachical_beds(grouped_qnode_cnodes: list,
     try:
         executeCmd(test_cmd)
     except RuntimeError:
-        logger.error(f"The merged intrinsic alignment BAM file {total_intrinsic_bam} is not ready. Exit. ")
-        sys.exit(1)
-    
-    intrinsic_bam_header = total_intrinsic_bam.replace(".bam", ".bam.header")
-    cmd = f"source {shell_utils}; modify_bam_sq_lines {intrinsic_bams[0]} {ref_genome} {intrinsic_bam_header}"
-    executeCmd(cmd, logger=logger)
+        ## Create total_intrinsic_alignments.bam
+        intrinsic_bam_header = total_intrinsic_bam.replace(".bam", ".bam.header")
+        cmd = f"source {shell_utils}; modify_bam_sq_lines {intrinsic_bams[0]} {ref_genome} {intrinsic_bam_header}"
+        executeCmd(cmd, logger=logger)
 
-    intrinsic_bam_list = total_intrinsic_bam.replace(".bam", ".bams.list.txt")
-    with open(intrinsic_bam_list, "w") as f:
-        f.write("\n".join(intrinsic_bams))
+        intrinsic_bam_list = total_intrinsic_bam.replace(".bam", ".bams.list.txt")
+        with open(intrinsic_bam_list, "w") as f:
+            f.write("\n".join(intrinsic_bams))
 
-    cmd = f"samtools merge -@ {nthreads} -h {intrinsic_bam_header} -b {intrinsic_bam_list} -o - | \
-            samtools sort -O bam -o {total_intrinsic_bam} && \
-            samtools index {total_intrinsic_bam} && \
-            ls -lht {total_intrinsic_bam} || \
-            echo Failed to concatenate all the filtered realigned BAM files."
-    executeCmd(cmd)
+        cmd = f"samtools merge -@ {nthreads} -h {intrinsic_bam_header} -b {intrinsic_bam_list} -o - | \
+                samtools sort -O bam -o {total_intrinsic_bam} && \
+                samtools index {total_intrinsic_bam} && \
+                ls -lht {total_intrinsic_bam} || \
+                echo Failed to concatenate all the filtered realigned BAM files."
+        executeCmd(cmd)
     
     # Third remove leftover PC folders
     subdir_gen = os.walk(output_folder)
@@ -100,7 +99,7 @@ def convert_nodes_into_hierachical_beds(grouped_qnode_cnodes: list,
         target_folder_names = set([f"PC{x}_related_homo_regions" for x in range(0, len(grouped_qnode_cnodes))])
     else:
         target_folder_names = ["PC0_related_homo_regions"]
-    logger.info(f"This time, we only have these PC regions generated: {target_folder_names}")
+    logger.info(f"Generated PC regions: {sorted(target_folder_names)}")
     first_level_dirs = next(subdir_gen)[1]  # The first item should be a 3-item tuple containin: 1. Current dir full path 2. All subdir names 3. All subfile names
     for subdir in first_level_dirs:
         if subdir not in target_folder_names:
