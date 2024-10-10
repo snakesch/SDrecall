@@ -1247,9 +1247,13 @@ def determine_same_haplotype(read, other_read,
     '''
 
     if total_match:
+        # Basically edge weight is overlap_span + indel_added_score + snv_added_score
+        # If edge weight is greater than mean_read_length - 50 (minimum score), we consider the two reads belong to the same haplotype and return the edge weight.
+        # This is just a heuristic cutoff and can be further tuned according to different sequencing profiles
         if edge_weight >= mean_read_length - 50:
             return True, read_ref_pos_dict, read_hap_vectors, edge_weight
         else:
+            # If edge weight is smaller than mean_read_length - 50, we consider not enough evidence to make a call and return None edge weight
             return np.nan, read_ref_pos_dict, read_hap_vectors, None
     else:
         if len(read_seq) != len(other_seq) or interval_hap_vector.size != interval_other_hap_vector.size:
