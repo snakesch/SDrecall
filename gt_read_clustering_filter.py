@@ -1215,28 +1215,40 @@ def determine_same_haplotype(read, other_read,
     assert interval_hap_vector.size == interval_other_hap_vector.size, f"The interval hap vector size {interval_hap_vector} is not the same as the other interval hap vector size {interval_other_hap_vector}"
     '''
 
+    '''
+    The following code block is used to calculate the edge weight between two reads and it is based on the overlapping span and the number of shared variants.
+    1. overlap span is calculated based on the number of identical bases between two reads
+    2. The number of shared variants is calculated by the function count_var
+    3. The number of indels is calculated by the function count_continuous_indel_blocks
+
+    We created the score array, this score array is used to assign weight to edges depending on the number of SNVs shared by two read pairs
+    It will be later used by the function determine_same_haplotype to assign weight to edges
+    '''
     identical_part = interval_hap_vector[interval_hap_vector == interval_other_hap_vector]
     overlap_span = identical_part.size
     var_count = count_var(identical_part)
     indel_num = count_continuous_indel_blocks(identical_part)
     # assert var_size is not None, f"The size of the variant should not be None, but the actual size is {var_size}, the input array is {interval_hap_vector}"
 
-    # This score array is used to assign weight to edges depending on the number of SNVs shared by two read pairs
-    # It will be later used by the function determine_same_haplotype to assign weight to edges
     snvcount_score_arr = np.array([mean_read_length * 1 - 50 + mean_read_length * i for i in range(50)])
-    overlap_span = overlap_span + numba_sum(snvcount_score_arr[:var_count])
-    overlap_span = overlap_span + mean_read_length * 3 * indel_num
+    edge_weight = overlap_span + numba_sum(snvcount_score_arr[:var_count])
+    edge_weight = overlap_span + mean_read_length * 3 * indel_num
 
-    # vis_qnames = ["HISEQ1:21:H9V1VADXX:2:1112:21127:38421:PC0",
-    #               "HISEQ1:26:HA2RRADXX:1:1113:11601:32503:PC0"]
+    '''
+    # Below is a code block for debugging
+    # Allow us to review the read sequence of your interest query name at specified overlap region
 
-    # if read.query_name in vis_qnames and other_read.query_name in vis_qnames:
-    #     logger.info(f"The read sequence is {interval_hap_vector.tolist()} for {read_id} \nand the other read sequence is {interval_other_hap_vector.tolist()} for other read_id {other_read_id} at region {overlap_start}, {overlap_end}. \nThe different indices are {diff_indices.tolist()} and the identical part is {identical_part.tolist()}")
-    #     logger.info(f"The raw read sequence is {read_hap_vector.tolist()} for {read_id} with cigar {read.cigartuples} and query_sequence {read.query_sequence} \nand the other read sequence is {other_read_hap_vector.tolist()} for other read_id {other_read_id} with cigar {other_read.cigartuples} and query sequence {other_read.query_sequence}")
+    vis_qnames = ["HISEQ1:21:H9V1VADXX:2:1112:21127:38421:PC0",
+                  "HISEQ1:26:HA2RRADXX:1:1113:11601:32503:PC0"]
+
+    if read.query_name in vis_qnames and other_read.query_name in vis_qnames:
+        logger.info(f"The read sequence is {interval_hap_vector.tolist()} for {read_id} \nand the other read sequence is {interval_other_hap_vector.tolist()} for other read_id {other_read_id} at region {overlap_start}, {overlap_end}. \nThe different indices are {diff_indices.tolist()} and the identical part is {identical_part.tolist()}")
+        logger.info(f"The raw read sequence is {read_hap_vector.tolist()} for {read_id} with cigar {read.cigartuples} and query_sequence {read.query_sequence} \nand the other read sequence is {other_read_hap_vector.tolist()} for other read_id {other_read_id} with cigar {other_read.cigartuples} and query sequence {other_read.query_sequence}")
+    '''
 
     if total_match:
-        if overlap_span >= mean_read_length - 50:
-            return True, read_ref_pos_dict, read_hap_vectors, overlap_span
+        if edge_weight >= mean_read_length - 50:
+            return True, read_ref_pos_dict, read_hap_vectors, edge_weight
         else:
             return np.nan, read_ref_pos_dict, read_hap_vectors, None
     else:
@@ -1263,9 +1275,9 @@ def determine_same_haplotype(read, other_read,
                                                                                     logger = logger )
 
         if tolerate:
-            overlap_span = overlap_span - tolerated_count * 20
-            if overlap_span >= mean_read_length - 50:
-                return True, read_ref_pos_dict, read_hap_vectors, overlap_span
+            edge_weight = edge_weight - tolerated_count * 20
+            if edge_weight >= mean_read_length - 50:
+                return True, read_ref_pos_dict, read_hap_vectors, edge_weight
             else:
                 return np.nan, read_ref_pos_dict, read_hap_vectors, None
         else:
