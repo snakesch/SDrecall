@@ -274,8 +274,8 @@ def migrate_bam_to_ncls(bam_file,
     >>> # Now you can use ncls_dict for efficient interval queries
     >>> chrom = "chr1"
     >>> start, end = 1000, 2000
-    >>> overlapping_reads = ncls_dict[chrom].find_overlap(start, end)
-
+    >>> overlapping_interval_indices = ncls_dict[chrom].find_overlap(start, end)
+    >>> overlapping_reads = [read_dict[idx] for idx in overlapping_interval_indices]
     See Also:
     ---------
     pysam.AlignmentFile : For BAM file handling
