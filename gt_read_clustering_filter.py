@@ -260,7 +260,8 @@ def migrate_bam_to_ncls(bam_file,
             Set of query names identified as noisy and filtered out.
 
     Within an NCLS object:
-    (start, end) ---ncls_dict[chrom]---> qname_idx ---qname_dict---> qname ---read_dict---> read objects
+    (start, end) ---ncls_dict[chrom]---> qname_idx ---qname_dict---> qname
+    qname_idx ---read_dict---> read objects
     qname ---qname_idx_dict---> qname_idx (which is also the interval index)
 
     Notes:
@@ -2013,10 +2014,10 @@ def build_phasing_graph(bam_file,
                                           chromsomeN: ncls_chrN  }
 
     ncls_read_dict : dict
-        Dictionary of read objects, keyed by query name indices.
+        Dictionary of read objects, keyed by query name indices (which are also the interval indices stored in the NCLS object)
         The ncls_read_dict looks like:
-                                        { qname1: [read1, read2],
-                                          qname2: [read1, read2]  }
+                                        { qname_idx1: [read1, read2],
+                                          qname_idx2: [read1, read2]  }
 
     ncls_qname_dict : dict
         Dictionary mapping query name indices to query names. (qname_indices -> qnames)
