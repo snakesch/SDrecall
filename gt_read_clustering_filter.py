@@ -195,7 +195,6 @@ class HashableAlignedSegment(pysam.AlignedSegment):
 
 
 
-
 def calculate_mean_read_length(bam_file_path, sample_size=1000000):
     bamfile = pysam.AlignmentFile(bam_file_path, "rb")
 
@@ -215,6 +214,7 @@ def calculate_mean_read_length(bam_file_path, sample_size=1000000):
 
     mean_length = total_length / read_count
     return mean_length
+
 
 
 def migrate_bam_to_ncls(bam_file,
@@ -258,6 +258,10 @@ def migrate_bam_to_ncls(bam_file,
             Dictionary mapping query names to query name indices. (qname -> qname_idx)
         - noisy_qnames : set
             Set of query names identified as noisy and filtered out.
+
+    Within an NCLS object:
+    (start, end) ---ncls_dict[chrom]---> qname_idx ---qname_dict---> qname ---read_dict---> read objects
+    qname ---qname_idx_dict---> qname_idx (which is also the interval index)
 
     Notes:
     ------
