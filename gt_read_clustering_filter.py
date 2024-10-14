@@ -84,7 +84,7 @@ def find_row_index_of_max(matrix, row_index_mask, column_index_mask):
     return np.where(row_index_mask)[0][row_index]
 
 @numba.njit(types.Tuple((types.int32, types.float32))(types.float32[:], types.boolean[:]), fastmath=True)
- def numba_max_idx_mem(data, index_mask=None):
+def numba_max_idx_mem(data, index_mask=None):
      max_val = -np.inf
      max_idx = -1
 
@@ -260,9 +260,9 @@ def migrate_bam_to_ncls(bam_file,
             Set of query names identified as noisy and filtered out.
 
     Within an NCLS object:
-    (start, end) ---ncls_dict[chrom]---> qname_idx ---qname_dict---> qname
-    qname_idx ---read_dict---> read objects
-    qname ---qname_idx_dict---> qname_idx (which is also the interval index)
+    (start, end) ---ncls_dict[chrom]---> qname_idx(interval_idx) ---qname_dict---> qname
+    qname_idx(interval_idx) ---read_dict---> read objects(pysam.AlignedSegment)
+    qname ---qname_idx_dict---> qname_idx(interval_idx) (which is also the interval index)
 
     Notes:
     ------
@@ -2028,7 +2028,7 @@ def build_phasing_graph(bam_file,
     mean_read_length : float
         Average read length in the BAM file.
     edge_weight_cutoff : float, optional
-        Minimum edge weight threshold for including an edge in the graph (default is 0.201).
+        Minimum edge weight threshold for including an edge in the graph (default is 0.201, a heuristic cutoff).
     logger : logging.Logger, optional
         Logger object for output messages.
 
