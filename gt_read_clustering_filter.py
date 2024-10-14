@@ -276,6 +276,7 @@ def migrate_bam_to_ncls(bam_file,
     >>> start, end = 1000, 2000
     >>> overlapping_interval_indices = ncls_dict[chrom].find_overlap(start, end)
     >>> overlapping_reads = [read_dict[idx] for idx in overlapping_interval_indices]
+
     See Also:
     ---------
     pysam.AlignmentFile : For BAM file handling
@@ -871,9 +872,31 @@ def get_read_id(read):
 
 
 
-# @numba.njit()
+
 def prepare_ref_query_idx_map(qseq_ref_pos_arr):
-    # numba_dict = Dict.empty(key_type=types.int32, value_type=types.int32)
+    '''
+    This function is used to create a mapping from reference genomic positions to query sequence positions
+    input qseq_ref_pos_arr is an array of reference genomic positions corresponding to each base in the query sequence
+    for example:
+    query sequence: A,C,G,T,A,C,G,T (every base matched to the ref sequence)
+    ref positions: 10, 11, 12, 13, 14, 15, 16, 17
+    then the input array will be: [10, 11, 12, 13, 14, 15, 16, 17]
+    The output dict will be: {10: 0, 11: 1, 12: 2, 13: 3, 14: 4, 15: 5, 16: 6, 17: 7}
+
+    if there is a deletion in the cigar string (align query against the ref sequence):
+    query sequence: A,C,G,T,A,C,G,T (Between 3rd and 4th base there contains a deletion)
+    ref positions: 10, 11, 12, 15, 16, 17, 18, 19
+    then the input array will be: [10, 11, 12, 15, 16, 17, 18, 19]
+    The output dict will be: {10: 0, 11: 1, 12: 2, 15: 3, 16: 4, 17: 5, 18: 6, 19: 7}
+
+    if there is an insertion in the cigar string (align ref against the query sequence):
+    query sequence: A,C,G,T,A,C,G,T (Both the 3rd and the 4th base are inserted comparing to the ref sequence)
+    ref positions: 10, 11, -1, -1, 12, 13, 14, 15
+    then the input array will be: [10, 11, -1, -1, 12, 13, 14, 15]
+    The output dict will be: {10: 0, 11: 1, 12: 4, 13: 5, 14: 6, 15: 7}
+
+    ri stands for reference index, qi stands for query index
+    '''
     numba_dict = {}
     for qi in range(qseq_ref_pos_arr.size):
         ri = qseq_ref_pos_arr[qi]
@@ -885,7 +908,7 @@ def prepare_ref_query_idx_map(qseq_ref_pos_arr):
 
 def get_interval_seq(read, interval_start, interval_end, read_ref_pos_dict = {}):
     """
-    Extract the sequence of a read for a given genomic interval.
+    Extract the sequence of a read within a given genomic interval.
 
     Parameters:
     - read: pysam.AlignedSegment
@@ -894,12 +917,15 @@ def get_interval_seq(read, interval_start, interval_end, read_ref_pos_dict = {})
         The start and end positions of the interval in genomic coordinates.
         both should be inclusive
     - read_ref_pos_dict: dict
-        Dictionary mapping read positions to reference positions.
+        Dictionary mapping read positions to reference positions. read_id -> (ref_positions, qseq_ref_positions)
+        where detailed explanation of the qseq_ref_positions and ref_positions can be found in the docstring of the prepare_ref_query_idx_map function
 
     Returns:
     - str: Extracted sequence.
     - dict: Updated read_ref_pos_dict.
-    - numpy.ndarray: Array of query positions corresponding to the extracted sequence.
+    - numpy.ndarray: Array of reference genomic positions corresponding to each base in the extracted sequence. -1 means the base is not aligned to the reference.
+
+    The detailed explanation of the returned qidx_ridx_arr can be found in the docstring of the prepare_ref_query_idx_map function
     """
     # Both interval_start and interval_end are inclusive
     # Input interval_start and interval_end are both 0-indexed
@@ -909,6 +935,7 @@ def get_interval_seq(read, interval_start, interval_end, read_ref_pos_dict = {})
     if read_id in read_ref_pos_dict:
         ref_positions, qseq_ref_positions = read_ref_pos_dict[read_id]
     else:
+        # Detailed explanation of the qseq_ref_positions can be found in the docstring of the prepare_ref_query_idx_map function
         qseq_ref_positions = np.array([ idx if idx is not None else -1 for idx in read.get_reference_positions(full_length=True) ], dtype=np.int32)
         ref_positions = prepare_ref_query_idx_map(qseq_ref_positions)
         read_ref_pos_dict[read_id] = (ref_positions, qseq_ref_positions)
@@ -937,9 +964,8 @@ def get_interval_seq(read, interval_start, interval_end, read_ref_pos_dict = {})
     else:
         interval_end_qidx += 1
 
-    # interval_ref_pos = ref_positions[interval_start_qidx: interval_end_qidx]
-    # We need to also remove the inserted sequences
     interval_read_seq = read.query_sequence[interval_start_qidx:interval_end_qidx]
+    # Detailed explanation of the returned qidx_ridx_arr can be found in the docstring of the prepare_ref_query_idx_map function
     qidx_ridx_arr = qseq_ref_positions[interval_start_qidx:interval_end_qidx]
 
     return interval_read_seq, read_ref_pos_dict, qidx_ridx_arr
@@ -947,6 +973,19 @@ def get_interval_seq(read, interval_start, interval_end, read_ref_pos_dict = {})
 
 
 def get_interval_seq_qual(read, interval_start, interval_end, read_ref_pos_dict = {}):
+    '''
+    Extract the sequence and base quality sequence of a read within a given genomic interval.
+
+    Parameters:
+    - read: pysam.AlignedSegment
+        The read to extract sequence and base quality sequence from.
+    - start, end: int
+        The start and end positions of the interval in genomic coordinates.
+        both should be inclusive and 0-indexed
+    - read_ref_pos_dict: dict
+        Dictionary mapping read positions to reference positions. read_id -> (ref_positions, qseq_ref_positions)
+        where detailed explanation of the qseq_ref_positions and ref_positions can be found in the docstring of the prepare_ref_query_idx_map function
+    '''
     # Both interval_start and interval_end are inclusive
     # Input interval_start and interval_end are both 0-indexed
     # get_reference_positions() also returns 0-indexed positions (a list)
@@ -1277,18 +1316,23 @@ def determine_same_haplotype(read, other_read,
             # If edge weight is smaller than mean_read_length - 50, we consider not enough evidence to make a call and return None edge weight
             return np.nan, read_ref_pos_dict, read_hap_vectors, None
     else:
+        # Check if two reads within this overlapping region are of the same length
+        # If not, we cannot make a conclusion on whether they belong to the same haplotype because they have a difference in indel
         if len(read_seq) != len(other_seq) or interval_hap_vector.size != interval_other_hap_vector.size:
             return False, read_ref_pos_dict, read_hap_vectors, None
 
-        # Here we know that there are only equal to or smaller than 2 mismatches between the two reads
+        # Here, we know that though two reads are not identical, they do have the same length
         # Then we need to know whether the two mismatches are in-trans variants or in-cis variants, if its in-trans we cannot tolerate the two mismatches
         if read_seq_arr is None:
             base_dict = {"A": 0, "C": 1, "G": 2, "T": 3, "N": 4}
             read_seq_arr = np.array(list(map(base_dict.get, read_seq)), dtype=np.int8)
             other_seq_arr = np.array(list(map(base_dict.get, other_seq)), dtype=np.int8)
 
+        # Use numba_diff_indices to find the location indices where two sequences differ
         q_diff_indices = numba_diff_indices(read_seq_arr, other_seq_arr)
+        # Map the q_diff_indices to the reference positions
         r_diff_indices = qr_idx_arr[q_diff_indices]
+        # If -1 in r_diff_indices, it means the two reads are not aligned properly and we cannot make a conclusion on whether they belong to the same haplotype
         if -1 in r_diff_indices:
             return False, read_ref_pos_dict, read_hap_vectors, None
         abs_diff_inds = r_diff_indices + overlap_start
