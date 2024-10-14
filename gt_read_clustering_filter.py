@@ -662,6 +662,14 @@ def get_hapvector_from_cigar(cigar_tuples,
     Note that the length of the haplotype vector is strictly aligned to the covered reference genome span, only this way we can ensure that comparison between overlapping reads are strictly aligned to each other.
     Uses NumPy for efficient array operations.
 
+    Example:
+    --------
+    >>> cigar_tuples = [(7, 10), (8, 1), (1, 2), (7, 5)]
+    >>> query_sequence = "ACGTACGTACTATATCGA"
+    >>> hapvector = get_hapvector_from_cigar(cigar_tuples, query_sequence)
+    >>> print(hapvector)
+    [1 1 1 1 1 1 1 1 1 1 99 1 1 1 1 1 ]
+
     Arguments:
     - cigar_tuples: List of tuples representing CIGAR operations. (generated from pysam.AlignedSegment.cigartuples)
     - query_sequence: The query sequence of the read. (generated from pysam.AlignedSegment.query_sequence)
@@ -770,19 +778,15 @@ def get_errorvector_from_cigar(read, cigar_tuples, logger=logger):
     Returns:
     --------
     numpy.ndarray
-        An array of float values representing error probabilities for each
-        position in the read's alignment to the reference. Values range from
-        0 to 1, where 0 indicates high confidence and 1 indicates low confidence
-        or gaps in the alignment.
+        An array of float values representing error probabilities for each base in the read's alignment that is aligned to the reference sequence.
 
     Notes:
     ------
     - The function assumes that the CIGAR string separates matches (7) from
       mismatches (8).
     - Insertions and deletions are initially marked with a placeholder value (99),
-      which is later converted to 0 (high confidence) in the error vector.
-    - The final error vector is scaled based on the Phred quality scores,
-      converting them to error probabilities.
+      which is later converted to 0 (zero err probability) in the error vector.
+    - The final error vector is the raw error probability.
 
     Raises:
     -------
@@ -799,8 +803,7 @@ def get_errorvector_from_cigar(read, cigar_tuples, logger=logger):
     >>> read.query_qualities = [30] * 18
     >>> error_vector = get_errorvector_from_cigar(read, read.cigartuples)
     >>> print(error_vector)
-    [0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.
-     0.001 0.001 0.001 0.001 0.001]
+    [0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.0 0.001 0.001 0.001 0.001 0.001]
     '''
     errorvector = np.empty(read.reference_end - read.reference_start, dtype=float)
     # An array of phred-scaled integer quality scores
