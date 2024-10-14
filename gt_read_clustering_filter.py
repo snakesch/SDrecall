@@ -751,9 +751,12 @@ def get_errorvector_from_cigar(read, cigar_tuples, logger=logger):
     Generate an error vector from a read's CIGAR string and base qualities.
 
     This function creates an error vector representing the probability of errors
-    at each position in the read's alignment to the reference. It uses the CIGAR
-    string to determine the alignment structure and the base qualities to estimate
-    error probabilities.
+    at each reference position within the read's alignment. The original base qualities are extracted by the pysam.AlignedSegment.query_qualities method:
+
+        read sequence base qualities, including soft clipped bases (None if not present).
+        Quality scores are returned as a python array of unsigned chars. Note that this is not the ASCII-encoded value typically seen in FASTQ or SAM formatted files. Thus, no offset of 33 needs to be subtracted.
+        Note that to set quality scores the sequence has to be set beforehand as this will determine the expected length of the quality score array.
+        This method raises a ValueError if the length of the quality scores and the sequence are not the same.
 
     Parameters:
     -----------
@@ -780,14 +783,14 @@ def get_errorvector_from_cigar(read, cigar_tuples, logger=logger):
       which is later converted to 0 (high confidence) in the error vector.
     - The final error vector is scaled based on the Phred quality scores,
       converting them to error probabilities.
-    - The error probabilities are intended to represent the expected deviation
-      from the original haplotype.
 
     Raises:
     -------
     AssertionError
         If the CIGAR string contains unexpected operations or if the resulting
         error vector length doesn't match the read's aligned length.
+    AssertionError:
+        If the returned numerical vector does not have the same length as the specified genomic interval size
 
     Example:
     --------
@@ -800,9 +803,11 @@ def get_errorvector_from_cigar(read, cigar_tuples, logger=logger):
      0.001 0.001 0.001 0.001 0.001]
     '''
     errorvector = np.empty(read.reference_end - read.reference_start, dtype=float)
+    # An array of phred-scaled integer quality scores
     base_qualities = np.array(read.query_qualities, dtype=np.int32)
     query_consume = 0
     ref_consume = 0
+
     for operation, length in cigar_tuples:
         assert operation != 0, f"The CIGAR string require separate mismatch from match. But current one does not: {cigar_tuples}"
         if operation == 3:
@@ -823,19 +828,18 @@ def get_errorvector_from_cigar(read, cigar_tuples, logger=logger):
             query_consume += length
             ref_consume += length
         elif operation == 1:
-            # Insertion, the base quality is the mean value of the inserted bases
+            # Insertion, we assign 99 to the base at the reference position immediately followed by the insertion
             # The base quality does not affect the gaps appeared in the alignment, later 99 will be replaced by 0
             errorvector[ref_consume] = 99
             query_consume += length
         elif operation == 2:
-            # Deletion, the base quality is the value of the base immediately upstream of the deletion
+            # Deletion, we assign 99 to the bases at the reference positions within the deletion
             # The base quality does not affect the gaps appeared in the alignment, later 99 will be replaced by 0
             errorvector[ref_consume:ref_consume + length] = np.array([99] * length)
             ref_consume += length
 
     assert errorvector.size == read.reference_end - read.reference_start, f"The error vector length is {len(errorvector)} while the read length is {read.reference_end - read.reference_start}. The cigar str is {read.cigarstring}"
-    # Then we need to convert the phred_scaled base quality scores back to error probability
-    # Since the error vector is actually the expected deviation from originality haplotype, we need to multiply with the score deviation between mismatch and match is 5 (match for 1, mismatch for -4)
+    # Convert the phred_scaled base quality scores back to error probability, 99 will be replaced by 0
     errorvector = np.where(errorvector == 99, 0, 10**(-errorvector/10))
 
     return np.array(errorvector)
