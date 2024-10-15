@@ -1373,6 +1373,7 @@ def determine_same_haplotype(read, other_read,
         if -1 in r_diff_indices:
             return False, read_ref_pos_dict, read_hap_vectors, None
         abs_diff_inds = r_diff_indices + overlap_start
+        # See if the mismatches can be explained by sequencing artifacts
         tolerate, read_ref_pos_dict, tolerated_count = tolerate_mismatches_two_seq( read,
                                                                                     other_read,
                                                                                     abs_diff_inds,
