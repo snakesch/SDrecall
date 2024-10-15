@@ -663,7 +663,7 @@ def get_hapvector_from_cigar(cigar_tuples,
                              logger = logger):
     '''
     Convert CIGAR tuples to a haplotype vector with penalties for matches, mismatches, and gaps.
-    Note that the length of the haplotype vector is strictly aligned to the covered reference genome span, only this way we can ensure that comparison between overlapping reads are strictly aligned to each other.
+    Note that the length of the haplotype vector is strictly aligned with the covered reference genome span, only this way we can ensure that comparison between overlapping reads are strictly aligned to each other.
     Uses NumPy for efficient array operations.
 
     Example:
@@ -1045,9 +1045,18 @@ def seq_err_det_stacked_bases(target_read,
     '''
     This function is used to stat the stacked bases at position0 (meaning 0-indexed positions) to:
     1. Identify the base quality of the base in the target read
-    2. Use the base at other reads to deduce whether this lowqual base is sequencing error or not
+    2. Calculate the allele depth of the allele in target_read at position0 to deduce whether this lowqual base is sequencing error or not
+
+    Detailed structure of the nested_ad_dict can be found in the docstring of the function
+    As to read_ref_pos_dict, it is read_id -> (ref_positions, qseq_ref_positions)
+    where detailed explanation of the qseq_ref_positions and ref_positions can be found in the docstring of the prepare_ref_query_idx_map function
+
+    Returns:
+    - bool: True if the mismatches can be explained by sequencing artifacts, False otherwise
+    - dict: Updated read_ref_pos_dict
     '''
 
+    # Get the base quality of the base at position0 in the target read, as well as the base at position0 (0-indexed) in the query read
     target_base, base_qual, read_ref_pos_dict, qr_idx_arr = get_interval_seq_qual(target_read, position0, position0, read_ref_pos_dict)
     base_qual = base_qual[0]
     target_base = target_base[0]
@@ -1080,6 +1089,8 @@ def tolerate_mismatches_two_seq(read1, read2,
     '''
     This function is used to compare two sequences and identify the mismatch positions
     And to decide whether we are safe to determine the mismatches are originated from sequencing error or not.
+
+    Use seq_err_det_stacked_bases() to determine if the mismatches can be explained by sequencing artifacts, details can be found in the docstring of the function
     '''
 
     tolerate_mismatches = []
@@ -1101,6 +1112,8 @@ def tolerate_mismatches_two_seq(read1, read2,
         return True, read_ref_pos_dict, len(tolerate_mismatches)
     else:
         return False, read_ref_pos_dict, 0
+
+
 
 def get_overlap_intervals(read_pair1, read_pair2):
     overlap_intervals = {}
@@ -2010,6 +2023,61 @@ def find_uncovered_regions(existing_intervals, new_interval):
 
 
 
+def stat_ad_dict(bam_file, logger = logger):
+    bam_ad_file = f"{bam_file}.ad"
+    cmd = f"""bcftools mpileup -Ou --no-reference -a FORMAT/AD --indels-2.0 -q 10 -Q 15 {bam_file} | \
+              bcftools query -f '%CHROM\\t%POS\\t%ALT\\t[%AD]\\n' - > {bam_ad_file}"""
+    executeCmd(cmd, logger = logger)
+    ad_table = pd.read_table(bam_ad_file, header = None, sep = "\t", names = ["chrom", "pos", "alt", "ad"], dtype = {"chrom": str, "pos": int, "alt": str, "ad": str}, na_values=["", "<*>"])
+    ad_expanded = ad_table["ad"].str.split(",", expand=True).replace({None: np.nan, "": np.nan, "0": np.nan}).dropna(axis = 1, how="all").astype(float)
+    alt_expanded = ad_table["alt"].str.rstrip(",<*>").str.split(",", expand=True).replace({None: np.nan, "": np.nan}).dropna(axis = 1, how="all")
+
+    if alt_expanded.shape[1] <= 1 or ad_expanded.shape[1] <= 1:
+        logger.warning(f"No ALT allele found in this BAM file. Skip this entire script")
+        logger.warning(f"Look at the two dataframes now: \n{alt_expanded.to_string(index=False)}\n{ad_expanded.to_string(index=False)}\n")
+        return None
+
+    logger.info("\n{}\n{}\n".format(ad_expanded.loc[~ad_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False),
+                                    alt_expanded.loc[~alt_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False)))
+
+    # After getting the table, we seek to organize the AD info by chromsome, pos, and alt into a nested dictionary
+    # The dict structure is like:
+    # nested_ad_dict[chrom][pos][alt] = ad
+    # nested_ad_dict[chrom][pos]["DP"] = total_dp
+    # Initialize the nested dictionary
+    nested_ad_dict = {chrom: {} for chrom in ad_table["chrom"].unique()}
+    column_width = alt_expanded.shape[1]
+
+    # Iterate over the rows of ad_table to build the nested_ad_dict
+    for i in range(len(ad_table)):
+        chrom = ad_table.iloc[i, 0]
+        outer_key = ad_table.iloc[i, 1]
+        inner_key = alt_expanded.iloc[i, 0]
+        value = ad_expanded.iloc[i, 0]
+
+        if pd.isna(value):
+            continue
+
+        total_dp = value
+
+        # Initialize the inner dictionary if the outer key is not present
+        if outer_key not in nested_ad_dict[chrom]:
+            nested_ad_dict[chrom][outer_key] = {}
+
+        # Add the first pair of inner key-value
+        nested_ad_dict[chrom][outer_key][inner_key] = value
+
+        # Check for the second pair of inner key-value
+        for c in range(1, column_width):
+            if not pd.isna(ad_expanded.iloc[i, c]) and not pd.isna(alt_expanded.iloc[i, c]):
+                nested_ad_dict[chrom][outer_key][alt_expanded.iloc[i, c]] = ad_expanded.iloc[i, c]
+                total_dp += ad_expanded.iloc[i, c]
+
+        nested_ad_dict[chrom][outer_key]["DP"] = total_dp
+
+    return nested_ad_dict
+
+
 
 def build_phasing_graph(bam_file,
                         ncls_dict,
@@ -2098,58 +2166,9 @@ def build_phasing_graph(bam_file,
     # we need to know the allele depth at the mismatch site. This allows us to estimate the sequencing artifact likelihood by observing the allele's depth fraction at this site.
     # We would like an efficient way to extract AD info for all covered sites across this BAM. So we chose bcftools mpileup + bcftools query.
     # The output file is stored in the same directory as the input BAM file
-    bam_ad_file = f"{bam_file}.ad"
-    cmd = f"""bcftools mpileup -Ou --no-reference -a FORMAT/AD --indels-2.0 -q 10 -Q 15 {bam_file} | \
-              bcftools query -f '%CHROM\\t%POS\\t%ALT\\t[%AD]\\n' - > {bam_ad_file}"""
-    executeCmd(cmd, logger = logger)
-    ad_table = pd.read_table(bam_ad_file, header = None, sep = "\t", names = ["chrom", "pos", "alt", "ad"], dtype = {"chrom": str, "pos": int, "alt": str, "ad": str}, na_values=["", "<*>"])
-    ad_expanded = ad_table["ad"].str.split(",", expand=True).replace({None: np.nan, "": np.nan, "0": np.nan}).dropna(axis = 1, how="all").astype(float)
-    alt_expanded = ad_table["alt"].str.rstrip(",<*>").str.split(",", expand=True).replace({None: np.nan, "": np.nan}).dropna(axis = 1, how="all")
-
-    if alt_expanded.shape[1] <= 1 or ad_expanded.shape[1] <= 1:
-        logger.warning(f"No ALT allele found in this BAM file. Skip this entire script")
-        logger.warning(f"Look at the two dataframes now: \n{alt_expanded.to_string(index=False)}\n{ad_expanded.to_string(index=False)}\n")
+    nested_ad_dict = stat_ad_dict(bam_file, logger = logger)
+    if nested_ad_dict is None:
         return None, None, None, None
-
-    logger.info("\n{}\n{}\n".format(ad_expanded.loc[~ad_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False),
-                                    alt_expanded.loc[~alt_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False)))
-
-    # After getting the table, we seek to organize the AD info by chromsome, pos, and alt into a nested dictionary
-    # The dict structure is like:
-    # nested_ad_dict[chrom][pos][alt] = ad
-    # nested_ad_dict[chrom][pos]["DP"] = total_dp
-    # Initialize the nested dictionary
-    nested_ad_dict = {chrom: {} for chrom in ad_table["chrom"].unique()}
-    column_width = alt_expanded.shape[1]
-    inspected_overlaps = IntervalTree()
-
-    # Iterate over the rows of ad_table to build the nested_ad_dict
-    for i in range(len(ad_table)):
-        chrom = ad_table.iloc[i, 0]
-        outer_key = ad_table.iloc[i, 1]
-        inner_key = alt_expanded.iloc[i, 0]
-        value = ad_expanded.iloc[i, 0]
-
-        if pd.isna(value):
-            continue
-
-        total_dp = value
-
-        # Initialize the inner dictionary if the outer key is not present
-        if outer_key not in nested_ad_dict[chrom]:
-            nested_ad_dict[chrom][outer_key] = {}
-
-        # Add the first pair of inner key-value
-        nested_ad_dict[chrom][outer_key][inner_key] = value
-
-        # Check for the second pair of inner key-value
-        for c in range(1, column_width):
-            if not pd.isna(ad_expanded.iloc[i, c]) and not pd.isna(alt_expanded.iloc[i, c]):
-                nested_ad_dict[chrom][outer_key][alt_expanded.iloc[i, c]] = ad_expanded.iloc[i, c]
-                total_dp += ad_expanded.iloc[i, c]
-
-        nested_ad_dict[chrom][outer_key]["DP"] = total_dp
-
 
     '''
     Now we start to build an undirected graph of read pairs,
@@ -2182,6 +2201,9 @@ def build_phasing_graph(bam_file,
     # Create a dictionary to map query names to their corresponding nodes (qnames -> graph_vertices_indices)
     # This is a temporary data hub to record whether a read pair has been added to the graph as a vertex(node)
     qname_to_node = {}
+
+    # Create an IntervalTree to record the inspected overlapping intervals
+    inspected_overlaps = IntervalTree()
 
     for qname_idx, paired_reads in ncls_read_dict.items():
         qname = ncls_qname_dict[qname_idx]
