@@ -225,9 +225,8 @@ def migrate_bam_to_ncls(bam_file,
     """
     Migrate BAM file data to NCLS (Nested Containment List) format for efficient interval querying.
 
-    This function processes a BAM file, filters reads based on quality criteria, and organizes the data
-    into NCLS structures for fast overlap queries. It's particularly useful for handling genomic interval
-    data in large-scale sequencing projects.
+    This function filters reads based on quality criteria, and organizes the data
+    into NCLS structures for fast overlap queries.
 
     It completely put all alignment info into memory, thus faster than pysam disk IO based query.
 
@@ -1193,6 +1192,19 @@ def determine_same_haplotype(read, other_read,
     come from the same haplotype. It uses haplotype vectors, sequence comparison, and
     various heuristics to make this determination.
 
+    The function uses a hierachical approach to determine if two reads belong to the same haplotype:
+    1. Compare two reads' haplotype vectors within the overlapping region
+        a. If two reads' haplotype vectors within the overlapping region are differed by more than 3 bases, we direct reject the possiblity of being the same haplotype and return False
+        b. If two reads' haplotype vectors within the overlapping region are differed by at least one indel, we direct reject the possiblity of being the same haplotype and return False
+    2. Extract the raw sequence of two reads within the overlapping region
+        a. If two reads' raw sequence are identical, and the overlap span is greater than mean_read_length - 50, we consider the two reads belong to the same haplotype and return True
+        b. If two reads' raw sequence are identical, and the overlap span is less than mean_read_length - 50, we consider not enough evidence to make a call and return np.nan
+        c. If two reads' raw sequence are differed by at least one indel, we directly reject the possiblity of being the same haplotype and return False
+        d. If two reads' raw sequence are differed by mismatches, we try to see if the mismatches can be explained by sequencing artifacts
+           i. If the mismatches can be explained by sequencing artifacts and the overlap span is greater than mean_read_length - 50, we consider the two reads belong to the same haplotype and return True
+           ii. If the mismatches can be explained by sequencing artifacts and the overlap span is less than mean_read_length - 50, we consider not enough evidence to make a call and return np.nan
+           iii. If the mismatches cannot be explained by sequencing artifacts, we consider the two reads belong to different haplotypes and return False
+
     Parameters:
     - read, other_read: pysam.AlignedSegment
         The two reads to compare.
@@ -1204,6 +1216,7 @@ def determine_same_haplotype(read, other_read,
         Nested dictionary for allele depth information. Structure: {chrom: {pos: {base: depth}}}
     - read_ref_pos_dict: dict
         Dictionary mapping read positions to reference positions. Structure: {read_id: (ref_positions, qseq_ref_positions)}
+        Detailed explanation of the qseq_ref_positions and ref_positions can be found in the docstring of the prepare_ref_query_idx_map function
     - mean_read_length: int
         Average read length, used for various calculations.
     - logger: logging.Logger
@@ -1220,7 +1233,7 @@ def determine_same_haplotype(read, other_read,
     start = read.reference_start
     end = read.reference_end
 
-    # Below we extract the haplotype vector for both reads
+    # Below we extract the haplotype vector for both reads, which are an array of int values indicating the alignment status of each base within the reference genome span aligned by the read
     # Detailed explanation can be found in the docstring of the function get_hapvector_from_cigar
     if read_id in read_hap_vectors:
         read_hap_vector = read_hap_vectors[read_id]
@@ -1228,6 +1241,7 @@ def determine_same_haplotype(read, other_read,
         read_hap_vector = get_hapvector_from_cigar(read.cigartuples, read.query_sequence, logger = logger)
         read_hap_vectors[read_id] = read_hap_vector
 
+    # We need a unique identifier for every read, which is a string composed by query name and the alignment flag.
     other_read_id = get_read_id(other_read)
     other_start = other_read.reference_start
     other_end = other_read.reference_end
@@ -1238,30 +1252,40 @@ def determine_same_haplotype(read, other_read,
         other_read_hap_vector = get_hapvector_from_cigar(other_read.cigartuples, other_read.query_sequence, logger = logger)
         read_hap_vectors[other_read_id] = other_read_hap_vector
 
+    # Extract the haplotype vector within the overlapping region
     interval_hap_vector = read_hap_vector[overlap_start - start:overlap_end - start]
     interval_other_hap_vector = other_read_hap_vector[overlap_start - other_start:overlap_end - other_start]
 
+    # Calculate the overlap span
     overlap_span = overlap_end - overlap_start
-    # assert interval_hap_vector.size > 0, f"The interval hap vector is {interval_hap_vector} for read {read.query_name} ({start}-{read.reference_end}) and other read {other_read.query_name} ({other_start}-{other_read.reference_end}) and the overlap span is {overlap_start} to {overlap_end}"
-    # assert interval_hap_vector.size == interval_other_hap_vector.size, f"The interval hap vector size {interval_hap_vector} is not the same as the other interval hap vector size {interval_other_hap_vector}"
 
+    # Find the indices where two haplotype vectors differ
     diff_indices = numba_diff_indices(interval_hap_vector, interval_other_hap_vector)
 
     # First test whether there are too many mismatches between two reads that we wont tolerate
     if len(diff_indices) >= 3:
         # Cannot tolerate such mismatches
+        # Short-circuit evaluation, if this condition is true, the following code will not be evaluated
         return False, read_ref_pos_dict, read_hap_vectors, None
 
+    # Extract the positions in the read's haplotype vector where two haplotype vectors differ
     diff_pos_read = interval_hap_vector[diff_indices]
+    # Extract the positions in the other read's haplotype vector where two haplotype vectors differ
     diff_pos_oread = interval_other_hap_vector[diff_indices]
 
+    # Check if there are indels in the positions of the read's haplotype vector where two haplotype vectors differ
     read_indel_overlap = get_indel_bools(diff_pos_read)
+    # Check if there are indels in the positions of the other read's haplotype vector where two haplotype vectors differ
     oread_indel_overlap = get_indel_bools(diff_pos_oread)
 
+    # If there are indels in the positions of the read's haplotype vector where two haplotype vectors differ or the other read's haplotype vector where two haplotype vectors differ, then we cannot make a call on whether they belong to the same haplotype
+    # Why we use hap vectors to compare ahead of using raw sequence?
+    # The reason is that the haplotype vector comparison is much more efficient than string comparison
+    # This is a short-circuit evaluation, if the first condition is true, the following condition will not be evaluated
     if numba_sum(read_indel_overlap) > 0 or numba_sum(oread_indel_overlap) > 0:
         return False, read_ref_pos_dict, read_hap_vectors, None
 
-    # Now use overlap_start and overlap_end to extract the read sequence of two reads within the overlap region
+    # Now use overlap_start and overlap_end to extract the read sequence (a string series) of two reads within the overlap region
     # If two read sequences are not the same length, then it indicates they have difference in indels. A clear evidence to reject the possiblity of being the same haplotype
     read_seq, read_ref_pos_dict, qr_idx_arr = get_interval_seq(read, overlap_start, overlap_end - 1, read_ref_pos_dict)
     other_seq, read_ref_pos_dict, other_qr_idx_arr = get_interval_seq(other_read, overlap_start, overlap_end - 1, read_ref_pos_dict)
@@ -1296,6 +1320,7 @@ def determine_same_haplotype(read, other_read,
     We created the score array, this score array is used to assign weight to edges depending on the number of SNVs shared by two read pairs
     It will be later used by the function determine_same_haplotype to assign weight to edges
     '''
+
     identical_part = interval_hap_vector[interval_hap_vector == interval_other_hap_vector]
     overlap_span = identical_part.size
     var_count = count_var(identical_part)
