@@ -1,17 +1,25 @@
 import numba
+import logging
 import numpy as np
 import pandas as pd
+import pybedtools as pb
+
 from collections import defaultdict
-from numba import types
+from numba import types, prange
 
-
+from bam_ncls import overlapping_reads_generator
 from bilc import lp_solve_remained_haplotypes
 from numba_operators import numba_sum
-from fp_control.pairwise_read_inspection import get_hapvector_from_cigar, \
-                                   get_errorvector_from_cigar, \
-                                   get_read_id, \
-                                   count_var, \
-                                   count_continuous_blocks
+from shell_cmds import executeCmd, prepare_tmp_file
+from pairwise_read_inspection import get_hapvector_from_cigar, \
+                                     get_errorvector_from_cigar, \
+                                     get_read_id, \
+                                     count_var, \
+                                     count_continuous_blocks, \
+                                     count_continuous_indel_blocks
+
+
+logger = logging.getLogger('SDrecall')
 
 
 @numba.njit(types.Tuple((types.int32, types.int32))(types.int32[:], types.int32[:]), fastmath=True)
@@ -35,6 +43,311 @@ def ref_genome_similarity(query_read_vector,
 
     return var_size, alt_var_size
 
+
+
+@numba.njit
+def rank_unique_values(arr):
+    # Step 1: Extract unique values and sort them
+    unique_values = np.unique(arr)
+
+    # Step 2: Create a mapping from each unique value to its rank
+    value_to_rank = np.empty(unique_values.shape, dtype=np.int32)
+    for i in range(unique_values.size):
+        value_to_rank[i] = i + 1  # Ranks start from 1
+
+    # Step 3: Apply the mapping to create a new array with the ranks
+    ranks = np.empty(arr.shape, dtype=np.int32)
+    for i in range(arr.size):
+        for j in range(unique_values.size):
+            if arr[i] == unique_values[j]:
+                ranks[i] = value_to_rank[j]
+                break
+    return ranks
+
+
+
+
+@numba.njit(types.int32[:](types.int32[:,:], types.float32[:,:], types.int32[:,:]), fastmath=True)
+def assemble_consensus(seq_arrays, qual_arrays, reads):
+    # Every read in the reads can have different length
+    # Find the start and end position of the consensus sequence
+    start_pos = reads[:, 0].min()
+    end_pos = reads[:, 1].max()
+
+    # logger.info(", ".join([f"{r.reference_start}-{r.reference_end}" for r in reads]))
+
+    # Initialize the consensus sequence and quality scores with zeros
+    consensus_seq = np.ones(end_pos - start_pos, dtype=np.int32)
+    consensus_qual = np.full(end_pos - start_pos, 0.1, dtype=np.float32)
+
+    for i in prange(len(seq_arrays)):
+        '''
+        For every iteration,
+        seq and qual should have the same length
+
+        Across iterations,
+        seq and qual are not bound with the same length
+        '''
+        seq = seq_arrays[i]
+        qual = qual_arrays[i]
+        read = reads[i]
+        start = read[0]
+        # assert seq.size == qual.size, f"Found the hap_vector {list(seq)} ({seq.size}bp) and qual_vector {list(qual)} ({qual.size}bp) have different lengths for read {read} at position {start}"
+        # Filter out NaN values
+        non_na_values = numba_sum(seq >= -8)
+
+        nona_seq = np.empty(non_na_values, dtype=np.int32)
+        nona_qual = np.empty(non_na_values, dtype=np.float32)
+
+        for j in prange(non_na_values):
+            nona_seq[j] = seq[j]
+            nona_qual[j] = qual[j]
+
+        seq = nona_seq
+        qual = nona_qual
+
+        # Calculate the relative start and end positions of the current sequence
+        rel_start = start - start_pos
+        rel_end = rel_start + non_na_values
+
+        # Create a mask for positions where the current sequence has higher quality
+        # assert rel_end - rel_start == len(qual), f"Found the relative start and end positions (determined by {len(seq)}) of the current sequence are not equal to the quality vector size {len(qual)} for read {read} at position {start}"
+        # qual here is actually err prob, so smaller the better
+        mask = qual <= consensus_qual[rel_start:rel_end]
+        mask = mask & (qual < 0.1)
+
+        # Update the consensus sequence and quality scores where the current sequence has higher quality
+        consensus_seq[rel_start:rel_end][mask] = seq[mask]
+        consensus_qual[rel_start:rel_end][mask] = qual[mask]
+
+    return consensus_seq
+
+
+
+
+@numba.njit(types.float32[:](types.int32[:], types.int32), fastmath=True)
+def count_window_var_density(array, padding_size = 25):
+    is_var = array != 1
+    is_var_size = numba_sum(is_var)
+    if is_var_size == 0:
+        return np.zeros(array.size, dtype=np.float32)
+
+    density_arr = np.empty(array.size, dtype = np.float32)
+    for i in range(array.size):
+        start = max(i-padding_size, 0)
+        end = min(i+padding_size, array.size)
+        iter_arr = array[start:end]
+        var_count = count_var(iter_arr)
+        density = var_count/(padding_size *2 + 1)
+        density_arr[i] = density
+
+    return density_arr
+
+
+
+
+@numba.njit(types.int32[:,:](types.boolean[:]), fastmath=True)
+def extract_true_stretches(bool_array):
+    n = len(bool_array)
+
+    # Pre-allocate maximum possible space (worst case: every element is True)
+    stretches = np.zeros((n, 2), dtype=np.int32)
+    count = 0
+
+    if n == 0:
+        return stretches[:count]
+
+    in_stretch = False
+    start_idx = 0
+
+    for i in range(n):
+        if bool_array[i]:
+            if not in_stretch:
+                in_stretch = True
+                start_idx = i
+        else:
+            if in_stretch:
+                stretches[count, 0] = start_idx
+                stretches[count, 1] = i - 1
+                count += 1
+                in_stretch = False
+
+    # Handle the case where the array ends with a True stretch
+    if in_stretch:
+        stretches[count, 0] = start_idx
+        stretches[count, 1] = n - 1
+        count += 1
+
+    return stretches[:count]
+
+
+
+@numba.njit(types.boolean(types.int32[:]), fastmath=True)
+def judge_misalignment_by_extreme_vardensity(seq):
+    five_vard = count_window_var_density(seq, padding_size = 42)
+    six_vard = count_window_var_density(seq, padding_size = 65)
+    read_vard = count_window_var_density(seq, padding_size = 74)
+    # indel_count = count_continuous_indel_blocks(seq)
+    if numba_sum(five_vard >= 5/85) > 0:
+        select_bool = five_vard >= 5/85
+        # pad the select_bool by 42 to both directions
+        true_segments = extract_true_stretches(select_bool)
+        max_indel_count = 0
+        for i in range(true_segments.shape[0]):
+            start = true_segments[i, 0] - 42
+            end = true_segments[i, 1] + 42
+            five_seq = seq[start:end]
+            indel_count = count_continuous_indel_blocks(five_seq)
+            max_indel_count = max(max_indel_count, indel_count)
+        if max_indel_count > 1:
+            return True
+    elif numba_sum(six_vard >= 6/131) > 0:
+        select_bool = six_vard >= 6/131
+        true_segments = extract_true_stretches(select_bool)
+        max_indel_count = 0
+        for i in range(true_segments.shape[0]):
+            start = true_segments[i, 0] - 65
+            end = true_segments[i, 1] + 65
+            five_seq = seq[start:end]
+            indel_count = count_continuous_indel_blocks(five_seq)
+            max_indel_count = max(max_indel_count, indel_count)
+        if max_indel_count > 1:
+            return True
+    elif numba_sum(read_vard > 11/148) > 0:
+        return True
+    return False
+
+
+
+
+@numba.njit(types.float32[:](types.int32[:, :]), fastmath=True)
+def calculate_coefficient(arr2d):
+    # Span size is the weight for later mean value calculation
+    rank = arr2d[:, 7]
+    span = (arr2d[:, 1] - arr2d[:, 0])
+    depth_frac = (1 - arr2d[:, 4]/arr2d[:, 2]).astype(types.float32)
+
+    return rank * span * np.sqrt(depth_frac)
+
+
+
+def sweep_region_inspection(input_bam,
+                            output_bed = None,
+                            depth_cutoff = 5,
+                            window_size = 120,
+                            step_size = 30,
+                            logger = logger):
+
+    if output_bed is None:
+        output_bed = prepare_tmp_file(suffix = ".bed").name
+
+    cmd = f"samtools depth {input_bam} | \
+            mawk -F '\\t' '$3 >= {depth_cutoff}{{printf \"%s\\t%s\\t%s\\n\", $1, $2-1, $2;}}' | \
+            bedtools merge -i stdin | \
+            bedtools makewindows -b stdin -w {window_size} -s {step_size} > {output_bed}"
+
+    executeCmd(cmd, logger = logger)
+
+    op_bed_obj = pb.BedTool(output_bed)
+    return op_bed_obj
+
+
+
+
+def calculate_coefficient_per_group(record_df, logger=logger):
+    # Generate a rank for haplotypes
+    record_df["rank"] = rank_unique_values(record_df["var_count"].to_numpy() * 50 + record_df["indel_count"].to_numpy())
+    # logger.info(f"Before calculating the coefficient for this region, the dataframe looks like :\n{record_df[:10].to_string(index=False)}\n")
+    record_df["coefficient"] = calculate_coefficient(record_df.loc[:, ["start",
+                                                                       "end",
+                                                                       "total_depth",
+                                                                       "hap_id",
+                                                                       "hap_depth",
+                                                                       "var_count",
+                                                                       "indel_count",
+                                                                       "rank"]].to_numpy(dtype=np.int32))
+    # logger.info(f"After calculating the coefficient for this region, the dataframe looks like :\n{record_df[:10].to_string(index=False)}\n")
+    return record_df
+
+
+
+def extract_continuous_regions_dict(reads):
+    # Sort reads by reference start position
+    reads = sorted(reads, key=lambda read: read.reference_start)
+
+    continuous_regions = {}
+    current_region_reads = []
+    current_start = None
+    current_end = None
+
+    for read in reads:
+        read_start = read.reference_start
+        read_end = read.reference_end
+
+        if current_start is None:
+            # Initialize the first region
+            current_start = read_start
+            current_end = read_end
+            current_region_reads.append(read)
+        else:
+            if read_start <= current_end:
+                # Extend the current region
+                current_end = max(current_end, read_end)
+                current_region_reads.append(read)
+            else:
+                # Save the current region and start a new one
+                continuous_regions[(current_start, current_end)] = current_region_reads
+                current_start = read_start
+                current_end = read_end
+                current_region_reads = [read]
+
+    # Append the last region
+    if current_region_reads:
+        continuous_regions[(current_start, current_end)] = current_region_reads
+
+    return continuous_regions
+
+
+
+def group_by_dict_optimized(vprop, vertices):
+    grouped_keys = {}
+    for v, rs in vertices.items():
+        v_idx, q = v
+        label = vprop[v_idx]
+        if label not in grouped_keys:
+            grouped_keys[label] = [[], [], []]
+        grouped_keys[label][0].append(v_idx)
+        grouped_keys[label][1].append(q)
+        grouped_keys[label][2].append(rs)
+    return grouped_keys
+
+
+
+def record_haplotype_rank(haplotype_dict, mean_read_length = 150):
+    starts = np.empty(len(haplotype_dict), dtype=np.int32)
+    ends = np.empty(len(haplotype_dict), dtype=np.int32)
+    hap_depths = np.empty(len(haplotype_dict), dtype=np.int32)
+    hap_ids = np.empty(len(haplotype_dict), dtype=np.int32)
+    var_counts = np.empty(len(haplotype_dict), dtype=np.int32)
+    indel_counts = np.empty(len(haplotype_dict), dtype=np.int32)
+    total_depth_col = np.empty(len(haplotype_dict), dtype=np.int32)
+
+    i = 0
+    total_depth = 0
+    for hid in haplotype_dict:
+        seq, reads, span, qnames = haplotype_dict[hid]
+        starts[i] = span[0]
+        ends[i] = span[1]
+        depth = len(reads) * mean_read_length/len(seq)
+        hap_depths[i] = depth
+        hap_ids[i] = hid
+        var_counts[i] = count_var(seq)
+        indel_counts[i] = count_continuous_indel_blocks(seq)
+        total_depth += depth
+        i += 1
+
+    total_depth_col.fill(total_depth)
+    return np.column_stack((starts, ends, total_depth_col, hap_ids, hap_depths, var_counts, indel_counts))
 
 
 def identify_misalignment_per_region(region,
@@ -367,7 +680,7 @@ def inspect_by_haplotypes(input_bam,
 
     if not failed_lp:
         by_region = total_record_df.groupby(["chrom", "start", "end"], group_keys=False)
-        total_record_df = by_region.apply(calulate_coefficient_per_group, logger = logger).reset_index(drop=True)
+        total_record_df = by_region.apply(calculate_coefficient_per_group, logger = logger).reset_index(drop=True)
         total_record_df.to_csv(compare_haplotype_meta_tab, sep = "\t", index = False)
         logger.info(f"Successfully saved the haplotype comparison meta table to {compare_haplotype_meta_tab}. And it looks like \n{total_record_df[:10].to_string(index=False)}\n")
         correct_map_hids, mismap_hids, model_status = lp_solve_remained_haplotypes(total_record_df, logger = logger)

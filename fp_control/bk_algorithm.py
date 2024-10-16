@@ -1,18 +1,110 @@
 #! /usr/bin/env python3
 import numba
+import logging
 import numpy as np
 from scipy import sparse
 from numba import prange, types
 
+from numba_operators import numba_and, numba_sum
 
-from numba_operators import numba_and, \
-                            numba_sum, \
-                            efficient_mask, \
-                            efficient_row_max, \
-                            reverse_boolean_mask, \
-                            numba_max_idx_mem, \
-                            create_default_true_mask, \
-                            para_create_default_true_mask
+
+logger = logging.getLogger("SDrecall")
+
+
+@numba.njit(types.boolean[:](types.int32), fastmath=True)
+def create_default_true_mask(size):
+    return np.ones(size, dtype=numba.bool_)
+
+
+@numba.njit(types.boolean[:](types.int32), fastmath=True, parallel=True)
+def para_create_default_true_mask(size):
+    return np.ones(size, dtype=numba.bool_)
+
+
+
+@numba.njit(types.boolean[:](types.int32, types.int32[:]), fastmath=True)
+def reverse_boolean_mask(total_rows, row_indices):
+    boolean_mask = np.ones(total_rows, dtype=np.bool_)
+    for index in row_indices:
+        boolean_mask[index] = False
+    return boolean_mask
+
+
+
+@numba.njit(types.Tuple((types.int32, types.float32))(types.float32[:], types.boolean[:]), fastmath=True)
+def numba_max_idx_mem(data, index_mask=None):
+    max_val = -np.inf
+    max_idx = -1
+
+    if index_mask is None:
+        for i in range(data.size):
+            if data[i] >= max_val:
+                max_idx = i
+                max_val = data[i]
+    else:
+        for i in range(data.size):
+            if index_mask[i]:
+                if data[i] >= max_val:
+                    max_idx = i
+                    max_val = data[i]
+
+    return max_idx, max_val
+
+
+
+@numba.njit(types.boolean[:](types.float32[:], types.int32[:], types.int32, types.float32), fastmath=True)
+def efficient_mask(sarr_data,
+                   sarr_indices,
+                   sarr_size,
+                   mask_value=-1.0):
+    '''
+    The input should be the data, indices, arr_size of a one row sparse_matrix instance
+    sparse_matrix[row_index] operation:
+    When you perform sparse_matrix[row_index] on a CSR matrix, it returns a csr_matrix representing that single row. This is a 1 x n sparse matrix.
+
+    Attributes of the returned row:
+    The returned row matrix has its own data, indices, and indptr attributes, but these are views of the original matrix's data. This means:
+    data: Contains only the non-zero values for that specific row
+    indices: Contains the column indices for the non-zero values in that row
+    indptr: For a single row, this will always be [0, number_of_nonzeros_in_row]
+
+    Efficiency implications:
+    Because these are views, accessing sparse_matrix[row_index] is very efficient. It doesn't create a copy of the data, but rather provides a view into the original matrix's data structure.
+    '''
+    # Extract the row without converting the whole row to dense format
+    neg_1_mask = np.ones(sarr_size, dtype=np.bool_)
+    data_mask = sarr_data == mask_value
+    neg_1_mask[sarr_indices[data_mask]] = False
+
+    return neg_1_mask
+
+
+
+
+@numba.njit(types.Tuple((types.int32, types.float32))(types.float32[:], types.int32[:], types.boolean[:]), fastmath=True)
+def efficient_row_max(sarr_data,
+                      sarr_indices,
+                      index_mask):
+    '''
+    The input should be the data, indices, arr_size of a one row sparse_matrix instance
+    sparse_matrix[row_index] operation:
+    When you perform sparse_matrix[row_index] on a CSR matrix, it returns a csr_matrix representing that single row. This is a 1 x n sparse matrix.
+
+    Attributes of the returned row:
+    The returned row matrix has its own data, indices, and indptr attributes, but these are views of the original matrix's data. This means:
+    data: Contains only the non-zero values for that specific row
+    indices: Contains the column indices for the non-zero values in that row
+    indptr: For a single row, this will always be [0, number_of_nonzeros_in_row]
+    '''
+    valid_mask = numba_and((sarr_data != -1), index_mask[sarr_indices])
+    if np.any(valid_mask):
+        # assert len(sarr_data) == len(valid_mask), f"The mask are not of the equal size of array data"
+        max_ind_short, max_value = numba_max_idx_mem(sarr_data, valid_mask)
+        # logger.info(f"max_ind_short is {max_ind_short}, max_value is {max_value}, valid_mask sum is {np.sum(valid_mask)}. Original sarr_data is {sarr_data.tolist()}")
+        max_index = sarr_indices[max_ind_short]
+        # logger.info(f"max_index is {max_index}, max_ind_short is {max_ind_short}")
+        return max_index, max_value
+    return -1, -2.0
 
 
 

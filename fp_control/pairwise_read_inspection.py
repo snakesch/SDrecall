@@ -11,9 +11,11 @@ from numba_operators import numba_diff_indices, \
 logger = logging.getLogger('SDrecall')
 
 
+
 @numba.njit(types.bool_[:](types.int32[:]), fastmath=True)
 def get_indel_bools(seq_arr):
     return (seq_arr > 1) | (seq_arr == -6)
+
 
 
 @numba.njit(types.int32(types.bool_[:]), fastmath=True)
@@ -47,10 +49,12 @@ def count_continuous_blocks(array):
     return block_count
 
 
+
 @numba.njit(types.int32(types.int32[:]), fastmath=True)
 def count_snv(array):
     snv_bools = array == -4
     return count_continuous_blocks(snv_bools)
+
 
 
 @numba.njit(types.int32(types.int32[:]), fastmath=True)
@@ -88,6 +92,34 @@ def count_continuous_indel_blocks(array):
 @numba.njit(types.int32(types.int32[:]), fastmath=True)
 def count_var(array):
     return count_snv(array) + count_continuous_indel_blocks(array)
+
+
+
+
+@numba.njit(types.bool_(types.int8[:], types.int8[:], types.int8), fastmath=True)
+def compare_sequences(read_seq, other_seq, except_char):
+    """
+    Compare two sequences, handling 'N' bases.
+
+    Parameters:
+    - seq1, seq2: numpy.ndarray
+        Arrays representing the sequences to compare.
+    - N_value: int
+        Integer representation of 'N' in the sequence arrays.
+
+    Returns:
+    - bool: True if sequences match (ignoring 'N's), False otherwise.
+    """
+    if read_seq.shape != other_seq.shape:
+        return False
+
+    total_match = True
+    for i in range(read_seq.size):
+        if read_seq[i] != other_seq[i]:
+            if read_seq[i] != except_char and other_seq[i] != except_char:
+                return False
+
+    return total_match
 
 
 

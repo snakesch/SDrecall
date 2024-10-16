@@ -1,8 +1,10 @@
 import os
 import subprocess
 import logging
+import tempfile
 
 from pybedtools import BedTool
+
 
 def executeCmd(cmd, logger = logging.getLogger('SDrecall')) -> None:
 
@@ -16,6 +18,18 @@ def executeCmd(cmd, logger = logging.getLogger('SDrecall')) -> None:
         logger.debug(proc.stderr.decode())
 
     return proc.stdout.decode()
+
+
+
+def prepare_tmp_file(tmp_dir="/paedyl01/disk1/yangyxt/test_tmp", **kwargs):
+    try:
+        os.mkdir(tmp_dir)
+    except FileExistsError:
+        pass
+
+    return tempfile.NamedTemporaryFile(dir = tmp_dir, delete = False, **kwargs)
+
+
 
 def is_file_up_to_date(file_to_check, list_of_dependency_files):
     file_to_check_time = os.path.getmtime(file_to_check)

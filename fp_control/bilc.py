@@ -1,114 +1,15 @@
-import numba
+#! /usr/bin/env python3
+
+import logging
 import numpy as np
-import pandas as pd
-from numba import prange, types
 from highspy import Highs
-from collections import defaultdict
-
-from numba_operators import numba_sum
-from bam_ncls import overlapping_reads_generator
 
 
-
-
-
-@numba.njit(types.int32[:](types.int32[:,:], types.float32[:,:], types.int32[:,:]), fastmath=True)
-def assemble_consensus(seq_arrays, qual_arrays, reads):
-    # Every read in the reads can have different length
-    # Find the start and end position of the consensus sequence
-    start_pos = reads[:, 0].min()
-    end_pos = reads[:, 1].max()
-
-    # logger.info(", ".join([f"{r.reference_start}-{r.reference_end}" for r in reads]))
-
-    # Initialize the consensus sequence and quality scores with zeros
-    consensus_seq = np.ones(end_pos - start_pos, dtype=np.int32)
-    consensus_qual = np.full(end_pos - start_pos, 0.1, dtype=np.float32)
-
-    for i in prange(len(seq_arrays)):
-        '''
-        For every iteration,
-        seq and qual should have the same length
-
-        Across iterations,
-        seq and qual are not bound with the same length
-        '''
-        seq = seq_arrays[i]
-        qual = qual_arrays[i]
-        read = reads[i]
-        start = read[0]
-        # assert seq.size == qual.size, f"Found the hap_vector {list(seq)} ({seq.size}bp) and qual_vector {list(qual)} ({qual.size}bp) have different lengths for read {read} at position {start}"
-        # Filter out NaN values
-        non_na_values = numba_sum(seq >= -8)
-
-        nona_seq = np.empty(non_na_values, dtype=np.int32)
-        nona_qual = np.empty(non_na_values, dtype=np.float32)
-
-        for j in prange(non_na_values):
-            nona_seq[j] = seq[j]
-            nona_qual[j] = qual[j]
-
-        seq = nona_seq
-        qual = nona_qual
-
-        # Calculate the relative start and end positions of the current sequence
-        rel_start = start - start_pos
-        rel_end = rel_start + non_na_values
-
-        # Create a mask for positions where the current sequence has higher quality
-        # assert rel_end - rel_start == len(qual), f"Found the relative start and end positions (determined by {len(seq)}) of the current sequence are not equal to the quality vector size {len(qual)} for read {read} at position {start}"
-        # qual here is actually err prob, so smaller the better
-        mask = qual <= consensus_qual[rel_start:rel_end]
-        mask = mask & (qual < 0.1)
-
-        # Update the consensus sequence and quality scores where the current sequence has higher quality
-        consensus_seq[rel_start:rel_end][mask] = seq[mask]
-        consensus_qual[rel_start:rel_end][mask] = qual[mask]
-
-    return consensus_seq
-
-
-
-def extract_continuous_regions_dict(reads):
-    # Sort reads by reference start position
-    reads = sorted(reads, key=lambda read: read.reference_start)
-
-    continuous_regions = {}
-    current_region_reads = []
-    current_start = None
-    current_end = None
-
-    for read in reads:
-        read_start = read.reference_start
-        read_end = read.reference_end
-
-        if current_start is None:
-            # Initialize the first region
-            current_start = read_start
-            current_end = read_end
-            current_region_reads.append(read)
-        else:
-            if read_start <= current_end:
-                # Extend the current region
-                current_end = max(current_end, read_end)
-                current_region_reads.append(read)
-            else:
-                # Save the current region and start a new one
-                continuous_regions[(current_start, current_end)] = current_region_reads
-                current_start = read_start
-                current_end = read_end
-                current_region_reads = [read]
-
-    # Append the last region
-    if current_region_reads:
-        continuous_regions[(current_start, current_end)] = current_region_reads
-
-    return continuous_regions
-
+logger = logging.getLogger("SDrecall")
 
 
 def lp_solve_remained_haplotypes(total_record_df,
-                                 logger):
+                                 logger = logger):
     # total_record_df = total_record_df.loc[np.logical_not(total_record_df["extreme_vard"]), :]
     hap_id_coefficients = total_record_df.groupby(["hap_id"])["coefficient"].mean().reset_index()
     hap_id_coefficients = hap_id_coefficients.merge(total_record_df.loc[:, ["hap_id", "ref_genome_similarities"]], how="left", on="hap_id")
@@ -184,9 +85,9 @@ def lp_solve_remained_haplotypes(total_record_df,
     highs.run()
     solution = highs.getSolution()
     info = highs.getInfo()
-    num_var = highs.getNumCol()
+    # num_var = highs.getNumCol()
     model_status = highs.getModelStatus()
-    basis = highs.getBasis()
+    # basis = highs.getBasis()
 
     # Access and print the constraint matrix
     lp = highs.getLp()

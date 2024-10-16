@@ -28,6 +28,7 @@ from ncls import NCLS
 from collections import defaultdict
 from intervaltree import IntervalTree
 from src.utils import executeCmd, prepare_tmp_file
+from fp_control.identify_misaligned_haps import rank_unique_values, calculate_coefficient
 from fp_control.clique_identify import clique_generator_per_component, find_components_inside_filtered_cliques
 
 bash_utils_hub = "shell_utils.sh"
@@ -43,12 +44,6 @@ logger.addHandler(console_handler)
 
 
 
-
-
-
-
-
-
 def pretty_print_matrix(matrix, precision=3):
     """
     Pretty prints a 2D NumPy array.
@@ -58,20 +53,6 @@ def pretty_print_matrix(matrix, precision=3):
     """
     with np.printoptions(precision=precision, suppress=True):
         return "\n".join(["\t".join(map("{:.3f}".format, row)) for row in matrix])
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
@@ -93,153 +74,6 @@ def extract_var_pos(raw_vcf,
 
 
 
-def record_haplotype_rank(haplotype_dict, mean_read_length = 150):
-    starts = np.empty(len(haplotype_dict), dtype=np.int32)
-    ends = np.empty(len(haplotype_dict), dtype=np.int32)
-    hap_depths = np.empty(len(haplotype_dict), dtype=np.int32)
-    hap_ids = np.empty(len(haplotype_dict), dtype=np.int32)
-    var_counts = np.empty(len(haplotype_dict), dtype=np.int32)
-    indel_counts = np.empty(len(haplotype_dict), dtype=np.int32)
-    total_depth_col = np.empty(len(haplotype_dict), dtype=np.int32)
-
-    i = 0
-    total_depth = 0
-    for hid in haplotype_dict:
-        seq, reads, span, qnames = haplotype_dict[hid]
-        starts[i] = span[0]
-        ends[i] = span[1]
-        depth = len(reads) * mean_read_length/len(seq)
-        hap_depths[i] = depth
-        hap_ids[i] = hid
-        var_counts[i] = count_var(seq)
-        indel_counts[i] = count_continuous_indel_blocks(seq)
-        total_depth += depth
-        i += 1
-
-    total_depth_col.fill(total_depth)
-    return np.column_stack((starts, ends, total_depth_col, hap_ids, hap_depths, var_counts, indel_counts))
-
-
-def group_by_dict_optimized(vprop, vertices):
-    grouped_keys = {}
-    for v, rs in vertices.items():
-        v_idx, q = v
-        label = vprop[v_idx]
-        if label not in grouped_keys:
-            grouped_keys[label] = [[], [], []]
-        grouped_keys[label][0].append(v_idx)
-        grouped_keys[label][1].append(q)
-        grouped_keys[label][2].append(rs)
-    return grouped_keys
-
-
-
-
-@numba.njit
-def rank_unique_values(arr):
-    # Step 1: Extract unique values and sort them
-    unique_values = np.unique(arr)
-
-    # Step 2: Create a mapping from each unique value to its rank
-    value_to_rank = np.empty(unique_values.shape, dtype=np.int32)
-    for i in range(unique_values.size):
-        value_to_rank[i] = i + 1  # Ranks start from 1
-
-    # Step 3: Apply the mapping to create a new array with the ranks
-    ranks = np.empty(arr.shape, dtype=np.int32)
-    for i in range(arr.size):
-        for j in range(unique_values.size):
-            if arr[i] == unique_values[j]:
-                ranks[i] = value_to_rank[j]
-                break
-    return ranks
-
-
-
-@numba.njit(types.float32[:](types.int32[:, :]), fastmath=True)
-def calculate_coefficient(arr2d):
-    # Span size is the weight for later mean value calculation
-    rank = arr2d[:, 7]
-    span = (arr2d[:, 1] - arr2d[:, 0])
-    depth_frac = (1 - arr2d[:, 4]/arr2d[:, 2]).astype(types.float32)
-
-    return rank * span * np.sqrt(depth_frac)
-
-
-
-
-@numba.njit(types.int32[:,:](types.boolean[:]), fastmath=True)
-def extract_true_stretches(bool_array):
-    n = len(bool_array)
-
-    # Pre-allocate maximum possible space (worst case: every element is True)
-    stretches = np.zeros((n, 2), dtype=np.int32)
-    count = 0
-
-    if n == 0:
-        return stretches[:count]
-
-    in_stretch = False
-    start_idx = 0
-
-    for i in range(n):
-        if bool_array[i]:
-            if not in_stretch:
-                in_stretch = True
-                start_idx = i
-        else:
-            if in_stretch:
-                stretches[count, 0] = start_idx
-                stretches[count, 1] = i - 1
-                count += 1
-                in_stretch = False
-
-    # Handle the case where the array ends with a True stretch
-    if in_stretch:
-        stretches[count, 0] = start_idx
-        stretches[count, 1] = n - 1
-        count += 1
-
-    return stretches[:count]
-
-
-
-@numba.njit(types.boolean(types.int32[:]), fastmath=True)
-def judge_misalignment_by_extreme_vardensity(seq):
-    five_vard = count_window_var_density(seq, padding_size = 42)
-    six_vard = count_window_var_density(seq, padding_size = 65)
-    read_vard = count_window_var_density(seq, padding_size = 74)
-    # indel_count = count_continuous_indel_blocks(seq)
-    if numba_sum(five_vard >= 5/85) > 0:
-        select_bool = five_vard >= 5/85
-        # pad the select_bool by 42 to both directions
-        true_segments = extract_true_stretches(select_bool)
-        max_indel_count = 0
-        for i in range(true_segments.shape[0]):
-            start = true_segments[i, 0] - 42
-            end = true_segments[i, 1] + 42
-            five_seq = seq[start:end]
-            indel_count = count_continuous_indel_blocks(five_seq)
-            max_indel_count = max(max_indel_count, indel_count)
-        if max_indel_count > 1:
-            return True
-    elif numba_sum(six_vard >= 6/131) > 0:
-        select_bool = six_vard >= 6/131
-        true_segments = extract_true_stretches(select_bool)
-        max_indel_count = 0
-        for i in range(true_segments.shape[0]):
-            start = true_segments[i, 0] - 65
-            end = true_segments[i, 1] + 65
-            five_seq = seq[start:end]
-            indel_count = count_continuous_indel_blocks(five_seq)
-            max_indel_count = max(max_indel_count, indel_count)
-        if max_indel_count > 1:
-            return True
-    elif numba_sum(read_vard > 11/148) > 0:
-        return True
-    return False
-
-
 
 @numba.njit
 def find_indices(hap_ids, included_hapids):
@@ -250,9 +84,6 @@ def find_indices(hap_ids, included_hapids):
         if len(indices) > 0:
             hapid_indices[i] = indices[0]
     return hapid_indices
-
-
-
 
 
 
@@ -271,27 +102,6 @@ def calulate_coefficient_per_group(record_df, logger=logger):
                                                                        "rank"]].to_numpy(dtype=np.int32))
     # logger.info(f"After calculating the coefficient for this region, the dataframe looks like :\n{record_df[:10].to_string(index=False)}\n")
     return record_df
-
-
-def sweep_region_inspection(input_bam,
-                            output_bed = None,
-                            depth_cutoff = 5,
-                            window_size = 120,
-                            step_size = 30,
-                            logger = logger):
-
-    if output_bed is None:
-        output_bed = prepare_tmp_file(suffix = ".bed").name
-
-    cmd = f"samtools depth {input_bam} | \
-            mawk -F '\\t' '$3 >= {depth_cutoff}{{printf \"%s\\t%s\\t%s\\n\", $1, $2-1, $2;}}' | \
-            bedtools merge -i stdin | \
-            bedtools makewindows -b stdin -w {window_size} -s {step_size} > {output_bed}"
-
-    executeCmd(cmd, logger = logger)
-
-    op_bed_obj = pb.BedTool(output_bed)
-    return op_bed_obj
 
 
 

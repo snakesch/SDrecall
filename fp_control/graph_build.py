@@ -5,24 +5,14 @@ import numpy as np
 import pandas as pd
 
 from intervaltree import IntervalTree
+
+from shell_cmds import executeCmd
 from numba_operators import any_false_numba, custom_all_numba
 from bam_ncls import overlapping_qname_idx_generator
-from fp_control.pairwise_read_inspection import determine_same_haplotype
+from pairwise_read_inspection import determine_same_haplotype
 
 logger = logging.getLogger('SDrecall')
 
-def executeCmd(cmd, logger = logger) -> None:
-
-    proc = subprocess.run(cmd, shell=True, capture_output=True)
-
-    logger.debug(f"Command run:{cmd}")
-    logger.debug(f"Return code: {proc.returncode}")
-
-    err_msg = proc.stderr.decode()
-    if err_msg != "":
-        logger.debug(proc.stderr.decode())
-
-    return proc.stdout.decode()
 
 
 def stat_ad_dict(bam_file, logger = logger):

@@ -1,7 +1,11 @@
 import pysam
+import logging
 import numpy as np
 from ncls import NCLS
 from numba_operators import fast_median, numba_sum
+
+
+logger = logging.getLogger("SDrecall")
 
 
 def overlapping_reads_generator(ncls_dict, read_dict, qname_dict, chrom, start, end):
