@@ -1,6 +1,6 @@
 import logging
 import subprocess
-import graph_tool as gt
+import graph_tool.all as gt
 import numpy as np
 import pandas as pd
 

@@ -1,11 +1,29 @@
 #! /usr/bin/env python3
 
 import logging
+import numba
 import numpy as np
 from highspy import Highs
 
 
 logger = logging.getLogger("SDrecall")
+
+
+
+
+@numba.njit
+def find_indices(hap_ids, included_hapids):
+    '''
+    Deprecated for now
+    '''
+    hapid_indices = np.empty(len(included_hapids), dtype=np.int32)
+    for i in range(len(included_hapids)):
+        hapid = included_hapids[i]
+        indices = np.where(hap_ids == hapid)[0]
+        if len(indices) > 0:
+            hapid_indices[i] = indices[0]
+    return hapid_indices
+
 
 
 def lp_solve_remained_haplotypes(total_record_df,

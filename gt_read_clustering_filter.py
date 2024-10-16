@@ -23,12 +23,14 @@ import numba
 # numba.set_num_threads(4)
 from numba import types, prange, get_num_threads
 from io import StringIO
-from scipy import sparse
-from ncls import NCLS
 from collections import defaultdict
-from intervaltree import IntervalTree
-from src.utils import executeCmd, prepare_tmp_file
-from fp_control.identify_misaligned_haps import rank_unique_values, calculate_coefficient
+
+
+
+from src.utils import executeCmd
+from fp_control.bam_ncls import migrate_bam_to_ncls, calculate_mean_read_length
+from fp_control.graph_build import build_phasing_graph
+from fp_control.identify_misaligned_haps import inspect_by_haplotypes
 from fp_control.phasing import clique_generator_per_component, find_components_inside_filtered_cliques
 
 bash_utils_hub = "shell_utils.sh"
@@ -42,17 +44,6 @@ formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(module)s:%(funcName)s
 console_handler.setFormatter(formatter)
 logger.addHandler(console_handler)
 
-
-
-def pretty_print_matrix(matrix, precision=3):
-    """
-    Pretty prints a 2D NumPy array.
-
-    Args:
-        matrix (numpy.ndarray): The 2D array to be printed.
-    """
-    with np.printoptions(precision=precision, suppress=True):
-        return "\n".join(["\t".join(map("{:.3f}".format, row)) for row in matrix])
 
 
 
@@ -71,39 +62,6 @@ def extract_var_pos(raw_vcf,
     gc.collect()
 
     return df
-
-
-
-
-@numba.njit
-def find_indices(hap_ids, included_hapids):
-    hapid_indices = np.empty(len(included_hapids), dtype=np.int32)
-    for i in range(len(included_hapids)):
-        hapid = included_hapids[i]
-        indices = np.where(hap_ids == hapid)[0]
-        if len(indices) > 0:
-            hapid_indices[i] = indices[0]
-    return hapid_indices
-
-
-
-
-def calulate_coefficient_per_group(record_df, logger=logger):
-    # Generate a rank for haplotypes
-    record_df["rank"] = rank_unique_values(record_df["var_count"].to_numpy() * 50 + record_df["indel_count"].to_numpy())
-    # logger.info(f"Before calculating the coefficient for this region, the dataframe looks like :\n{record_df[:10].to_string(index=False)}\n")
-    record_df["coefficient"] = calculate_coefficient(record_df.loc[:, ["start",
-                                                                       "end",
-                                                                       "total_depth",
-                                                                       "hap_id",
-                                                                       "hap_depth",
-                                                                       "var_count",
-                                                                       "indel_count",
-                                                                       "rank"]].to_numpy(dtype=np.int32))
-    # logger.info(f"After calculating the coefficient for this region, the dataframe looks like :\n{record_df[:10].to_string(index=False)}\n")
-    return record_df
-
-
 
 
 

@@ -299,6 +299,19 @@ def heuristic_find_largest_edge_weight_clique_sparse(matrix_data,
 
 
 
+
+def pretty_print_matrix(matrix, precision=3):
+    """
+    Pretty prints a 2D NumPy array. Only useful for debug logging lines
+
+    Args:
+        matrix (numpy.ndarray): The 2D array to be printed.
+    """
+    with np.printoptions(precision=precision, suppress=True):
+        return "\n".join(["\t".join(map("{:.3f}".format, row)) for row in matrix])
+
+
+
 def bk_algorithm(selected_indices,
                  weight_matrix,
                  cutoff = 0.1,
