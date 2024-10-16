@@ -1,6 +1,8 @@
 import logging
+import gc
 import numpy as np
 import graph_tool.all as gt
+from numba import get_num_threads
 from collections import defaultdict
 
 
@@ -11,7 +13,39 @@ from numba_operators import numba_isin, \
 							apply_index_mask
 
 
+
+"""
+Haplotype Phasing Module for Read Clustering
+
+This module implements the steps of haplotype phasing by grouping reads
+into distinct haplotypes using graph-based methods. It works in conjunction with
+the Bron-Kerbosch algorithm implementation (bk_algorithm.py) and follows the graph building
+module (graph_build.py).
+
+Key features:
+- Utilizes graph-tool library for efficient graph operations
+- Implements a clique-based approach for identifying haplotype clusters
+- Perform twice BK algorithm to balance accuracy and sensitivity
+
+Main functions:
+- clique_generator_per_component: Identifies cliques within a given component
+- find_components_inside_filtered_cliques: Removing zero weight edges and identifying components inside the cliques
+
+Dependencies:
+- graph_tool
+- numpy
+- bk_algorithm (custom module for Bron-Kerbosch algorithm)
+- numba_operators (custom module for optimized operations)
+
+This module contains the high-level framework of haplotype phasing pipeline, taking the
+phasing graph and weight matrix as input and producing the final haplotype
+assignments for each read.
+"""
+
+
+
 logger = logging.getLogger("SDrecall")
+
 
 
 def graph_vertex_iter(vertex_indices, graph):
@@ -92,11 +126,6 @@ def find_components_inside_filtered_cliques(final_cliques,
     # final_components = defaultdict(int)
     # last_c_idx = 0
 
-    # vis_qnames = ["HISEQ1:59:HB66DADXX:1:1110:1670:77678:PC0",
-    #               "HISEQ1:63:HB65FADXX:2:2214:15844:10511:PC0",
-    #               "HISEQ1:61:HB66HADXX:1:1213:7009:61371:PC0",
-    #               "HISEQ1:63:HB65FADXX:1:1114:2865:3570:PC357"]
-
     haplotype_idx = 0
     for clique in final_cliques:
         # Prepare a boolean v property map used for vfilt
@@ -134,3 +163,36 @@ def find_components_inside_filtered_cliques(final_cliques,
 
     # logger.info(f"This is the final components: {final_components}")
     return final_components
+
+
+
+def phasing_realigned_reads(phased_graph, weight_matrix, edge_weight_cutoff, logger = logger):
+    logger.info(f"Now start finding haplotypes in the setup weight matrix, the numba parallel threads are set to {get_num_threads()}")
+    total_cliques = clique_generator_per_component(phased_graph,
+                                                    weight_matrix,
+                                                    ew_cutoff = edge_weight_cutoff,
+                                                    logger = logger)
+
+    total_cliques = list(total_cliques)
+
+    # clique_sep_component_idx = 0
+    qname_hap_info = defaultdict(int)
+    # qname_hap_info is a map (qname -> haplotype index)
+    qname_hap_info = find_components_inside_filtered_cliques( total_cliques,
+                                                              phased_graph,
+                                                              qname_hap_info,
+                                                              weight_matrix,
+                                                              edge_weight_cutoff,
+                                                              logger = logger )
+    gc.collect()
+
+    logger.info(f"The final components are {qname_hap_info}")
+    hap_qname_info = defaultdict(set)
+    # hap_qname_info is a map (haplotype index -> set of qnames)
+    for vid, hid in qname_hap_info.items():
+        qname = phased_graph.vp.qname[vid]
+        hap_qname_info[hid].add(qname)
+    logger.info(f"The final haplotype clusters are {hap_qname_info}")
+
+    # Return the maps for both directions
+    return qname_hap_info, hap_qname_info

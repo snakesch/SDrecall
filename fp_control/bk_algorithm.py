@@ -9,20 +9,18 @@ from numba_operators import numba_and, numba_sum
 
 
 """
-Bron-Kerbosch Algorithm Implementation for Clique Finding in Phasing Graphs
+Bron-Kerbosch Algorithm (Adapted by implementing an edge weight cutoff when extending cliques) Implementation for Clique Finding in Phasing Graphs
 
 This module implements an optimized version of the Bron-Kerbosch algorithm for finding
 maximal cliques in phasing graphs. It is specifically designed to work with sparse
 matrices representing edge weights between read pairs in haplotype phasing.
 
 Key features:
-- Efficient clique finding in large, sparse graphs
-- Parallelized operations for improved performance on large datasets
-- Customized for haplotype phasing applications
+- Efficient clique finding in large, sparse adjacency matrix
 - Integrates with numba for just-in-time compilation and performance optimization
 
 Main function:
-- bk_algorithm: Implements the core Bron-Kerbosch algorithm, yielding cliques iteratively
+- bk_algorithm: Implements the core Bron-Kerbosch algorithm (with minor adaptations to implement an edge weight cutoff when extending cliques), yielding cliques iteratively
 
 Helper functions:
 - Various numba-optimized functions for mask creation, matrix operations, and clique finding
@@ -278,13 +276,14 @@ def heuristic_find_largest_edge_weight_clique_sparse(matrix_data,
                                                      cutoff=0.1):
     # assert sparse.isspmatrix_csr(weight_matrix), "Input matrix must be in CSR format"
     '''
-    This function is to find the largest clique in a sparse matrix.
+    This function is to find the largest clique in a sparse matrix (adjacency matrix recording edge weights as cell values)
     '''
     if matrix_size > 5000:
         parallel = True
     else:
         parallel = False
 
+    # First, for every vertex (row) in the range specified by initial_index_mask, find the largest edge weight it connects
     if parallel:
         row_wise_maxs = para_row_wise_max_with_mask_sparse(matrix_data,
                                                            matrix_indices,
@@ -303,32 +302,46 @@ def heuristic_find_largest_edge_weight_clique_sparse(matrix_data,
     select_indices = np.empty(matrix_size, dtype=np.int32)
     # print(len(row_wise_maxs))
 
+    # Among all the row-wise max values, find the row index with largest value (the vertex connecting with the highest weight edge)
+    # Also make sure that the vertex is only selected among the range specified by initial_index_mask
     max_row_ind, max_value = numba_max_idx_mem(row_wise_maxs, initial_index_mask)
 
-    # print(max_row_ind, max_value)
+    # Copy the initial_index_mask to index_mask, and this index_mask will be updated in the while loop below
     index_mask = initial_index_mask.copy()
+    # Record the index of the first selected vertex
     select_indices[0] = max_row_ind
 
+    # Below, four variables recording the data of the first row (edge weights connected to the vertex) are initialized
     max_row_start = matrix_indptr[max_row_ind]
     max_row_end = matrix_indptr[max_row_ind+1]
     max_row_data = matrix_data[max_row_start: max_row_end]
     max_row_cols = matrix_indices[max_row_start: max_row_end]
 
+    # Identify that which vertices (columns)do not have an edge (value -1) connect to the first selected vertex (row)
     neg_1_mask = efficient_mask(max_row_data,
                                 max_row_cols,
                                 matrix_size,
                                 -1.0)
 
-    neg_1_mask[max_row_ind] = False  # Exclude the element itself
+    neg_1_mask[max_row_ind] = False  # Exclude the first selected vertex itself
+    # Update the index_mask by excluding the vertices that are not connected to the first selected vertex
+    # Remained vertices are the candidates for the expansion of the clique
     index_mask = numba_and(index_mask, neg_1_mask)
 
     i = 1
+    # Until the total consumption of the index_mask
     while np.any(index_mask):
+        # commented out print statements which used for debugging
         # print(f"max_row_ind is {max_row_ind}, while the total array size is {matrix_size}, and the index_mask sum is {np.sum(index_mask)}")
+
+        # Find the vertex (column index) with the highest weighted edge connected to the vertex specified by max_row_ind (row index)
         next_max_ind, next_max_value = efficient_row_max(max_row_data,
                                                          max_row_cols,
                                                          index_mask)
 
+        # There is the major adaptation to the original Bron-Kerbosch algorithm
+        # If the edge weight between the selected vertex and the extending vertex is not high enough, there is a chance that two read pairs from two haplotypes share identical sequence within their overlappings. Which is a False Positive case.
+        # So, if the next selected vertex has edge weight <= cutoff (meaning the current clique member does not contain any edges with a weight larger than the cutoff), then we need to find another extending edge from the previous clique members
         if next_max_value <= cutoff:
             trial = 0
             while next_max_value <= cutoff and trial < i:

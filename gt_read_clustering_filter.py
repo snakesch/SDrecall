@@ -31,7 +31,7 @@ from src.utils import executeCmd
 from fp_control.bam_ncls import migrate_bam_to_ncls, calculate_mean_read_length
 from fp_control.graph_build import build_phasing_graph
 from fp_control.identify_misaligned_haps import inspect_by_haplotypes
-from fp_control.phasing import clique_generator_per_component, find_components_inside_filtered_cliques
+from fp_control.phasing import phasing_realigned_reads
 
 bash_utils_hub = "shell_utils.sh"
 
@@ -170,30 +170,10 @@ def main_function(bam,
     phased_graph.save(bam_graph)
 
     # Now we need to do local phasing for each component in the graph. (Finding non-overlapping high edge weight cliques inside each component iteratively)
-    logger.info(f"Now start finding haplotypes in the setup weight matrix, the numba parallel threads are set to {get_num_threads()}")
-    total_cliques = clique_generator_per_component(phased_graph,
-                                                    weight_matrix,
-                                                    ew_cutoff = edge_weight_cutoff,
-                                                    logger = logger)
-
-    total_cliques = list(total_cliques)
-
-    # clique_sep_component_idx = 0
-    qname_hap_info = defaultdict(int)
-    qname_hap_info = find_components_inside_filtered_cliques( total_cliques,
-                                                              phased_graph,
-                                                              qname_hap_info,
-                                                              weight_matrix,
-                                                              edge_weight_cutoff,
-                                                              logger = logger )
-    gc.collect()
-
-    logger.info(f"The final components are {qname_hap_info}")
-    hap_qname_info = defaultdict(set)
-    for vid, hid in qname_hap_info.items():
-        qname = phased_graph.vp.qname[vid]
-        hap_qname_info[hid].add(qname)
-    logger.info(f"The final haplotype clusters are {hap_qname_info}")
+    qname_hap_info, hap_qname_info = phasing_realigned_reads(phased_graph,
+                                                             weight_matrix,
+                                                             edge_weight_cutoff,
+                                                             logger = logger)
 
     # Inspect the raw BAM corresponding variants to get the high density regions
     # It's like active region identification for GATK HC

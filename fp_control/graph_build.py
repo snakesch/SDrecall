@@ -11,11 +11,16 @@ from numba_operators import any_false_numba, custom_all_numba
 from bam_ncls import overlapping_qname_idx_generator
 from pairwise_read_inspection import determine_same_haplotype
 
+
 logger = logging.getLogger('SDrecall')
 
 
 
 def stat_ad_dict(bam_file, logger = logger):
+    '''
+    This function is to extract the allele depth (AD) information from the BAM file
+    The AD info is stored in a nested dictionary, which is then used to calculate the edge weights in the graph
+    '''
     bam_ad_file = f"{bam_file}.ad"
     cmd = f"""bcftools mpileup -Ou --no-reference -a FORMAT/AD --indels-2.0 -q 10 -Q 15 {bam_file} | \
               bcftools query -f '%CHROM\\t%POS\\t%ALT\\t[%AD]\\n' - > {bam_ad_file}"""
@@ -87,6 +92,9 @@ def check_edge(u, v, adj_set):
 
 
 def get_overlap_intervals(read_pair1, read_pair2):
+    '''
+    This function is to extract the overlapping intervals between two pairs of reads
+    '''
     overlap_intervals = {}
 
     for r1 in read_pair1:
