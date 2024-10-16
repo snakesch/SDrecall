@@ -29,7 +29,7 @@ from collections import defaultdict
 from intervaltree import IntervalTree
 from src.utils import executeCmd, prepare_tmp_file
 from fp_control.identify_misaligned_haps import rank_unique_values, calculate_coefficient
-from fp_control.clique_identify import clique_generator_per_component, find_components_inside_filtered_cliques
+from fp_control.phasing import clique_generator_per_component, find_components_inside_filtered_cliques
 
 bash_utils_hub = "shell_utils.sh"
 
