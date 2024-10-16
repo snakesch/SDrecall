@@ -345,6 +345,7 @@ def heuristic_find_largest_edge_weight_clique_sparse(matrix_data,
         if next_max_value <= cutoff:
             trial = 0
             while next_max_value <= cutoff and trial < i:
+                # Try to find another extending edge (and its connected vertex) from the previous clique members (specified by select_indices)
                 select_indice = select_indices[trial]
                 select_row_start = matrix_indptr[select_indice]
                 select_row_end = matrix_indptr[select_indice+1]
