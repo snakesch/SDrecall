@@ -8,27 +8,18 @@ import graph_tool.all as gt
 from intervaltree import Interval, IntervalTree
 from pybedtools import BedTool
 
-from src.utils import string_to_tuple
-
 logger = logging.getLogger("SDrecall")
 
-class HashableGraph:
-    def __init__(self, graph):
-        self.graph = graph
 
-    def __hash__(self):
-        node_data = sorted(self.graph.nodes(data=True))
-        edge_data = sorted(self.graph.edges(data=True))
-        return hash((tuple(node_data), tuple(edge_data)))
+def string_to_tuple(string):
+    """Convert a string representation of a tuple into an actual tuple."""
+    import ast
+    try:
+        return ast.literal_eval(string)
+    except (ValueError, SyntaxError) as e:
+        raise ValueError(f"Failed to convert string to tuple: {string}") from e
 
-    def __eq__(self, other):
-        return hash(self) == hash(other)
 
-    def __getattr__(self, name):
-        return getattr(self.graph, name)
-
-    def to_graph(self):
-        return self.graph
 
 def graph_to_sorted_bedtool(G):
     # Extract nodes from the graph and convert them into bed format
@@ -38,6 +29,7 @@ def graph_to_sorted_bedtool(G):
     bedtool = BedTool("\n".join(bed_format), from_string=True).sort()
 
     return bedtool
+
 
 def compose_PO_graph_per_chr(args):
     chrom, sd_data, graph_file_path = args

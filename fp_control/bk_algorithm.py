@@ -1,5 +1,9 @@
-from scipy import sparse
+#! /usr/bin/env python3
+import numba
 import numpy as np
+from scipy import sparse
+from numba import prange, types
+
 
 from numba_operators import numba_and, \
                             numba_sum, \
@@ -9,6 +13,27 @@ from numba_operators import numba_and, \
                             numba_max_idx_mem, \
                             create_default_true_mask, \
                             para_create_default_true_mask
+
+
+
+@numba.njit(types.Tuple((types.float32[:], types.int32[:], types.int32[:], types.int32))(types.float32[:], types.int32[:], types.int32[:], types.boolean[:]), fastmath=True)
+def sparse_mask_selection(data, indices, indptr, mask):
+    new_size = numba_sum(mask)
+    new_indptr = np.empty(new_size + 1, dtype = np.int32)
+    new_data = np.empty(new_size, dtype = np.float32)
+    new_indices = np.empty(new_size, dtype = np.int32)
+    row_idx = 0
+    new_indptr[row_idx] = 0
+    for i in range(len(mask)):
+        if mask[i]:
+            start, end = indptr[i], indptr[i+1]
+            for j in range(start, end):
+                if mask[indices[j]]:
+                    new_data[row_idx] = data[j]
+                    new_indices[row_idx] = numba_sum(mask[:indices[j]])
+            new_indptr[row_idx + 1] = len(new_data)
+            row_idx += 1
+    return new_data, new_indices, new_indptr, new_size
 
 
 

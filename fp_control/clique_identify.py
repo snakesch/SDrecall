@@ -5,8 +5,14 @@ from collections import defaultdict
 from numba_operators import numba_isin, \
 							numba_and, \
 							numba_sum, \
-							apply_index_mask, \
-							bk_algorithm
+							apply_index_mask
+
+
+
+def graph_vertex_iter(vertex_indices, graph):
+    for vid in vertex_indices:
+        yield graph.vertex(vid)
+
 
 
 def clique_generator_per_component(graph, weight_matrix, ew_cutoff = 0.101, logger = logger):

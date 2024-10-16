@@ -1,7 +1,8 @@
+import numpy as np
 import numba
 # numba.config.THREADING_LAYER = 'omp'
 # numba.set_num_threads(4)
-from numba import types, prange, get_num_threads
+from numba import types, prange
 
 
 @numba.njit
@@ -18,9 +19,11 @@ def numba_sum(data):
 def numba_and(arr1, arr2):
     return np.logical_and(arr1, arr2)
 
+
 @numba.njit(types.bool_[:](types.bool_[:]), fastmath=True)
 def numba_not(arr):
     return np.logical_not(arr)
+
 
 @numba.njit(types.float32(types.float32[:], types.boolean[:]), fastmath=True)
 def numba_max(data, index_mask=None):
@@ -28,8 +31,6 @@ def numba_max(data, index_mask=None):
         return np.max(data[index_mask])
     else:
         return np.max(data)
-
-
 
 
 @numba.njit(types.Tuple((types.int32, types.float32))(types.float32[:], types.boolean[:]), fastmath=True)
@@ -73,6 +74,7 @@ def any_false_numba(array):
             return True
     return has_false
 
+
 @numba.njit(parallel=True)
 def numba_isin(arr, uniq_vals):
     '''
@@ -84,6 +86,7 @@ def numba_isin(arr, uniq_vals):
         if arr[i] in uniq_set:
             mask[i] = True
     return mask
+
 
 @numba.njit(types.boolean[:](types.int32, types.int32[:]), fastmath=True)
 def boolean_mask(total_rows, row_indices):
@@ -99,6 +102,7 @@ def reverse_boolean_mask(total_rows, row_indices):
     for index in row_indices:
         boolean_mask[index] = False
     return boolean_mask
+
 
 @numba.njit(types.float32[:,:](types.float32[:,:], types.boolean[:]), fastmath=True)
 def numba_ix(matrix, mask):
@@ -123,81 +127,6 @@ def numba_max_idx_mem(data, index_mask=None):
                     max_val = data[i]
 
     return max_idx, max_val
-
-
-@numba.njit(types.int32(types.int32[:]), fastmath=True)
-def count_continuous_indel_blocks(array):
-    """
-    This function counts the number of continuous (consecutive) blocks of negative numbers in a 1D array.
-
-    Args:
-    array (list or numpy array): Input array containing numbers.
-
-    Returns:
-    int: The number of continuous negative blocks.
-    """
-    is_var = (array == -6) | (array > 1)
-    is_var_size = is_var.size
-    if is_var_size == 0:
-        return 0
-
-    # Add False at the start and end to correctly count the transitions at the boundaries
-    extended = np.empty(is_var_size + 2, dtype=np.bool_)
-    extended[0] = False
-    extended[-1] = False
-    extended[1:-1] = is_var
-
-    # Count drops from True to False which represent the end of a block of True values
-    # For this method to work. Both ends cannot be True
-    not_bools = numba_not(extended[1:])
-    block_bools = numba_and(extended[:-1], not_bools)
-    block_count = numba_sum(block_bools)
-
-    return block_count
-
-
-
-@numba.njit(types.int32(types.bool_[:]), fastmath=True)
-def count_continuous_blocks(array):
-    """
-    This function counts the number of continuous (consecutive) blocks of True values in a 1D boolean array.
-
-    Args:
-    array (list or numpy array): Input array containing numbers.
-
-    Returns:
-    int: The number of continuous negative blocks.
-    """
-    is_var = array
-    is_var_size = is_var.size
-    if is_var_size == 0:
-        return 0
-
-    # Add False at the start and end to correctly count the transitions at the boundaries
-    extended = np.empty(is_var_size + 2, dtype=np.bool_)
-    extended[0] = False
-    extended[-1] = False
-    extended[1:-1] = is_var
-
-    # Count drops from True to False which represent the end of a block of True values
-    # For this method to work. Both ends cannot be True
-    not_bools = numba_not(extended[1:])
-    block_bools = numba_and(extended[:-1], not_bools)
-    block_count = numba_sum(block_bools)
-
-    return block_count
-
-
-
-@numba.njit(types.int32(types.int32[:]), fastmath=True)
-def count_snv(array):
-    snv_bools = array == -4
-    return count_continuous_blocks(snv_bools)
-
-
-@numba.njit(types.int32(types.int32[:]), fastmath=True)
-def count_var(array):
-    return count_snv(array) + count_continuous_indel_blocks(array)
 
 
 
@@ -271,7 +200,6 @@ def efficient_mask(sarr_data,
 
 
 
-
 @numba.njit(types.Tuple((types.int32, types.float32))(types.float32[:], types.int32[:], types.boolean[:]), fastmath=True)
 def efficient_row_max(sarr_data,
                       sarr_indices,
@@ -298,34 +226,6 @@ def efficient_row_max(sarr_data,
     return -1, -2.0
 
 
-
-@numba.njit(types.Tuple((types.int32, types.int32))(types.int32[:], types.int32[:]), fastmath=True)
-def ref_genome_similarity(query_read_vector,
-                          genomic_hap_vector):
-    '''
-    This function is used to identify the haplotypes that the query read vector belongs to.
-    The genomic_hap_vectors is a 2D numpy array
-    The query_read_vector is a 1D numpy array
-    The max_vector_distance is a float reflecting the max manhattan distance between a read and a genomic haplotype
-    '''
-    # assert len(genomic_hap_vectors.shape) == 2, f"The input genomic haplotype vectors should be a 2D numpy array, but the actual input is {genomic_hap_vectors}"
-    # Remove the reference haplotype first
-    if numba_sum(genomic_hap_vector != 1) == 0:
-        return 0, 0
-
-    # ref_read_vector = np.ones(query_read_vector.size, dtype=np.int32)
-    # Calculate the Manhattan distance between the query read vector and each genomic haplotype
-    alt_var_size = count_continuous_blocks(genomic_hap_vector != query_read_vector)
-    var_size = count_var(query_read_vector)
-
-    return var_size, alt_var_size
-
-
-
-
-@numba.njit(types.bool_[:](types.int32[:]), fastmath=True)
-def get_indel_bools(seq_arr):
-    return (seq_arr > 1) | (seq_arr == -6)
 
 
 @numba.njit
@@ -389,6 +289,7 @@ def row_wise_max_with_mask_nb(matrix, index_mask, mask_values):
         row_max_values[i] = max_val if max_val != -np.inf else 0
 
     return row_max_values
+
 
 
 @numba.njit(types.float32[:](types.float32[:, :], types.boolean[:], types.float32[:]), fastmath=True, parallel=True)
