@@ -8,6 +8,38 @@ from numba import prange, types
 from numba_operators import numba_and, numba_sum
 
 
+"""
+Bron-Kerbosch Algorithm Implementation for Clique Finding in Phasing Graphs
+
+This module implements an optimized version of the Bron-Kerbosch algorithm for finding
+maximal cliques in phasing graphs. It is specifically designed to work with sparse
+matrices representing edge weights between read pairs in haplotype phasing.
+
+Key features:
+- Efficient clique finding in large, sparse graphs
+- Parallelized operations for improved performance on large datasets
+- Customized for haplotype phasing applications
+- Integrates with numba for just-in-time compilation and performance optimization
+
+Main function:
+- bk_algorithm: Implements the core Bron-Kerbosch algorithm, yielding cliques iteratively
+
+Helper functions:
+- Various numba-optimized functions for mask creation, matrix operations, and clique finding
+
+Dependencies:
+- numba
+- numpy
+- scipy (for sparse matrix operations)
+
+This module is a critical component in the haplotype phasing pipeline, working in
+conjunction with graph_build.py and being a part of phasing.py to identify and group reads belonging
+to the same haplotype.
+
+The core principle of consideration of using cliques is that we do not allow any found evidence to reject the possiblity of sharing haplotype between any pair of grouped read pairs.
+"""
+
+
 logger = logging.getLogger("SDrecall")
 
 
@@ -187,6 +219,51 @@ def para_row_wise_max_with_mask_sparse(matrix_data,
 
         if valid_data.size > 0:
             row_max_values[i] = np.max(valid_data)
+
+    return row_max_values
+
+
+
+
+@numba.njit(types.float32[:](types.float32[:, :], types.boolean[:], types.float32[:]), fastmath=True)
+def row_wise_max_with_mask_nb(matrix, index_mask, mask_values):
+    '''
+    Deprecated, using sparse matrix now
+    '''
+    row_max_values = np.zeros(matrix.shape[0], dtype=np.float32)
+
+    for i in range(matrix.shape[0]):
+        if not index_mask[i]:
+            continue
+
+        max_val = -np.inf
+        for j in range(matrix.shape[1]):
+            if index_mask[j] and matrix[i, j] != mask_values[0] and i != j:
+                max_val = max(max_val, matrix[i, j])
+
+        row_max_values[i] = max_val if max_val != -np.inf else 0
+
+    return row_max_values
+
+
+
+@numba.njit(types.float32[:](types.float32[:, :], types.boolean[:], types.float32[:]), fastmath=True, parallel=True)
+def para_row_wise_max_with_mask_nb(matrix, index_mask, mask_values):
+    '''
+    Deprecated, using sparse matrix now
+    '''
+    row_max_values = np.zeros(matrix.shape[0], dtype=np.float32)
+
+    for i in numba.prange(matrix.shape[0]):
+        if not index_mask[i]:
+            continue
+
+        max_val = -np.inf
+        for j in range(matrix.shape[1]):
+            if index_mask[j] and matrix[i, j] != mask_values[0] and i != j:
+                max_val = max(max_val, matrix[i, j])
+
+        row_max_values[i] = max_val if max_val != -np.inf else 0
 
     return row_max_values
 

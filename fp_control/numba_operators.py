@@ -1,7 +1,5 @@
 import numpy as np
 import numba
-# numba.config.THREADING_LAYER = 'omp'
-# numba.set_num_threads(4)
 from numba import types, prange
 
 
@@ -112,41 +110,3 @@ def numba_diff_indices(arr1, arr2):
     """
     return np.where(arr1 != arr2)[0]
 
-
-
-
-@numba.njit(types.float32[:](types.float32[:, :], types.boolean[:], types.float32[:]), fastmath=True)
-def row_wise_max_with_mask_nb(matrix, index_mask, mask_values):
-    row_max_values = np.zeros(matrix.shape[0], dtype=np.float32)
-
-    for i in range(matrix.shape[0]):
-        if not index_mask[i]:
-            continue
-
-        max_val = -np.inf
-        for j in range(matrix.shape[1]):
-            if index_mask[j] and matrix[i, j] != mask_values[0] and i != j:
-                max_val = max(max_val, matrix[i, j])
-
-        row_max_values[i] = max_val if max_val != -np.inf else 0
-
-    return row_max_values
-
-
-
-@numba.njit(types.float32[:](types.float32[:, :], types.boolean[:], types.float32[:]), fastmath=True, parallel=True)
-def para_row_wise_max_with_mask_nb(matrix, index_mask, mask_values):
-    row_max_values = np.zeros(matrix.shape[0], dtype=np.float32)
-
-    for i in numba.prange(matrix.shape[0]):
-        if not index_mask[i]:
-            continue
-
-        max_val = -np.inf
-        for j in range(matrix.shape[1]):
-            if index_mask[j] and matrix[i, j] != mask_values[0] and i != j:
-                max_val = max(max_val, matrix[i, j])
-
-        row_max_values[i] = max_val if max_val != -np.inf else 0
-
-    return row_max_values

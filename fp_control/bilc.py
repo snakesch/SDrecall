@@ -6,8 +6,44 @@ import numpy as np
 from highspy import Highs
 
 
-logger = logging.getLogger("SDrecall")
+"""
+This module implements a Binary Integer Linear Constraint (BILC) Programming approach to select
+optimal haplotypes from a set of candidate haplotypes.
 
+It uses the HiGHS solver (open source) to solve the BILC problem.
+
+The main function, lp_solve_remained_haplotypes, takes a DataFrame of haplotype
+records and constructs a BILC problem to select the best subset of haplotypes.
+The objective is to maximize the sum of haplotype coefficients while satisfying
+constraints on the number of selected haplotypes per genomic region.
+
+Key Features:
+- Constructs a BILC problem from haplotype records
+- Uses HiGHS solver for efficient solving of large-scale BILC problems
+- Handles constraints on haplotype selection per genomic region
+- Every haplotype is treated as a binary variable, and an coefficient is assigned to it which represents the general likelihood that the haplotype is misaligned
+
+Functions:
+- find_indices: Helper function to find indices (currently deprecated)
+- lp_solve_remained_haplotypes: Main function to solve the haplotype selection problem
+
+Dependencies:
+- numpy
+- pandas
+- highspy (HiGHS solver Python interface)
+- numba (for potential performance optimizations)
+
+Usage:
+This script only contains the HiGHs solver part used in a bigger workflow to identify misaligned haplotypes.
+
+Note:
+This implementation assumes that the input DataFrame has specific columns including
+'hap_id', 'coefficient', 'ref_genome_similarities', 'chrom', 'start', 'end', and 'rank'.
+Ensure that the input data is properly formatted before using this module.
+"""
+
+
+logger = logging.getLogger("SDrecall")
 
 
 
