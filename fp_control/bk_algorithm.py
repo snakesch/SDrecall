@@ -438,12 +438,17 @@ def bk_algorithm(selected_indices,
 
     assert selected_indices.size == matrix_size, f"The selected indices size is {selected_indices.size} and the matrix size is {matrix_size}"
 
+    # This while loop is iteratively finding the largest clique in a component of the graph
+    # The component members are specified by selected_indices (an array of indices).
+    # The index_mask is the boolean array specifying which vertices are in the component and remained to be assigned to a clique.
     while True:
         logger.info(f"Start to find the largest clique inside a subgraph of {index_mask.size} nodes, left {numba_sum(index_mask)} nodes to be inspected.")
         if matrix_size == 0:
             logger.warning(f"Found that in this iteration, the subgraph size is already 0")
             break
 
+        # This function just return the indices of the vertices that composed the largest clique.
+        # The new identified clique members are masked. Remained vertices are the candidates for the next iteration
         clique_indices, drop_mask = heuristic_find_largest_edge_weight_clique_sparse(sparse_matrix_data,
                                                                                      sparse_matrix_indices,
                                                                                      sparse_matrix_indptr,
