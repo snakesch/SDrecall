@@ -356,16 +356,22 @@ def heuristic_find_largest_edge_weight_clique_sparse(matrix_data,
                                                                  index_mask)
                 trial += 1
             if next_max_value <= cutoff and trial >= i:
-                # The two condition cant be satisfied at the same time, which it will stay in while loop
+                # If we exhaust all the previous clique members and still cannot find a proper edge to extend the current clique, then we break (the outer while loop) and end the extending of this clique
                 break
             else:
+                # Now we complete the while loop and find a proper edge to extend the current clique
+                # Assign the next_max_ind to max_row_ind
                 max_row_ind = next_max_ind
         else:
+            # If the edge weight is larger than the cutoff, then we assign the next_max_ind to max_row_ind
             max_row_ind = next_max_ind
 
+        # i is initialized as 1, which corresponds to the second clique member. The first clique member is already recorded in select_indices[0] before the while loop
         select_indices[i] = max_row_ind
+        # Now we have found the next clique member, move to the next index
         i += 1
 
+        # If we have inspected all the vertices, then we break the while loop
         if i >= matrix_size:
             break
 
@@ -374,12 +380,15 @@ def heuristic_find_largest_edge_weight_clique_sparse(matrix_data,
         max_row_data = matrix_data[max_row_start: max_row_end]
         max_row_cols = matrix_indices[max_row_start: max_row_end]
 
+        # Now extract the vertices (columns) that are not connected to the current clique member (row)
         neg_1_mask = efficient_mask(max_row_data,
                                     max_row_cols,
                                     matrix_size,
                                     -1.0)
 
-        neg_1_mask[max_row_ind] = False  # Exclude the element itself
+        neg_1_mask[max_row_ind] = False  # Exclude the current clique member itself
+        # Update the index_mask by excluding the vertices that are not connected to the current clique member
+        # Then move to the next extending search iteration
         index_mask = numba_and(index_mask, neg_1_mask)
 
 
