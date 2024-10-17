@@ -417,9 +417,18 @@ def bk_algorithm(selected_indices,
                  cutoff = 0.1,
                  qname_dict = {},
                  logger = logger):
-    # Generate a index_mask array for the indices of rows in the weight_matrix that the indices are in the initial_vert_indices
-    # weight_matrix = weight_matrix[np.ix_(initial_index_mask, initial_index_mask)]
-    # weight_matrix[np.ix_(initial_index_mask, initial_index_mask)]
+    '''
+    This generator is to find the largest cliques in a subgraph of the original graph, the subgraph is a component in the original graph.
+    Parameters:
+    selected_indices: the indices of the vertices in the original graph that are in the component
+    weight_matrix: the adjacency matrix of the component
+    cutoff: the cutoff value for the edge weight, if the edge weight is larger than the cutoff, then the edge is considered as a candidate for the largest clique
+    qname_dict: the dictionary of the qnames of the vertices
+    logger: the logger for logging the information
+
+    Yields:
+    cliques: set of vertex indices in the original graph that are assigned to the largest clique
+    '''
     if weight_matrix.shape[0] > 1000000:
         parallel = True
     else:
@@ -447,7 +456,7 @@ def bk_algorithm(selected_indices,
             logger.warning(f"Found that in this iteration, the subgraph size is already 0")
             break
 
-        # This function just return the indices of the vertices that composed the largest clique.
+        # This function just return the indices of the vertices (in the subgraph, aka the component) that composed the largest clique.
         # The new identified clique members are masked. Remained vertices are the candidates for the next iteration
         clique_indices, drop_mask = heuristic_find_largest_edge_weight_clique_sparse(sparse_matrix_data,
                                                                                      sparse_matrix_indices,
@@ -457,6 +466,16 @@ def bk_algorithm(selected_indices,
                                                                                      cutoff = cutoff)
         # This is utter important. It makes sure the returned vertex index are in the original total graph
         assert np.max(clique_indices) < selected_indices.size, f"The returned clique indices are out of the range of the selected indices. The max index is {np.max(clique_indices)} and the size of selected indices is {selected_indices.size}"
+        '''
+        ************************CRITICAL************************
+        Below is the command used to convert the indices in the subgraph to the indices in the original graph
+        For example:
+        selected_indices = np.array([2, 5, 8, 9, 12, 10])
+        clique_indices = np.array([0, 3, 4])
+        raw_clique_indices = selected_indices[clique_indices]
+        raw_clique_indices = [2, 9, 12] (np array)
+        ************************CRITICAL************************
+        '''
         raw_clique_indices = selected_indices[clique_indices]
         # logger.info(f"The returned qname idx are  {raw_clique_indices.tolist()}")
         # logger.info(f"Found a clique containing qnames {[(qname_dict[qname_idx], qname_idx) for qname_idx in raw_clique_indices]} composing the largest clique in the subgraph. Remaining {drop_mask.sum()} nodes in this iteration. ")

@@ -55,6 +55,27 @@ def graph_vertex_iter(vertex_indices, graph):
 
 
 def clique_generator_per_component(graph, weight_matrix, ew_cutoff = 0.101, logger = logger):
+    '''
+    This function is to find the largest cliques in each component of the graph
+
+    - One critical consideration is that when extending cliques, if we allow two read pairs with low edge weight to be grouped into the same clique, there is a significant chance that this call is a false positive.
+    - Low edge weight means the overlapping region between two read pairs does not contain sufficient variants to confidently determine the phase.
+    - The clique identification is performed by the BK algorithm. Which starts with a node and extend cliques as much as possible.
+    - When applying an edge weight cutoff during the clique extension process, we make sure the cliques identified are all high confidence.
+    - This ensures that phasing accuracy is high. But for read pairs containing less or no variants, they are no connected by edges with sufficiently high edge weight, leading to exclusion from any clique extensions.
+    - This also means for haplotypes closer to the reference genome, their reads are less likely to be grouped into the clique, thus stay fragmented.
+
+    - To address this issue, we perform twice BK algorithm with two levels of edge weight cutoffs.
+    - In the first round, we apply an edge weight cutoff to ensure two read pairs share at least two SNVs or 1 indels.
+    - In the second round, we apply an edge weight cutoff to ensure two read pairs share at least one SNV.
+    - After the first round, during the second round, the remaining fragmented read pairs are then grouped into cliques, to increase the phasing sensitivity a little bit for read pairs carrying less variants.
+
+    As to the read pairs carrying no variants, they are just gonna stay fragmented. This limitation is rooted from the NGS technology.
+
+    Since misaligned haplotypes tend to have more variants than correctly aligned haplotypes, read pairs from misaligned haplotypes are more likely to be grouped into the same clique accurately because overlapping regions among them tend to have more variants, thus higher edge weight.
+    '''
+
+
     # Find all components for this graph
     components, _ = gt.label_components(graph)
     component_dict = defaultdict(set)
@@ -74,15 +95,18 @@ def clique_generator_per_component(graph, weight_matrix, ew_cutoff = 0.101, logg
 
     # total_cliques = []
     for component_id, component_verts in component_dict.items():
-        # logger.info(f"Before the iteration start, the 515, 216 cell value for weight matrix is {weight_matrix[515, 216]}")
+        # Iterate through each component
         comp_index_mask = numba_isin(np.arange(weight_matrix.shape[0], dtype=np.int32), component_verts)
         comp_index_mask = numba_and(comp_index_mask, big_row_mask)
         selected_indices = apply_index_mask(weight_matrix.shape[0], comp_index_mask)
+        # Extract the subgraph of the component (extraction performed on the original weight matrix)
         big_weight_matrix = weight_matrix[np.ix_(comp_index_mask, comp_index_mask)]
-        # big_weight_matrix = numba_ix(weight_matrix, comp_index_mask)
+        # big_weight_matrix = numba_ix(weight_matrix, comp_index_mask) # Another way to extract the subgraph
+
         logger.info(f"Start to find the largest clique in the component {component_id}, which contains {len(component_verts)} vertices. Contiguous? {big_weight_matrix.flags['C_CONTIGUOUS']}. Does the current matrix a view of the original one ? {big_weight_matrix.base is weight_matrix}")
         # logger.info(f"The selected indices are {selected_indices.tolist()}, here are the component vertices: {component_verts}")
         if len(component_verts) <= 3:
+            # If the component is too small, then we add all the vertices in the component to a collection of indices which will be used for clique identification in the next round
             small_row_indices.update(component_verts)
             logger.info(f"Adding the {len(component_verts)} vertices in the component {component_id} to the small row indices")
             continue
@@ -101,7 +125,8 @@ def clique_generator_per_component(graph, weight_matrix, ew_cutoff = 0.101, logg
                     yield clique
 
     logger.info(f"Remaining {len(small_row_indices)} vertices that are not included in the cliques. Here we find cliques again among them:\n{small_row_indices}")
-    # return total_cliques
+
+    # Now this is the second round of clique finding, assembling the remaining read pairs to increase the phasing sensitivity a little bit
     if len(small_row_indices) > 0:
         small_row_mask = numba_isin(np.arange(weight_matrix.shape[0], dtype=np.int32), small_row_indices)
         selected_indices = apply_index_mask(weight_matrix.shape[0], small_row_mask)
