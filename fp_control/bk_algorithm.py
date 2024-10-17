@@ -415,7 +415,6 @@ def pretty_print_matrix(matrix, precision=3):
 def bk_algorithm(selected_indices,
                  weight_matrix,
                  cutoff = 0.1,
-                 qname_dict = {},
                  logger = logger):
     '''
     This generator is to find the largest cliques in a subgraph of the original graph, the subgraph is a component in the original graph.

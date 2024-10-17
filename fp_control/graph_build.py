@@ -1,5 +1,4 @@
 import logging
-import subprocess
 import graph_tool.all as gt
 import numpy as np
 import pandas as pd
@@ -294,7 +293,7 @@ def build_phasing_graph(bam_file,
         chrom = paired_reads[0].reference_name
         start = min(r.reference_start for r in paired_reads)
         end = max(r.reference_end for r in paired_reads)
-        qidx_iter = overlapping_qname_idx_generator(ncls_dict, ncls_read_dict, ncls_qname_dict, chrom, start, end)
+        qidx_iter = overlapping_qname_idx_generator(ncls_dict, chrom, start, end)
 
         # Iterate through the overlapping read pairs
         for qidx in qidx_iter:

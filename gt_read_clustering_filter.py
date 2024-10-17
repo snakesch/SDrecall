@@ -112,8 +112,8 @@ def main_function(bam,
     tmp_bam = bam.replace(".bam", ".tmp.bam")
 
     if output_bam is None:
-        replace = True
         output_bam = bam.replace(".bam", ".clean.bam")
+        replace = True
     else:
         replace = False
 

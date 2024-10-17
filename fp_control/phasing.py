@@ -88,12 +88,12 @@ def clique_generator_per_component(graph, weight_matrix, ew_cutoff = 0.101, logg
     big_row_mask = np.logical_not(small_row_mask)
     small_row_indices = set(np.where(small_row_mask)[0])
 
+    # Ensure the weight matrix is contiguous in memory, which consumes less memory and is faster to process
     if not weight_matrix.flags['C_CONTIGUOUS']:
         weight_matrix = np.ascontiguousarray(weight_matrix)
 
     logger.info(f"Found {len(component_dict)} components in the graph. The big weight matrix has {numba_sum(big_row_mask)} rows and columns. The original weight_matrix has {weight_matrix.shape[0]} rows and columns and its contiguity in memory is {weight_matrix.flags['C_CONTIGUOUS']}. The small row indices are {small_row_indices}")
 
-    # total_cliques = []
     for component_id, component_verts in component_dict.items():
         # Iterate through each component
         comp_index_mask = numba_isin(np.arange(weight_matrix.shape[0], dtype=np.int32), component_verts)
@@ -101,18 +101,17 @@ def clique_generator_per_component(graph, weight_matrix, ew_cutoff = 0.101, logg
         selected_indices = apply_index_mask(weight_matrix.shape[0], comp_index_mask)
         # Extract the subgraph of the component (extraction performed on the original weight matrix)
         big_weight_matrix = weight_matrix[np.ix_(comp_index_mask, comp_index_mask)]
-        # big_weight_matrix = numba_ix(weight_matrix, comp_index_mask) # Another way to extract the subgraph
 
         logger.info(f"Start to find the largest clique in the component {component_id}, which contains {len(component_verts)} vertices. Contiguous? {big_weight_matrix.flags['C_CONTIGUOUS']}. Does the current matrix a view of the original one ? {big_weight_matrix.base is weight_matrix}")
-        # logger.info(f"The selected indices are {selected_indices.tolist()}, here are the component vertices: {component_verts}")
+        # logger.debug(f"The selected indices are {selected_indices.tolist()}, here are the component vertices: {component_verts}")
         if len(component_verts) <= 3:
             # If the component is too small, then we add all the vertices in the component to a collection of indices which will be used for clique identification in the next round
             small_row_indices.update(component_verts)
             logger.info(f"Adding the {len(component_verts)} vertices in the component {component_id} to the small row indices")
             continue
         else:
-            cliques_iter = bk_algorithm(selected_indices, big_weight_matrix, cutoff = ew_cutoff, qname_dict = graph.vertex_properties['qname'], logger = logger)
-            # logger.info(f"Found {len(cliques)} cliques in the component {component_id}\n")
+            cliques_iter = bk_algorithm(selected_indices, big_weight_matrix, cutoff = ew_cutoff, logger = logger)
+            # logger.debug(f"Found {len(cliques)} cliques in the component {component_id}\n")
             for clique in cliques_iter:
                 logger.info(f"Receiving a clique containing {[graph.vertex_properties['qname'][qid] for qid in clique]} in the component {component_id}")
                 if len(clique) <= 3:
@@ -131,9 +130,9 @@ def clique_generator_per_component(graph, weight_matrix, ew_cutoff = 0.101, logg
         small_row_mask = numba_isin(np.arange(weight_matrix.shape[0], dtype=np.int32), small_row_indices)
         selected_indices = apply_index_mask(weight_matrix.shape[0], small_row_mask)
         small_weight_matrix = weight_matrix[np.ix_(small_row_mask, small_row_mask)]
-        # small_weight_matrix = numba_ix(weight_matrix, small_row_mask)
+
         logger.info(f"Start to find the largest clique in the small weight matrix, which contains {numba_sum(small_row_mask)} rows and columns. Contiguous? {small_weight_matrix.flags['C_CONTIGUOUS']}")
-        cliques_iter = bk_algorithm(selected_indices, small_weight_matrix, cutoff = ew_cutoff/2, qname_dict = graph.vertex_properties['qname'], logger = logger)
+        cliques_iter = bk_algorithm(selected_indices, small_weight_matrix, cutoff = ew_cutoff/2, logger = logger)
         for clique in cliques_iter:
             yield clique
 
@@ -145,11 +144,13 @@ def find_components_inside_filtered_cliques(final_cliques,
                                             weight_matrix,
                                             ew_cutoff = 0.101,
                                             logger=logger):
-    # Drop the zero weight edges for the graph before performing this function
-    # For each clique, use vfilter to extract the subgraph, then use efilter to only view the weight > 0 edges
-    # Then use gt.label_components to find the connected components
-    # final_components = defaultdict(int)
-    # last_c_idx = 0
+    '''
+    Drop the zero weight edges for the graph before performing this function
+    For each clique, use vfilter to extract the subgraph, then use efilter to only view the weight > 0 edges
+    Then use gt.label_components to find the connected components
+
+    These components are the final groups of read pairs belonged to the same haplotype
+    '''
 
     haplotype_idx = 0
     for clique in final_cliques:
@@ -163,9 +164,8 @@ def find_components_inside_filtered_cliques(final_cliques,
         clique = list(clique)
         # Supplement the small weight edges to the graph
         for i in range(len(clique)):
-            for j in range(i, len(clique)):
-                if i != j:
-                    if weight_matrix[clique[i], clique[j]] > 0.05 and weight_matrix[clique[i], clique[j]] <= ew_cutoff:
+            for j in range(i+1, len(clique)):
+                    if 0.05 < weight_matrix[clique[i], clique[j]] <= ew_cutoff:
                         logger.info(f"Adding an edge between {graph.vertex_properties['qname'][graph.vertex(clique[i])]}, {clique[i]} and {graph.vertex_properties['qname'][graph.vertex(clique[j])]}, {clique[j]} because their weight in matrix at {clique[i]} row and {clique[j]} column is {weight_matrix[clique[i], clique[j]]}")
                         v1 = subgraph.vertex(clique[i])
                         v2 = subgraph.vertex(clique[j])
@@ -193,10 +193,10 @@ def find_components_inside_filtered_cliques(final_cliques,
 
 def phasing_realigned_reads(phased_graph, weight_matrix, edge_weight_cutoff, logger = logger):
     logger.info(f"Now start finding haplotypes in the setup weight matrix, the numba parallel threads are set to {get_num_threads()}")
-    total_cliques = clique_generator_per_component(phased_graph,
+    total_cliques = clique_generator_per_component( phased_graph,
                                                     weight_matrix,
                                                     ew_cutoff = edge_weight_cutoff,
-                                                    logger = logger)
+                                                    logger = logger )
 
     total_cliques = list(total_cliques)
 

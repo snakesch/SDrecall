@@ -8,7 +8,7 @@ from numba_operators import fast_median, numba_sum
 logger = logging.getLogger("SDrecall")
 
 
-def overlapping_reads_generator(ncls_dict, read_dict, qname_dict, chrom, start, end):
+def overlapping_reads_generator(ncls_dict, read_dict, chrom, start, end):
     """
     Generator function to lazily yield overlapping read objects.
 
@@ -39,9 +39,7 @@ def overlapping_reads_generator(ncls_dict, read_dict, qname_dict, chrom, start, 
     """
 
     # Perform an overlap query on the NCLS tree
-    if chrom not in ncls_dict:
-        yield from ()
-    elif ncls_dict[chrom] is None:
+    if chrom not in ncls_dict or ncls_dict[chrom] is None:
         yield from ()
     else:
         _, overlapping_read_qnames = ncls_dict[chrom].all_overlaps_both(np.array([start]), np.array([end]), np.array([0]))
@@ -53,7 +51,7 @@ def overlapping_reads_generator(ncls_dict, read_dict, qname_dict, chrom, start, 
 
 
 
-def overlapping_qname_idx_generator(ncls_dict, read_dict, qname_dict, chrom, start, end):
+def overlapping_qname_idx_generator(ncls_dict, chrom, start, end):
     """
     Generator function to lazily yield query name indices of overlapping reads.
 
@@ -84,9 +82,7 @@ def overlapping_qname_idx_generator(ncls_dict, read_dict, qname_dict, chrom, sta
     """
 
     # Perform an overlap query on the NCLS tree
-    if chrom not in ncls_dict:
-        yield from ()
-    elif ncls_dict[chrom] is None:
+    if chrom not in ncls_dict or ncls_dict[chrom] is None:
         yield from ()
     else:
         _, overlapping_read_qnames = ncls_dict[chrom].all_overlaps_both(np.array([start]), np.array([end]), np.array([0]))
@@ -115,6 +111,34 @@ def calculate_mean_read_length(bam_file_path, sample_size=1000000):
 
     mean_length = total_length / read_count
     return mean_length
+
+
+
+def is_read_noisy(read, paired, mapq_filter, basequal_median_filter):
+    """Helper function to determine if a read is noisy based on various criteria."""
+    if paired:
+        return (read.is_secondary or
+                read.is_supplementary or
+                read.mapping_quality < mapq_filter or
+                read.is_qcfail or
+                read.reference_end is None or
+                read.reference_end - read.reference_start < 80 or
+                read.reference_name != read.next_reference_name or
+                not read.is_proper_pair or
+                fast_median(np.array(read.query_qualities, dtype=np.uint8)) <= basequal_median_filter or
+                numba_sum(np.array(read.query_qualities, dtype=np.uint8) < basequal_median_filter) >= 50)
+    else:
+        if read.is_secondary or \
+           read.is_supplementary or \
+           read.is_duplicate or \
+           read.mapping_quality < mapq_filter or \
+           read.is_qcfail or \
+           read.reference_end is None:
+            return True
+        if read.query_qualities is not None:
+            return (fast_median(np.array(read.query_qualities, dtype=np.uint8)) <= basequal_median_filter or
+                    numba_sum(np.array(read.query_qualities, dtype=np.uint8) < basequal_median_filter) >= 40)
+    return False
 
 
 
@@ -188,86 +212,52 @@ def migrate_bam_to_ncls(bam_file,
     ncls.NCLS : Nested Containment List Structure for interval queries
     """
 
-    bam = pysam.AlignmentFile(bam_file, "rb")
-    chroms = bam.references
-    # print(chroms)
-    read_dict = {}
-    qname_interval_dict = {chrom: dict({}) for chrom in chroms}
-    ncls_dict = {chrom: None for chrom in chroms}
-    qname_idx_dict = {}
-    qname_dict = {}
+    with pysam.AlignmentFile(bam_file, "rb") as bam:
+        chroms = bam.references
+        read_dict = {}
+        qname_interval_dict = {chrom: {} for chrom in chroms}
+        ncls_dict = {chrom: None for chrom in chroms}
+        qname_idx_dict = {}
+        qname_dict = {}
 
-    n = 0
-    noisy_qnames = set([])
+        n = 0
+        noisy_qnames = set()
 
-    for read in bam:
-        if read.query_name in noisy_qnames:
-            continue
-
-        if paired:
-            if read.is_secondary or \
-               read.is_supplementary:
-                logger.info(f"This alignment is not primary ")
+        for read in bam:
+            if read.query_name in noisy_qnames:
                 continue
-            elif read.mapping_quality < mapq_filter or \
-                 read.is_qcfail or \
-                 read.reference_end is None or \
-                 read.reference_end - read.reference_start < 80 or \
-                 read.reference_name != read.next_reference_name or \
-                 not read.is_proper_pair or \
-                 fast_median(np.array(read.query_qualities, dtype=np.uint8)) <= basequal_median_filter or \
-                 numba_sum(np.array(read.query_qualities, dtype=np.uint8) < basequal_median_filter) >= 50:
+
+            if is_read_noisy(read, paired, mapq_filter, basequal_median_filter):
                 logger.warning(f"This qname {read.query_name} is noisy. Skip it.")
                 noisy_qnames.add(read.query_name)
                 continue
-        else:
-            if read.is_secondary or \
-               read.is_supplementary:
-                logger.debug(f"This alignment is not primary")
-                continue
-            elif read.is_duplicate or \
-                 read.mapping_quality < mapq_filter or \
-                 read.is_qcfail or \
-                 read.reference_end is None:
-                logger.warning(f"This qname {read.query_name} is noisy. Skip it.")
-                noisy_qnames.add(read.query_name)
-                continue
-            if read.query_qualities is not None:
-                if fast_median(np.array(read.query_qualities, dtype=np.uint8)) <= basequal_median_filter or \
-                   numba_sum(np.array(read.query_qualities, dtype=np.uint8) < basequal_median_filter) >= 40:
-                    noisy_qnames.add(read.query_name)
-                    continue
 
-        chrom = read.reference_name
-        start = read.reference_start
-        end = read.reference_end
-        qname = read.query_name
+            chrom = read.reference_name
+            start = read.reference_start
+            end = read.reference_end
+            qname = read.query_name
 
-        if qname in qname_idx_dict:
-            qname_idx = qname_idx_dict[qname]
-        else:
-            qname_idx = n
-            qname_idx_dict[qname] = qname_idx
-            qname_dict[qname_idx] = qname
-            n += 1
+            if qname in qname_idx_dict:
+                qname_idx = qname_idx_dict[qname]
+            else:
+                qname_idx = n
+                qname_idx_dict[qname] = qname_idx
+                qname_dict[qname_idx] = qname
+                n += 1
 
-        read_dict[qname_idx] = read_dict.get(qname_idx, []) + [read]
+            read_dict[qname_idx] = read_dict.get(qname_idx, []) + [read]
 
-        if qname_idx in qname_interval_dict[chrom]:
-            interval = qname_interval_dict[chrom][qname_idx]
-            updated_interval = (min(start, int(interval[0])), max(end, int(interval[1])))
+            if qname_idx in qname_interval_dict[chrom]:
+                interval = qname_interval_dict[chrom][qname_idx]
+                updated_interval = (min(start, int(interval[0])), max(end, int(interval[1])))
+            else:
+                updated_interval = (int(start), int(end))
             qname_interval_dict[chrom][qname_idx] = updated_interval
-        else:
-            updated_interval = (int(start), int(end))
-            qname_interval_dict[chrom][qname_idx] = updated_interval
-
-    bam.close()
 
     for chrom in chroms:
         qname_intervals = qname_interval_dict[chrom]
-        qname_indices = np.fromiter(qname_intervals.keys(), dtype=np.int32)
         if len(qname_intervals) > 0:
-            # print(chrom, qnames.shape, type(qnames))
+            qname_indices = np.fromiter(qname_intervals.keys(), dtype=np.int32)
             starts = np.array([int(qname_intervals[qname_idx][0]) for qname_idx in qname_indices])
             ends = np.array([int(qname_intervals[qname_idx][1]) for qname_idx in qname_indices])
             ncls_dict[chrom] = NCLS(starts, ends, qname_indices)

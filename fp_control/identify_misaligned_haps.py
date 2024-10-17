@@ -375,11 +375,10 @@ def identify_misalignment_per_region(region,
 
     # qname_idx_dict = {qname: qname_idx for qname_idx, qname in qname_dict.items()}
     overlap_reads_iter = overlapping_reads_generator(bam_ncls,
-                                                    read_pair_dict,
-                                                    qname_dict,
-                                                    region[0],
-                                                    region[1],
-                                                    region[2])
+                                                     read_pair_dict,
+                                                     region[0],
+                                                     region[1],
+                                                     region[2])
 
     vertices = defaultdict(list)
     vert_inds = set()
@@ -567,7 +566,8 @@ def inspect_by_haplotypes(input_bam,
             # We need to extract the overlapping genomic haplotype vectors
             # Get the genomic haplotype vectors for the overlapping region
             max_similarity = 0
-            for hread in overlapping_reads_generator(*intrin_bam_ncls[:-1], chrom, span[0], span[1]):
+            intrin_ncls_dict, intrin_read_dict, _, _ = intrin_bam_ncls
+            for hread in overlapping_reads_generator(intrin_ncls_dict, intrin_read_dict, chrom, span[0], span[1]):
                 hread_start = hread.reference_start
                 hread_end = hread.reference_end
                 hread_qname = hread.query_name
