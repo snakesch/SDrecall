@@ -335,7 +335,7 @@ def record_haplotype_rank(haplotype_dict, mean_read_length = 150):
     i = 0
     total_depth = 0
     for hid in haplotype_dict:
-        seq, reads, span, qnames = haplotype_dict[hid]
+        seq, reads, span, _ = haplotype_dict[hid]
         starts[i] = span[0]
         ends[i] = span[1]
         depth = len(reads) * mean_read_length/len(seq)
@@ -350,37 +350,111 @@ def record_haplotype_rank(haplotype_dict, mean_read_length = 150):
     return np.column_stack((starts, ends, total_depth_col, hap_ids, hap_depths, var_counts, indel_counts))
 
 
-def identify_misalignment_per_region(region,
-                                    bam_ncls,
-                                    intrin_bam_ncls,
-                                    phasing_graph,
-                                    qname_hap_info,
-                                    hap_qname_info,
-                                    weight_matrix,
-                                    qname_to_node,
-                                    lowqual_qnames,
-                                    clique_sep_component_idx,
-                                    var_df,
-                                    viewed_regions = {},
-                                    total_hapvectors = {},
-                                    total_errvectors = {},
-                                    total_genomic_haps = {},
-                                    mean_read_length = 148,
-                                    logger = logger ):
-    bam_ncls, read_pair_dict, qname_dict, qname_idx_dict = bam_ncls
+
+def summarize_enclosing_haps(hap_subgraphs, qname_to_node, region, logger = logger):
     '''
-    read pair dict use internal qname_idx (created when executing function migrate bam to ncls) as keys instead of qnames
-    qname_dict is a dictionary that maps qname_idx to qname
+    For each haplotype cluster, we need to extract the continuous regions that are covered by the reads in the haplotype.
+    Each haplotype can contain multiple continuous regions
+    '''
+    _, start, end = region
+    region_haplotype_info = {} # {(start, end): (reads, vert_inds, hap_id, qnames)}
+    inspect_results = [] # [(hap_id, qnames, span, sreads, overlap_coef)]
+    for hap_id, (_, qnames, read_pair_lists) in hap_subgraphs.items():
+        reads = []
+        for read_pair_list in read_pair_lists:
+            reads += read_pair_list
+
+        # Sort the reads by start positions and return a dictionary of the form {(start, end): [reads]}
+        continuous_covered_regions = extract_continuous_regions_dict(reads)
+
+        for span, sreads in continuous_covered_regions.items():
+            # Find enclosing haplotype covered regions
+            if span[0] <= start and span[1] >= end:
+                vert_inds = set([qname_to_node[r.query_name] for r in sreads])
+                region_haplotype_info[span] = (sreads, vert_inds, hap_id, qnames)
+            else:
+                # The continuous region is not fully enclosing the current window
+                # We can try to rescue these regions
+                overlap_coef = (min(span[1], end) - max(span[0], start)) / (end - start)
+                inspect_results.append((hap_id, qnames, span, sreads, overlap_coef))
+
+    if len(region_haplotype_info) > 2:
+        overlapping_span = (start, end)
+        return region_haplotype_info, overlapping_span
+
+    '''
+    Now we dont have enough haplotypes enclosing the inspection window.
+    So we try to re-adjust the window size (shrink a little bit) and see if we can get more haplotypes enclosing the inspection window.
     '''
 
-    # qname_idx_dict = {qname: qname_idx for qname_idx, qname in qname_dict.items()}
+    logger.info(f"At region {region}, only found {len(region_haplotype_info)} haplotype clusters enwrapping the whole region. Try recover some regions.\n")
+    inspect_results = sorted(inspect_results, key = lambda x: x[4], reverse = True)
+    if len(inspect_results) == 0:
+        # No else haplotypes are found
+        return None, None
+    elif inspect_results[0][4] < 0.8:
+        # Even the largest overlapping haplotype only cover 80% of the inspection window
+        # Give up the window
+        return None, None
+    else:
+        # Shrink the window to the largest overlapping haplotype
+        recover_results = [t for t in inspect_results if t[4] >= 0.8]
+        recover_span = max(recover_results, key = lambda x: x[2][0])[2][0], min(recover_results, key = lambda x: x[2][1])[2][1]
+        overlapping_span = (max(recover_span[0], start), min(recover_span[1], end))
+        for t in recover_results:
+            hap_id, qnames, span, sreads, _ = t
+            region_haplotype_info[span] = (sreads, set([qname_to_node[r.query_name] for r in sreads]), hap_id, qnames)
+        if len(region_haplotype_info) <= 2:
+            logger.info(f"At region {region}, only found {len(region_haplotype_info)} haplotype clusters enwrapping the whole region even after the recover trial.\n")
+            return None, None
+
+    return region_haplotype_info, inspect_results
+
+
+
+
+def identify_misalignment_per_region(region,
+                                     bam_ncls,
+                                     qname_hap_info,
+                                     qname_to_node,
+                                     lowqual_qnames,
+                                     clique_sep_component_idx,
+                                     total_hapvectors = {},
+                                     total_errvectors = {},
+                                     total_genomic_haps = {},
+                                     mean_read_length = 148,
+                                     logger = logger ):
+    bam_ncls, read_pair_dict, _, _ = bam_ncls
+    '''
+    The region is a tuple of (chrom, start, end)
+    It basically is a window we inspect within to rank haplotypes based on their similarities to the reference genomic sequence.
+
+    So primarily, we need to assign every haplotype enclosing this window a rank position.
+    Thats what the function do.
+
+    Inputs:
+    region: a tuple of (chrom, start, end)
+    bam_ncls: a tuple of ({chrom: ncls_object}, {interval_idx: [read1, read2]}, {interval_idx: qname}, {qname: interval_idx})
+    qname_hap_info: a dictionary {qname: haplotype_id}
+    qname_to_node: a dictionary {qname: vertex_idx}
+    lowqual_qnames: a set of qnames that are low quality and ignored
+    clique_sep_component_idx: a dictionary {haplotype_id: clique_separated_component_idx}
+    total_hapvectors: a dictionary {read_id: haplotype_vector}
+    total_errvectors: a dictionary {read_id: error_vector}
+    total_genomic_haps: a dictionary {reference_sequence_id: haplotype_vector}
+    '''
+    chrom, start, end = region
+    # grab overlapping reads
     overlap_reads_iter = overlapping_reads_generator(bam_ncls,
                                                      read_pair_dict,
-                                                     region[0],
-                                                     region[1],
-                                                     region[2])
+                                                     chrom,
+                                                     start,
+                                                     end)
 
+    # Identify a map that
+    # (vertex_idx, qname) --> read object (pysam.AlignedSegment)
     vertices = defaultdict(list)
+    # a set of vertex indices (qname idx) corresponding to the overlapping reads
     vert_inds = set()
     for read in overlap_reads_iter:
         qname = read.query_name
@@ -390,49 +464,21 @@ def identify_misalignment_per_region(region,
         vertices[(vert_idx, qname)].append(read)
         vert_inds.add(vert_idx)
 
-    subgraphs = group_by_dict_optimized(qname_hap_info, vertices)
+    # qname_hap_info is a dictionary {qname: haplotype_id}
+    # Establish a dictionary of the form {haplotype_id: [vertex_idices, qnames, read_pair_lists]} based on the overlapping reads identified above
+    hap_subgraphs = group_by_dict_optimized(qname_hap_info, vertices)
 
-    if len(subgraphs) == 0:
+    if len(hap_subgraphs) == 0:
         logger.error(f"No haplotype clusters are found for region {region}. These are the qnames found overlapping this region: {vertices}. Skip this region.\n")
         return None, total_hapvectors, total_errvectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx
 
-    # For each subgraph, we need to generate the consensus sequence for the reads
-    # Each subgraph is a connected component in the phasing graph and it represents a haplotype
-    region_haplotype_info = {}
-    # overlap_haplotype_info = {}
-    inspect_results = []
-    for subgraph_id, (subgraph_vertices, qnames, read_pair_lists) in subgraphs.items():
-        reads = []
-        for read_pair_list in read_pair_lists:
-            reads += read_pair_list
-        # Sort the reads by start positions
-        continuous_covered_regions = extract_continuous_regions_dict(reads)
+    # For each hap_subgraph, we need to generate the consensus sequence for the reads
+    # Each hap_subgraph is a connected component in the phasing graph and it represents a haplotype
+    region_haplotype_info, overlapping_span = summarize_enclosing_haps(hap_subgraphs, qname_to_node, region, logger = logger)
+    if region_haplotype_info is None:
+        return None, total_hapvectors, total_errvectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx
 
-        for span, sreads in continuous_covered_regions.items():
-            if span[0] <= region[1] and span[1] >= region[2]:
-                region_haplotype_info[span] = (sreads, set([qname_to_node[r.query_name] for r in sreads]), subgraph_id, qnames)
-            else:
-                inspect_results.append((subgraph_id, qnames, span, sreads, (min(span[1], region[2]) - max(span[0], region[1])) / (region[2] - region[1])))
-
-    if len(region_haplotype_info) <= 2:
-        logger.info(f"At region {region}, only found {len(region_haplotype_info)} haplotype clusters enwrapping the whole region. Try recover some regions.\n")
-        inspect_results = sorted(inspect_results, key = lambda x: x[4], reverse = True)
-        if len(inspect_results) == 0:
-            return None, total_hapvectors, total_errvectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx
-        elif inspect_results[0][4] < 0.8:
-            return None, total_hapvectors, total_errvectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx
-        else:
-            recover_results = [t for t in inspect_results if t[4] >= 0.8]
-            recover_span = max(recover_results, key = lambda x: x[2][0])[2][0], min(recover_results, key = lambda x: x[2][1])[2][1]
-            overlapping_span = (max(recover_span[0], region[1]), min(recover_span[1], region[2]))
-            for t in recover_results:
-                subgraph_id, qnames, span, sreads, _ = t
-                region_haplotype_info[span] = (sreads, set([qname_to_node[r.query_name] for r in sreads]), subgraph_id, qnames)
-            if len(region_haplotype_info) <= 2:
-                logger.info(f"At region {region}, only found {len(region_haplotype_info)} haplotype clusters enwrapping the whole region even after the recover trial.\n")
-                return None, total_hapvectors, total_errvectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx
-    else:
-        overlapping_span = (region[1], region[2])
+    # Prepare region_str for logging
     region_str = f"{read.reference_name}:{overlapping_span[0]}-{overlapping_span[1]}"
 
     final_clusters = {}
@@ -447,25 +493,14 @@ def identify_misalignment_per_region(region,
         read_spans = np.empty((len(reads), 2), dtype=np.int32)
         hap_vectors = np.full((len(reads), 500), -10, dtype=np.int32)
         err_vectors = np.full((len(reads), 500), -10, dtype=np.float32)
-        for i, r in enumerate(reads):
-            read_spans[i, 0] = r.reference_start
-            read_spans[i, 1] = r.reference_end
-            rid = get_read_id(r)
-            if rid in total_hapvectors:
-                hap_vector = total_hapvectors[rid]
-            else:
-                hap_vector = get_hapvector_from_cigar(r.cigartuples, r.query_sequence, logger = logger)
-                total_hapvectors[rid] = hap_vector
+        hap_vectors, err_vectors, total_hapvectors, total_errvectors = record_hap_err_vectors_per_region(reads,
+                                                                                                         read_spans,
+                                                                                                         hap_vectors,
+                                                                                                         err_vectors,
+                                                                                                         total_hapvectors,
+                                                                                                         total_errvectors,
+                                                                                                         logger = logger)
 
-            hap_vectors[i, :hap_vector.size] = hap_vector
-
-            if rid in total_errvectors:
-                err_vector = total_errvectors[rid]
-            else:
-                err_vector = get_errorvector_from_cigar(r, r.cigartuples, logger = logger)
-                total_errvectors[rid] = err_vector
-
-            err_vectors[i, :err_vector.size] = err_vector
         # logger.info(f"Haplotype across {span} contains {len(reads)} reads.")
         consensus_sequence = assemble_consensus(hap_vectors, err_vectors, read_spans)
         # logger.info(f"The consensus sequence for haplotype {haplotype_idx} across {span} composed of {len(reads)} and the qnames are {[r.query_name for r in reads]}. The consensus sequence is \n{consensus_sequence}\n")
@@ -479,11 +514,147 @@ def identify_misalignment_per_region(region,
 
     record_2d_arr = record_haplotype_rank( final_clusters, mean_read_length = mean_read_length )
     record_df = pd.DataFrame(record_2d_arr, columns = ["start", "end", "total_depth", "hap_id", "hap_depth", "var_count", "indel_count"])
-    record_df["chrom"] = region[0]
+    record_df["chrom"] = chrom
 
     logger.info(f"Found {len(final_clusters)} haplotype clusters for region {region_str}. The dataframe recording the haplotypes in this region looks like :\n{record_df.to_string(index=False)}\n")
     return record_df, total_hapvectors, total_errvectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx
 
+
+
+def record_hap_err_vectors_per_region(reads, read_spans, hap_vectors, err_vectors, total_hap_vectors, total_err_vectors, logger = logger):
+    # Initialize a set to store the read IDs of the reads overlapping with the iterating continuous region
+    srids = set()
+    # Iterate over all the reads overlapping with the iterating continuous region
+    for i, r in enumerate(reads):
+        read_spans[i, 0] = r.reference_start
+        read_spans[i, 1] = r.reference_end
+        rid = get_read_id(r)
+        srids.add(rid)
+
+        # Check if the hap vector of the read has been computed and stored in the total_hap_vectors dictionary, a short-circuit evaluation to avoid redundant computation of function get_hapvector_from_cigar
+        if rid in total_hap_vectors:
+            hap_vector = total_hap_vectors[rid]
+        else:
+            hap_vector = get_hapvector_from_cigar(r.cigartuples, r.query_sequence, logger = logger)
+            total_hap_vectors[rid] = hap_vector
+
+        # Store the haplotype vector of the read into the hap_vectors 2d array
+        hap_vectors[i, :hap_vector.size] = hap_vector
+
+        # Check if the error vector of the read has been computed and stored in the total_err_vectors dictionary, a short-circuit evaluation to avoid redundant computation of function get_errorvector_from_cigar
+        if rid in total_err_vectors:
+            err_vector = total_err_vectors[rid]
+        else:
+            err_vector = get_errorvector_from_cigar(r, r.cigartuples, logger = logger)
+            total_err_vectors[rid] = err_vector
+
+        # Store the error vector of the read into the err_vectors 2d array
+        err_vectors[i, :err_vector.size] = err_vector
+
+    return hap_vectors, err_vectors, total_hap_vectors, total_err_vectors
+
+
+
+def stat_refseq_similarity(intrin_bam_ncls,
+                           chrom,
+                           span,
+                           hid,
+                           consensus_sequence,
+                           total_genomic_haps,
+                           logger = logger):
+    '''
+    For each haplotype covered region (continuous region),
+    We have a consensus sequence of the haplotype assembled by reads realigned here from some the homologous regions.
+    We also have reference sequences aligned to the query region.
+
+    If we want to measure if the haplotype is correctly aligned here, we would compare
+      1. the similarity (variant count) between the haplotype and the reference sequence
+      with
+      2. the similarity (variant count) between the haplotype and the homologous counterparts.
+
+    if 2 is much larger than 1, it definitely increase the likelihood that the haplotype is misaligned.
+    '''
+
+    varcounts_among_refseqs = defaultdict(dict)
+    intrin_ncls_dict, intrin_read_dict, _, _ = intrin_bam_ncls
+    for homo_refseq in overlapping_reads_generator(intrin_ncls_dict, intrin_read_dict, chrom, span[0], span[1]):
+        homo_refseq_start = homo_refseq.reference_start
+        homo_refseq_end = homo_refseq.reference_end
+        homo_refseq_qname = homo_refseq.query_name
+        overlap_span = (max(homo_refseq_start, span[0]), min(homo_refseq_end, span[1]))
+        # logger.debug(f"The genomic sequence spanning {homo_refseq_start} to {homo_refseq_end}. And it overlaps with the haplotype at {overlap_span}")
+
+        hregion_str = f"{chrom}:{homo_refseq_start}-{homo_refseq_end}"
+        # Some reference sequences can be mapped to multiple places, to have a unique ID, we need to append the current region coordinate string
+        homo_refseq_id = get_read_id(homo_refseq) + ":" + hregion_str
+
+        # Avoid redundant computation of function get_hapvector_from_cigar
+        if homo_refseq_id in total_genomic_haps:
+            homo_refseq_hap_vector = total_genomic_haps[homo_refseq_id]
+        else:
+            homo_refseq_hap_vector = get_hapvector_from_cigar(homo_refseq.cigartuples, logger = logger)
+            total_genomic_haps[homo_refseq_id] = homo_refseq_hap_vector
+
+        # Extract the genomic haplotype vector overlapping with the iterating continuous region
+        try:
+            interval_genomic_hap = homo_refseq_hap_vector[overlap_span[0] - homo_refseq_start:overlap_span[1] - homo_refseq_start]
+        except IndexError:
+            continue
+
+        # Extract the consensus sequence overlapping with the iterating continuous region
+        interval_con_seq = consensus_sequence[overlap_span[0] - span[0]:overlap_span[1] - span[0]]
+        # logger.info(f"Inspect the conesensus sequence (length {len(consensus_sequence)})\n{consensus_sequence.tolist()}\nwith the genomic haplotype (length {len(interval_genomic_hap)})\n{interval_genomic_hap.tolist()}\n")
+
+        # Compare the haplotype consensus sequence with the reference sequence from elsewhere
+        # Count the variants carried by the haplotype
+        # Count the variants carried by the haplotype when aligned to the reference sequence from elsewhere
+        varcount, alt_varcount = ref_genome_similarity(interval_con_seq, interval_genomic_hap)
+        if homo_refseq_qname in varcounts_among_refseqs[hid]:
+            varcounts_among_refseqs[hid][homo_refseq_qname].append((varcount, alt_varcount))
+        else:
+            varcounts_among_refseqs[hid][homo_refseq_qname] = [(varcount, alt_varcount)]
+
+    return varcounts_among_refseqs
+
+
+
+def cal_similarity_score(varcounts_among_refseqs):
+    '''
+    Input is a dictionary with two layers of keys:
+    haplotype_id --> reference_sequence_id --> (variant_count, alt_variant_count) where:
+    variant_count is the variant count when the haplotype is aligned to the reference sequence
+    alt_variant_count is the variant count when the haplotype is aligned to the homologous counterparts of current region
+
+    For each haplotype, we compare its consensus sequence with multiple reference sequences from a group of homologous sequences,
+    And calculate a metric calles similarity score for each comparison.
+
+    Similarity Score = Ratio + Delta
+    Ratio = variant_count / alt_variant_count if alt_variant_count > 0 else variant_count, the bigger it is, the more likely the haplotype is misaligned
+    Delta = variant_count - alt_variant_count, the bigger it is, the more likely the haplotype is misaligned
+
+    For each haplotype, pick the maximum similarity score across all the reference sequences from homologous counterparts.
+    Return a dictionary with only one layer of keys:
+    haplotype_id --> max_similarity_score
+    '''
+    # Initialize a dictionary to store the maximum similarity between the haplotype and the reference sequence from homologous counterparts
+    hap_max_sim_scores = {}
+    # For each haplotype, find the maximum similarity delta.
+
+    # Iterate over all the reference genome similarities for all the haplotypes
+    for hid, gdict in varcounts_among_refseqs.items():
+        max_varcount_delta = 0
+        for _, pairs in gdict.items():
+            total_varcount = np.sum([t[0] for t in pairs])
+            total_alt_varcount = np.sum([t[1] for t in pairs])
+            similarity = total_varcount / total_alt_varcount if total_alt_varcount > 0 else total_varcount
+            delta = total_varcount - total_alt_varcount
+            # logger.info(f"For haplotype {hid}, comparing to mapping against the genomic sequence {genomic_seq_qname}. Variant count ratio is {similarity} and variant count delta is {delta}.")
+            similarity_score = delta + similarity
+            max_varcount_delta = max(max_varcount_delta, similarity_score)
+
+        hap_max_sim_scores[hid] = max_varcount_delta if max_varcount_delta > 0 else 0
+
+    return hap_max_sim_scores
 
 
 
@@ -492,154 +663,125 @@ def inspect_by_haplotypes(input_bam,
                           qname_hap_info,
                           bam_ncls,
                           intrin_bam_ncls,
-                          phased_graph,
-                          weight_matrix,
                           qname_to_node,
                           total_lowqual_qnames,
                           total_hap_vectors,
                           total_err_vectors,
                           total_genomic_haps,
-                          var_df,
                           compare_haplotype_meta_tab = "",
                           mean_read_length = 150,
                           logger = logger):
-    ncls_dict, read_dict, qname_dict, qname_idx_dict = bam_ncls
+    _, read_dict, _, qname_idx_dict = bam_ncls
     record_dfs = []
     clique_sep_component_idx = 0
-    ref_genome_similarities = defaultdict(dict)
-    hid_extreme_vard = defaultdict(bool)
-    hid_var_count = defaultdict(int)
-    scatter_hid_dict = defaultdict(bool)
-    hsid_hid_dict = defaultdict(int)
-    hsid_seq_dict = {}
-    phased_graph_qname_vprop = phased_graph.vertex_properties['qname']
+    hid_extreme_vard = defaultdict(bool) # Initialize a dictionary to store if the haplotype has extreme variant density
+    hid_var_count = defaultdict(int) # Initialize a dictionary to store the variant count of the haplotype
+    scatter_hid_dict = defaultdict(bool) # Initialize a dictionary to store if the haplotype is scattered
     logger.info("All the haplotype IDs are :\n{}\n".format(list(hap_qname_info.keys())))
 
+    # Iterate over all the haplotypes
     for hid, qnames in hap_qname_info.items():
         logger.info(f"The haplotype {hid} contains {len(qnames)} read pairs in total.")
 
+        # Extract all the qname indices and all the reads belonged to the iterating haplotype
         qname_indices = [qname_idx_dict[qname] for qname in qnames]
         reads = [read for qname_idx in qname_indices for read in read_dict[qname_idx]]
+
+        # Extract all the continuous regions covered by the iterating haplotype
         conregion_dict = extract_continuous_regions_dict(reads)
 
+        # If only one read pair is in the iterating haplotype, it is a scattered haplotype
         if len(qnames) < 2:
             scatter_hid_dict[hid] = True
 
-        high_vard = False
-        mid_vard_dict = {}
-        # Generate consensus sequence for each continuously covered region
+        # Iterate over all the continuous regions covered by the iterating haplotype
         for span, reads in conregion_dict.items():
             # span end is exclusive
             logger.info(f"The haplotype {hid} contains {len(reads)} reads in the continuous region {span}.")
             chrom = reads[0].reference_name
-            srids = set([])
-            read_spans = np.empty((len(reads), 2), dtype=np.int32)
-            hap_vectors = np.full((len(reads), 500), -10, dtype = np.int32)
-            err_vectors = np.full((len(reads), 500), -10, dtype = np.float32)
-            for i, r in enumerate(reads):
-                read_spans[i, 0] = r.reference_start
-                read_spans[i, 1] = r.reference_end
-                rid = get_read_id(r)
-                srids.add(rid)
-                if rid in total_hap_vectors:
-                    hap_vector = total_hap_vectors[rid]
-                else:
-                    hap_vector = get_hapvector_from_cigar(r.cigartuples, r.query_sequence, logger = logger)
-                    total_hap_vectors[rid] = hap_vector
 
-                hap_vectors[i, :hap_vector.size] = hap_vector
 
-                if rid in total_err_vectors:
-                    err_vector = total_err_vectors[rid]
-                else:
-                    err_vector = get_errorvector_from_cigar(r, r.cigartuples, logger = logger)
-                    total_err_vectors[rid] = err_vector
+            # Initialize the read spans (2d array), haplotype vectors (2d array) and error vectors (2d array)
+            read_spans = np.empty((len(reads), 2), dtype=np.int32)  # 2d array to store the start and end positions of the reads
+            hap_vectors = np.full((len(reads), 500), -10, dtype = np.int32)  # 2d array to store the haplotype vectors (every row stores a haplotype vector, usually haplotype vector is shorter than 500, the remained positions are filled with -10)
+            err_vectors = np.full((len(reads), 500), -10, dtype = np.float32)  # 2d array to store the error vectors (every row stores a error vector, usually error vector is shorter than 500, the remained positions are filled with -10)
 
-                err_vectors[i, :err_vector.size] = err_vector
+            # Iterate over all the reads overlapping with the iterating continuous region covered by the iterating haplotype
+            # Record the haplotype vectors and error vectors for all the reads overlapping with the iterating continuous region to the prepared 2d arrays
+            hap_vectors, err_vectors, total_hap_vectors, total_err_vectors = record_hap_err_vectors_per_region(reads,
+                                                                                                               read_spans,
+                                                                                                               hap_vectors,
+                                                                                                               err_vectors,
+                                                                                                               total_hap_vectors,
+                                                                                                               total_err_vectors,
+                                                                                                               logger = logger)
 
+            # Assemble the consensus sequence for the iterating continuous region
             consensus_sequence = assemble_consensus(hap_vectors, err_vectors, read_spans)
+
+            # Judge if the consensus sequence of the haplotype within the iterating continuous region contains extremely high variant density
             extreme_vard = judge_misalignment_by_extreme_vardensity(consensus_sequence)
+
+            # Count the variant count of the consensus sequence
             var_count = count_var(consensus_sequence)
+
+            # Update the variant count of the iterating haplotype
             hid_var_count[hid] += var_count
+
+            # Log the extreme variant density and the variant count of the iterating haplotype
             logger.info(f"For haplotype {hid} at continuous region {span}, the consensus sequence is {consensus_sequence.tolist()}. The extreme variant density is {extreme_vard}.")
+
+            # Update the extreme variant density of the iterating haplotype
             hid_extreme_vard[hid] = extreme_vard or hid_extreme_vard[hid]
-            # We need to extract the overlapping genomic haplotype vectors
-            # Get the genomic haplotype vectors for the overlapping region
-            max_similarity = 0
-            intrin_ncls_dict, intrin_read_dict, _, _ = intrin_bam_ncls
-            for hread in overlapping_reads_generator(intrin_ncls_dict, intrin_read_dict, chrom, span[0], span[1]):
-                hread_start = hread.reference_start
-                hread_end = hread.reference_end
-                hread_qname = hread.query_name
-                overlap_span = (max(hread_start, span[0]), min(hread_end, span[1]))
-                # logger.info(f"The genomic sequence spanning {hread_start} to {hread_end}. And it overlaps with the haplotype at {overlap_span}")
-                if overlap_span[1] - overlap_span[0] < 140:
-                    continue
-                hregion_str = f"{chrom}:{hread_start}-{hread_end}"
-                hread_id = get_read_id(hread) + ":" + hregion_str
-                # hread_cigars = tuple(hread.cigartuples)
-                if hread_id in total_genomic_haps:
-                    hread_hap_vector = total_genomic_haps[hread_id]
-                else:
-                    hread_hap_vector = get_hapvector_from_cigar(hread.cigartuples, logger = logger)
-                    total_genomic_haps[hread_id] = hread_hap_vector
 
-                try:
-                    interval_genomic_hap = hread_hap_vector[overlap_span[0] - hread_start:overlap_span[1] - hread_start]
-                except IndexError:
-                    continue
-                interval_con_seq = consensus_sequence[overlap_span[0] - span[0]:overlap_span[1] - span[0]]
-                # logger.info(f"Inspect the conesensus sequence (length {len(consensus_sequence)})\n{consensus_sequence.tolist()}\nwith the genomic haplotype (length {len(interval_genomic_hap)})\n{interval_genomic_hap.tolist()}\n")
-                varcount, alt_varcount = ref_genome_similarity(interval_con_seq, interval_genomic_hap)
-                if hread_qname in ref_genome_similarities[hid]:
-                    ref_genome_similarities[hid][hread_qname].append((varcount, alt_varcount))
-                else:
-                    ref_genome_similarities[hid][hread_qname] = [(varcount, alt_varcount)]
+            # Within the iterating continuous region, extract the overlapping genomic haplotype vectors (reference sequences elsewhere mapped to current place)
+            # The returned varcounts_among_refseqs is a dictionary, it has two layers of keys:
+            # haplotype_id --> reference_sequence_id --> (variant_count, alt_variant_count)
+            # Where variant_count is the variant count when the haplotype is aligned to the reference sequence
+            # And alt_variant_count is the variant count when the haplotype is aligned to the homologous counterparts of current region
+            varcounts_among_refseqs = stat_refseq_similarity(intrin_bam_ncls,
+                                                             chrom,
+                                                             span,
+                                                             hid,
+                                                             consensus_sequence,
+                                                             total_genomic_haps,
+                                                             logger = logger)
 
-    ref_genome_str = '\n'.join([f"{k}: {v}" for k,v in ref_genome_similarities.items()])
+    # Log the reference genome similarities for all the haplotypes
+    ref_genome_str = '\n'.join([f"{k}: {v}" for k,v in varcounts_among_refseqs.items()])
     logger.info(f"ref genome similarities: {ref_genome_str}")
+    # Log the extreme variant density haplotypes
     logger.info(f"extreme variant density haplotypes: {hid_extreme_vard}")
+    # Log the scattered haplotypes
     logger.info(f"scatter haplotypes: {scatter_hid_dict}")
-    final_ref_seq_similarities = {}
-    ref_seq_delta = {}
-    for hid, gdict in ref_genome_similarities.items():
-        max_similarity = 0
-        for genomic_seq_qname, pairs in gdict.items():
-            total_varcount = np.sum([t[0] for t in pairs])
-            total_alt_varcount = np.sum([t[1] for t in pairs])
-            similarity = total_varcount / total_alt_varcount if total_alt_varcount > 0 else total_varcount
-            delta = total_varcount - total_alt_varcount
-            # logger.info(f"For haplotype {hid}, comparing to mapping against the genomic sequence {genomic_seq_qname}. Variant count ratio is {similarity} and variant count delta is {delta}.")
-            similarity_score = delta + similarity
-            max_similarity = max(max_similarity, similarity_score)
 
-        final_ref_seq_similarities[hid] = max_similarity if max_similarity > 0 else 0
-
-    ref_genome_similarities = final_ref_seq_similarities
-    logger.info(f"Final ref sequence similarities for all the haplotypes are {final_ref_seq_similarities}")
+    # Calculate the maximum similarity score for all the haplotypes
+    # Detailed explanation of the similarity score is in the docstring of the function cal_similarity_score
+    hap_max_sim_scores = cal_similarity_score(varcounts_among_refseqs)
+    # Log the final reference sequence similarities for all the haplotypes
+    logger.info(f"Final ref sequence similarities for all the haplotypes are {hap_max_sim_scores}")
 
     sweep_region_bed = input_bam.replace(".bam", ".sweep.bed")
     sweep_regions = sweep_region_inspection(input_bam, sweep_region_bed, logger = logger)
     logger.info(f"Now the sweep regions are saved to {sweep_region_bed}.")
+
+    '''
+    The below iteration is to inspect haplotypes by each window decided by the sweep_region_inspection function.
+    Within each window, we rank the enclosing haplotypes according to their similarity with the reference genomic sequence.
+    '''
     for interval in sweep_regions:
         region = (interval.chrom, interval.start, interval.end)
         logger.info(f"Inspecting the region {region}.")
         record_df, total_hap_vectors, total_err_vectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx = identify_misalignment_per_region(region,
-                                                                                                                                                        bam_ncls,
-                                                                                                                                                        intrin_bam_ncls,
-                                                                                                                                                        phased_graph,
-                                                                                                                                                        qname_hap_info,
-                                                                                                                                                        hap_qname_info,
-                                                                                                                                                        weight_matrix,
-                                                                                                                                                        qname_to_node,
-                                                                                                                                                        total_lowqual_qnames,
-                                                                                                                                                        clique_sep_component_idx,
-                                                                                                                                                        var_df,
-                                                                                                                                                        total_hapvectors = total_hap_vectors,
-                                                                                                                                                        total_errvectors = total_err_vectors,
-                                                                                                                                                        total_genomic_haps = total_genomic_haps,
-                                                                                                                                                        mean_read_length = mean_read_length,
-                                                                                                                                                        logger = logger )
+                                                                                                                                                         bam_ncls,
+                                                                                                                                                         qname_hap_info,
+                                                                                                                                                         qname_to_node,
+                                                                                                                                                         total_lowqual_qnames,
+                                                                                                                                                         clique_sep_component_idx,
+                                                                                                                                                         total_errvectors = total_err_vectors,
+                                                                                                                                                         total_genomic_haps = total_genomic_haps,
+                                                                                                                                                         mean_read_length = mean_read_length,
+                                                                                                                                                         logger = logger )
         if record_df is not None:
             record_dfs.append(record_df)
 
@@ -657,15 +799,15 @@ def inspect_by_haplotypes(input_bam,
         total_record_df["extreme_vard"] = total_record_df["hap_id"].map(hid_extreme_vard)
         total_record_df["scatter_hap"] = total_record_df["hap_id"].map(scatter_hid_dict).fillna(False)
         total_record_df["hap_var_count"] = total_record_df["hap_id"].map(hid_var_count)
-        total_record_df["ref_genome_similarities"] = total_record_df["hap_id"].map(ref_genome_similarities).fillna(0)
+        total_record_df["hap_max_sim_scores"] = total_record_df["hap_id"].map(hap_max_sim_scores).fillna(0)
         # total_record_df.loc[:, "coefficient"] = total_record_df["coefficient"] * 100 + total_record_df.loc[:, "var_count"]
         total_record_df.to_csv(compare_haplotype_meta_tab.replace(".tsv", ".raw.tsv"), sep = "\t", index = False)
         logger.info(f"Successfully saved the raw haplotype comparison meta table to {compare_haplotype_meta_tab.replace('.tsv', '.raw.tsv')}. And it looks like \n{total_record_df[:10].to_string(index=False)}\n")
         total_record_df = total_record_df.loc[np.logical_not(total_record_df["extreme_vard"]) & \
                                               np.logical_not(total_record_df["scatter_hap"]) & \
                                               (total_record_df["total_depth"] >= 5) & \
-                                              (total_record_df["ref_genome_similarities"] <= 5), :]
-        # total_record_df.loc[:, "coefficient"] = np.clip(total_record_df["coefficient"] + total_record_df["ref_genome_similarities"], 10e-3, None)
+                                              (total_record_df["hap_max_sim_scores"] <= 5), :]
+        # total_record_df.loc[:, "coefficient"] = np.clip(total_record_df["coefficient"] + total_record_df["hap_max_sim_scores"], 10e-3, None)
         if total_record_df.shape[0] == 0:
             failed_lp = True
 
@@ -689,7 +831,7 @@ def inspect_by_haplotypes(input_bam,
 
     if not failed_lp:
         mismap_hids.update(set([hid for hid in hid_extreme_vard if hid_extreme_vard[hid]]))
-        mismap_hids.update(set([hid for hid in ref_genome_similarities if ref_genome_similarities[hid] > 5]))
+        mismap_hids.update(set([hid for hid in hap_max_sim_scores if hap_max_sim_scores[hid] > 5]))
         mismap_hids.update(set([hid for hid in scatter_hid_dict if scatter_hid_dict[hid] and hid_var_count[hid] > 1]))
         correct_map_hids = correct_map_hids - mismap_hids
 
@@ -703,7 +845,7 @@ def inspect_by_haplotypes(input_bam,
     if failed_lp:
         mismap_hids = set([hid for hid in hid_extreme_vard if hid_extreme_vard[hid]])
         mismap_hids.update(set([hid for hid in scatter_hid_dict if scatter_hid_dict[hid] and hid_var_count[hid] > 1]))
-        mismap_hids.update(set([hid for hid in ref_genome_similarities if ref_genome_similarities[hid] > 5]))
+        mismap_hids.update(set([hid for hid in hap_max_sim_scores if hap_max_sim_scores[hid] > 5]))
         mismap_qnames = set([qname for hid in mismap_hids for qname in hap_qname_info[hid]])
         total_qnames = set([qname for qnames in hap_qname_info.values() for qname in qnames])
         correct_map_qnames = total_qnames - mismap_qnames
