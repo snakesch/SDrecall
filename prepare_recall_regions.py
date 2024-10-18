@@ -1,5 +1,4 @@
 import argparse
-import cProfile
 import logging
 import os
 from multiprocessing import Pool
@@ -17,8 +16,8 @@ from preparation.genome import Genome
 from preparation.homoseq_region import HOMOSEQ_REGION
 from preparation.graph_build import read_graphml, create_multiplex_graph
 from preparation.graph_query import extract_SD_paralog_pairs_from_graph, query_connected_nodes
-from convert_nodes_into_hierachical_beds import convert_nodes_into_hierachical_beds
-from sd_pairs import filter_umbrella_pairs
+from preparation.build_beds_and_masked_genomes import build_beds_and_masked_genomes
+from preparation.sd_pairs import filter_umbrella_pairs
 
 from src.log import ColoredFormatter
 from src.suppress_warning import *
@@ -42,8 +41,8 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
     genome_file = rg.fai_index
 
     # Step 0: Calculate the distribution of fragment sizes
-    # avg_frag_size, std_frag_size = get_bam_frag_size(input_bam)
-    avg_frag_size, std_frag_size = 570.4, 150.7
+    avg_frag_size, std_frag_size = get_bam_frag_size(input_bam)
+    # avg_frag_size, std_frag_size = 570.4, 150.7
     logger.info(f"BAM {input_bam} has an average fragment size of {avg_frag_size}bp (std: {std_frag_size}bp)")
     
     ## Define names of intermediate files. Intermediate / final outputs will be written to work_dir.
@@ -235,15 +234,14 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
     nx.write_graphml(final_graph, final_graph_path)
 
     # Step 9: Create beds and masked genomes
-    convert_nodes_into_hierachical_beds(grouped_qnode_cnodes = grouped_qnode_cnodes,
-                                        sd_paralog_pairs = sd_paralog_pairs,
-                                        output_folder = work_dir,
-                                        ref_genome = ref_genome,
-                                        nthreads = threads,
-                                        avg_frag_size = avg_frag_size,
-                                        std_frag_size = std_frag_size)
+    build_beds_and_masked_genomes(grouped_qnode_cnodes = grouped_qnode_cnodes,
+                                    sd_paralog_pairs = sd_paralog_pairs,
+                                    output_folder = work_dir,
+                                    ref_genome = ref_genome,
+                                    nthreads = threads,
+                                    avg_frag_size = avg_frag_size,
+                                    std_frag_size = std_frag_size)
    
-    
 def main():
     parser = argparse.ArgumentParser(description='Deploy PCs for SDrecall.')
 

@@ -14,11 +14,11 @@ from src.const import *
 from src.log import error_handling_decorator
 from preparation.homoseq_region import HOMOSEQ_REGION
 from preparation.genome import Genome
-from intrinsic_variants import getIntrinsicVcf
+from preparation.intrinsic_variants import getIntrinsicVcf
 
 logger = logging.getLogger("SDrecall")
 
-def convert_nodes_into_hierachical_beds(grouped_qnode_cnodes: list,
+def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
                                         sd_paralog_pairs: dict,
                                         output_folder,
                                         ref_genome,

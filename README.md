@@ -11,6 +11,9 @@
 - [ ] Review license
 - [ ] Cleanup code
 
+## Code issues
+- [ ] See preparation.seq for two similar functions (get_bam_frag_size, calculate_mean_read_length)
+
 
 ## Installation
 ### Using conda/mamba

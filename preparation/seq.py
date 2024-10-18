@@ -30,3 +30,4 @@ def get_bam_frag_size(input_bam):
             elif fields[1].startswith('insert size standard deviation:'):
                 std_insert_size = float(fields[2])
     return avg_insert_size, std_insert_size
+
