@@ -490,16 +490,10 @@ def identify_misalignment_per_region(region,
             logger.warning(f"No reads are found for the haplotype across {span}. Skip this haplotype cluster.")
             continue
 
-        read_spans = np.empty((len(reads), 2), dtype=np.int32)
-        hap_vectors = np.full((len(reads), 500), -10, dtype=np.int32)
-        err_vectors = np.full((len(reads), 500), -10, dtype=np.float32)
-        hap_vectors, err_vectors, total_hapvectors, total_errvectors = record_hap_err_vectors_per_region(reads,
-                                                                                                         read_spans,
-                                                                                                         hap_vectors,
-                                                                                                         err_vectors,
-                                                                                                         total_hapvectors,
-                                                                                                         total_errvectors,
-                                                                                                         logger = logger)
+        read_spans, hap_vectors, err_vectors, total_hapvectors, total_errvectors = record_hap_err_vectors_per_region(reads,
+                                                                                                                     total_hapvectors,
+                                                                                                                     total_errvectors,
+                                                                                                                     logger = logger)
 
         # logger.info(f"Haplotype across {span} contains {len(reads)} reads.")
         consensus_sequence = assemble_consensus(hap_vectors, err_vectors, read_spans)
@@ -522,6 +516,11 @@ def identify_misalignment_per_region(region,
 
 
 def record_hap_err_vectors_per_region(reads, read_spans, hap_vectors, err_vectors, total_hap_vectors, total_err_vectors, logger = logger):
+    # Initialize the read spans (2d array), haplotype vectors (2d array) and error vectors (2d array)
+    read_spans = np.empty((len(reads), 2), dtype=np.int32)  # 2d array to store the start and end positions of the reads
+    hap_vectors = np.full((len(reads), 500), -10, dtype = np.int32)  # 2d array to store the haplotype vectors (every row stores a haplotype vector, usually haplotype vector is shorter than 500, the remained positions are filled with -10)
+    err_vectors = np.full((len(reads), 500), -10, dtype = np.float32)  # 2d array to store the error vectors (every row stores a error vector, usually error vector is shorter than 500, the remained positions are filled with -10)
+
     # Initialize a set to store the read IDs of the reads overlapping with the iterating continuous region
     srids = set()
     # Iterate over all the reads overlapping with the iterating continuous region
@@ -551,7 +550,7 @@ def record_hap_err_vectors_per_region(reads, read_spans, hap_vectors, err_vector
         # Store the error vector of the read into the err_vectors 2d array
         err_vectors[i, :err_vector.size] = err_vector
 
-    return hap_vectors, err_vectors, total_hap_vectors, total_err_vectors
+    return read_spans, hap_vectors, err_vectors, total_hap_vectors, total_err_vectors
 
 
 
@@ -700,21 +699,12 @@ def inspect_by_haplotypes(input_bam,
             logger.info(f"The haplotype {hid} contains {len(reads)} reads in the continuous region {span}.")
             chrom = reads[0].reference_name
 
-
-            # Initialize the read spans (2d array), haplotype vectors (2d array) and error vectors (2d array)
-            read_spans = np.empty((len(reads), 2), dtype=np.int32)  # 2d array to store the start and end positions of the reads
-            hap_vectors = np.full((len(reads), 500), -10, dtype = np.int32)  # 2d array to store the haplotype vectors (every row stores a haplotype vector, usually haplotype vector is shorter than 500, the remained positions are filled with -10)
-            err_vectors = np.full((len(reads), 500), -10, dtype = np.float32)  # 2d array to store the error vectors (every row stores a error vector, usually error vector is shorter than 500, the remained positions are filled with -10)
-
             # Iterate over all the reads overlapping with the iterating continuous region covered by the iterating haplotype
             # Record the haplotype vectors and error vectors for all the reads overlapping with the iterating continuous region to the prepared 2d arrays
-            hap_vectors, err_vectors, total_hap_vectors, total_err_vectors = record_hap_err_vectors_per_region(reads,
-                                                                                                               read_spans,
-                                                                                                               hap_vectors,
-                                                                                                               err_vectors,
-                                                                                                               total_hap_vectors,
-                                                                                                               total_err_vectors,
-                                                                                                               logger = logger)
+            read_spans, hap_vectors, err_vectors, total_hap_vectors, total_err_vectors = record_hap_err_vectors_per_region(reads,
+                                                                                                                           total_hap_vectors,
+                                                                                                                           total_err_vectors,
+                                                                                                                           logger = logger)
 
             # Assemble the consensus sequence for the iterating continuous region
             consensus_sequence = assemble_consensus(hap_vectors, err_vectors, read_spans)
