@@ -775,6 +775,7 @@ def inspect_by_haplotypes(input_bam,
         if record_df is not None:
             record_dfs.append(record_df)
 
+    # Below we need to consider the cases BILC failed to converge.
     failed_lp = False
     if len(record_dfs) > 0:
         total_record_df = pd.concat(record_dfs)
@@ -786,6 +787,7 @@ def inspect_by_haplotypes(input_bam,
             remained_hapid_dict = { k:v for k,v in hap_qname_info.items() if k in remained_hapids }
             logger.info(f"The haplotypes that have not been inspected are {remained_hapids}. Their qnames are: \n{remained_hapid_dict}\n")
 
+        # Convert the dictionary map to the columns in the dataframe
         total_record_df["extreme_vard"] = total_record_df["hap_id"].map(hid_extreme_vard)
         total_record_df["scatter_hap"] = total_record_df["hap_id"].map(scatter_hid_dict).fillna(False)
         total_record_df["hap_var_count"] = total_record_df["hap_id"].map(hid_var_count)
