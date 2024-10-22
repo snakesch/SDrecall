@@ -187,37 +187,28 @@ def judge_misalignment_by_extreme_vardensity(seq):
     five_vard = count_window_var_density(seq, padding_size = 42)
     six_vard = count_window_var_density(seq, padding_size = 65)
     read_vard = count_window_var_density(seq, padding_size = 74)
-    # indel_count = count_continuous_indel_blocks(seq)
+    
     if numba_sum(five_vard >= 5/85) > 0:
         select_bool = five_vard >= 5/85
-        # pad the select_bool by 42 to both directions
-        true_segments = extract_true_stretches(select_bool)
-        max_indel_count = 0
-        for i in range(true_segments.shape[0]):
-            start = true_segments[i, 0] - 42
-            end = true_segments[i, 1] + 42
-            five_seq = seq[start:end]
-            indel_count = count_continuous_indel_blocks(five_seq)
-            max_indel_count = max(max_indel_count, indel_count)
-        if max_indel_count > 1:
-            return True
+        padding = 42
     elif numba_sum(six_vard >= 6/131) > 0:
         select_bool = six_vard >= 6/131
-        true_segments = extract_true_stretches(select_bool)
-        max_indel_count = 0
-        for i in range(true_segments.shape[0]):
-            start = true_segments[i, 0] - 65
-            end = true_segments[i, 1] + 65
-            five_seq = seq[start:end]
-            indel_count = count_continuous_indel_blocks(five_seq)
-            max_indel_count = max(max_indel_count, indel_count)
-        if max_indel_count > 1:
-            return True
+        padding = 65
     elif numba_sum(read_vard > 11/148) > 0:
         return True
-    return False
+    else:
+        return False
 
-
+    true_segments = extract_true_stretches(select_bool)
+    max_indel_count = 0
+    for i in range(true_segments.shape[0]):
+        start = true_segments[i, 0] - padding
+        end = true_segments[i, 1] + padding
+        five_seq = seq[start:end]
+        indel_count = count_continuous_indel_blocks(five_seq)
+        max_indel_count = max(max_indel_count, indel_count)
+    if max_indel_count > 1:
+        return True
 
 
 @numba.njit(types.float32[:](types.int32[:, :]), fastmath=True)
@@ -604,9 +595,7 @@ def stat_refseq_similarity(intrin_bam_ncls,
         interval_con_seq = consensus_sequence[overlap_span[0] - span[0]:overlap_span[1] - span[0]]
         # logger.info(f"Inspect the conesensus sequence (length {len(consensus_sequence)})\n{consensus_sequence.tolist()}\nwith the genomic haplotype (length {len(interval_genomic_hap)})\n{interval_genomic_hap.tolist()}\n")
 
-        # Compare the haplotype consensus sequence with the reference sequence from elsewhere
-        # Count the variants carried by the haplotype
-        # Count the variants carried by the haplotype when aligned to the reference sequence from elsewhere
+        # Identify paralogous sequence variants (PSVs) originated from paralogous reference sequences
         varcount, alt_varcount = ref_genome_similarity(interval_con_seq, interval_genomic_hap)
         if homo_refseq_qname in varcounts_among_refseqs[hid]:
             varcounts_among_refseqs[hid][homo_refseq_qname].append((varcount, alt_varcount))

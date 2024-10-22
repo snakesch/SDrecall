@@ -11,43 +11,30 @@ from numba_operators import numba_diff_indices, \
 logger = logging.getLogger('SDrecall')
 
 
-
 @numba.njit(types.bool_[:](types.int32[:]), fastmath=True)
 def get_indel_bools(seq_arr):
     return (seq_arr > 1) | (seq_arr == -6)
 
-
-
 @numba.njit(types.int32(types.bool_[:]), fastmath=True)
-def count_continuous_blocks(array):
+def count_continuous_blocks(arr, vartype="snp"):
     """
-    This function counts the number of continuous (consecutive) blocks of True values in a 1D boolean array.
-
-    Args:
-    array (list or numpy array): Input array containing numbers.
-
-    Returns:
-    int: The number of continuous negative blocks.
+    This function counts the number of blocks of True values in a 1D boolean array.
+    Additional checks for indels.
     """
-    is_var = array
-    is_var_size = is_var.size
-    if is_var_size == 0:
+    if arr.size == 0:
         return 0
 
-    # Add False at the start and end to correctly count the transitions at the boundaries
-    extended = np.empty(is_var_size + 2, dtype=np.bool_)
-    extended[0] = False
-    extended[-1] = False
-    extended[1:-1] = is_var
+    if vartype == "indel":
+        arr = (arr == -6) | (arr > 1)
 
-    # Count drops from True to False which represent the end of a block of True values
-    # For this method to work. Both ends cannot be True
-    not_bools = numba_not(extended[1:])
-    block_bools = numba_and(extended[:-1], not_bools)
-    block_count = numba_sum(block_bools)
+    # Pad one False to the beginning and end of arr
+    extended_arr = np.empty(arr.size + 2, dtype=np.bool_)
+    extended_arr[1:-1] = arr
 
-    return block_count
+    shifted_sequence = numba_not(extended_arr[1:])
+    block_bools = numba_and(extended_arr[:-1], shifted_sequence)
 
+    return numba_sum(block_bools)
 
 
 @numba.njit(types.int32(types.int32[:]), fastmath=True)
@@ -56,42 +43,41 @@ def count_snv(array):
     return count_continuous_blocks(snv_bools)
 
 
+# @numba.njit(types.int32(types.int32[:]), fastmath=True)
+# def count_continuous_indel_blocks(array):
+#     """
+#     This function counts the number of continuous (consecutive) blocks of negative numbers in a 1D array.
 
-@numba.njit(types.int32(types.int32[:]), fastmath=True)
-def count_continuous_indel_blocks(array):
-    """
-    This function counts the number of continuous (consecutive) blocks of negative numbers in a 1D array.
+#     Args:
+#     array (list or numpy array): Input array containing numbers.
 
-    Args:
-    array (list or numpy array): Input array containing numbers.
+#     Returns:
+#     int: The number of continuous negative blocks.
+#     """
+#     is_var = (array == -6) | (array > 1)
+#     is_var_size = is_var.size
+#     if is_var_size == 0:
+#         return 0
 
-    Returns:
-    int: The number of continuous negative blocks.
-    """
-    is_var = (array == -6) | (array > 1)
-    is_var_size = is_var.size
-    if is_var_size == 0:
-        return 0
+#     # Add False at the start and end to correctly count the transitions at the boundaries
+#     extended = np.empty(is_var_size + 2, dtype=np.bool_)
+#     extended[0] = False
+#     extended[-1] = False
+#     extended[1:-1] = is_var
 
-    # Add False at the start and end to correctly count the transitions at the boundaries
-    extended = np.empty(is_var_size + 2, dtype=np.bool_)
-    extended[0] = False
-    extended[-1] = False
-    extended[1:-1] = is_var
+#     # Count drops from True to False which represent the end of a block of True values
+#     # For this method to work. Both ends cannot be True
+#     not_bools = numba_not(extended[1:])
+#     block_bools = numba_and(extended[:-1], not_bools)
+#     block_count = numba_sum(block_bools)
 
-    # Count drops from True to False which represent the end of a block of True values
-    # For this method to work. Both ends cannot be True
-    not_bools = numba_not(extended[1:])
-    block_bools = numba_and(extended[:-1], not_bools)
-    block_count = numba_sum(block_bools)
-
-    return block_count
+#     return block_count
 
 
 
 @numba.njit(types.int32(types.int32[:]), fastmath=True)
 def count_var(array):
-    return count_snv(array) + count_continuous_indel_blocks(array)
+    return count_snv(array) + count_continuous_blocks(array, vartype="indel")
 
 
 
@@ -719,7 +705,7 @@ def determine_same_haplotype(read, other_read,
     The following code block is used to calculate the edge weight between two reads and it is based on the overlapping span and the number of shared variants.
     1. overlap span is calculated based on the number of identical bases between two reads
     2. The number of shared variants is calculated by the function count_var
-    3. The number of indels is calculated by the function count_continuous_indel_blocks
+    3. The number of indels is calculated by the function count_continuous_blocks
 
     We created the score array, this score array is used to assign weight to edges depending on the number of SNVs shared by two read pairs
     It will be later used by the function determine_same_haplotype to assign weight to edges
@@ -728,7 +714,7 @@ def determine_same_haplotype(read, other_read,
     identical_part = interval_hap_vector[interval_hap_vector == interval_other_hap_vector]
     overlap_span = identical_part.size
     var_count = count_var(identical_part)
-    indel_num = count_continuous_indel_blocks(identical_part)
+    indel_num = count_continuous_blocks(identical_part, vartype="indel")
     # assert var_size is not None, f"The size of the variant should not be None, but the actual size is {var_size}, the input array is {interval_hap_vector}"
 
     snvcount_score_arr = np.array([mean_read_length * 1 - 50 + mean_read_length * i for i in range(50)])
