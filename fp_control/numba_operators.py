@@ -46,11 +46,10 @@ def custom_all_numba(array):
 
 @numba.njit
 def any_false_numba(array):
-    has_false = False
     for value in array:
         if value == -1:
             return True
-    return has_false
+    return False
 
 
 @numba.njit(parallel=True)

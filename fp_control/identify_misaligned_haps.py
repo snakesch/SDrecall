@@ -47,24 +47,18 @@ def ref_genome_similarity(query_read_vector,
 
 @numba.njit
 def rank_unique_values(arr):
-    # Step 1: Extract unique values and sort them
+    ## Extract unique values and sort them
     unique_values = np.unique(arr)
 
-    # Step 2: Create a mapping from each unique value to its rank
-    value_to_rank = np.empty(unique_values.shape, dtype=np.int32)
-    for i in range(unique_values.size):
-        value_to_rank[i] = i + 1  # Ranks start from 1
-
-    # Step 3: Apply the mapping to create a new array with the ranks
+    ## Rank unique values by sorted order
     ranks = np.empty(arr.shape, dtype=np.int32)
-    for i in range(arr.size):
-        for j in range(unique_values.size):
-            if arr[i] == unique_values[j]:
-                ranks[i] = value_to_rank[j]
+    for i, it in enumerate(arr):
+        for j, jt in enumerate(unique_values):
+            if it == jt:
+                ranks[i] = j + 1
                 break
+    
     return ranks
-
-
 
 
 @numba.njit(types.int32[:](types.int32[:,:], types.float32[:,:], types.int32[:,:]), fastmath=True)
@@ -142,8 +136,6 @@ def count_window_var_density(array, padding_size = 25):
         density_arr[i] = density
 
     return density_arr
-
-
 
 
 @numba.njit(types.int32[:,:](types.boolean[:]), fastmath=True)
@@ -415,13 +407,9 @@ def identify_misalignment_per_region(region,
                                      total_genomic_haps = {},
                                      mean_read_length = 148,
                                      logger = logger ):
-    bam_ncls, read_pair_dict, _, _ = bam_ncls
+    bam_ncls, read_pair_dict, *_ = bam_ncls
     '''
-    The region is a tuple of (chrom, start, end)
-    It basically is a window we inspect within to rank haplotypes based on their similarities to the reference genomic sequence.
-
-    So primarily, we need to assign every haplotype enclosing this window a rank position.
-    Thats what the function do.
+    Rank haplotypes enclosed by region by sequence similarity to paralogous reference sequences
 
     Inputs:
     region: a tuple of (chrom, start, end)
@@ -434,8 +422,8 @@ def identify_misalignment_per_region(region,
     total_errvectors: a dictionary {read_id: error_vector}
     total_genomic_haps: a dictionary {reference_sequence_id: haplotype_vector}
     '''
+    ## Identify reads overlapping region
     chrom, start, end = region
-    # grab overlapping reads
     overlap_reads_iter = overlapping_reads_generator(bam_ncls,
                                                      read_pair_dict,
                                                      chrom,

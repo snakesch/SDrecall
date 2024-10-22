@@ -16,16 +16,12 @@ def get_indel_bools(seq_arr):
     return (seq_arr > 1) | (seq_arr == -6)
 
 @numba.njit(types.int32(types.bool_[:]), fastmath=True)
-def count_continuous_blocks(arr, vartype="snp"):
+def count_continuous_blocks(arr):
     """
     This function counts the number of blocks of True values in a 1D boolean array.
-    Additional checks for indels.
     """
     if arr.size == 0:
         return 0
-
-    if vartype == "indel":
-        arr = (arr == -6) | (arr > 1)
 
     # Pad one False to the beginning and end of arr
     extended_arr = np.empty(arr.size + 2, dtype=np.bool_)
@@ -43,100 +39,42 @@ def count_snv(array):
     return count_continuous_blocks(snv_bools)
 
 
-# @numba.njit(types.int32(types.int32[:]), fastmath=True)
-# def count_continuous_indel_blocks(array):
-#     """
-#     This function counts the number of continuous (consecutive) blocks of negative numbers in a 1D array.
+@numba.njit(types.int32(types.int32[:]), fastmath=True)
+def count_continuous_indel_blocks(array):
+    """
+    This function counts the number of blocks of -6 and positive integers in a numpy array.
+    """
+    is_var = (array == -6) | (array > 1)
 
-#     Args:
-#     array (list or numpy array): Input array containing numbers.
-
-#     Returns:
-#     int: The number of continuous negative blocks.
-#     """
-#     is_var = (array == -6) | (array > 1)
-#     is_var_size = is_var.size
-#     if is_var_size == 0:
-#         return 0
-
-#     # Add False at the start and end to correctly count the transitions at the boundaries
-#     extended = np.empty(is_var_size + 2, dtype=np.bool_)
-#     extended[0] = False
-#     extended[-1] = False
-#     extended[1:-1] = is_var
-
-#     # Count drops from True to False which represent the end of a block of True values
-#     # For this method to work. Both ends cannot be True
-#     not_bools = numba_not(extended[1:])
-#     block_bools = numba_and(extended[:-1], not_bools)
-#     block_count = numba_sum(block_bools)
-
-#     return block_count
-
+    return count_continuous_blocks(is_var)
 
 
 @numba.njit(types.int32(types.int32[:]), fastmath=True)
 def count_var(array):
-    return count_snv(array) + count_continuous_blocks(array, vartype="indel")
-
-
+    return count_snv(array) + count_continuous_indel_blocks(array)
 
 
 @numba.njit(types.bool_(types.int8[:], types.int8[:], types.int8), fastmath=True)
 def compare_sequences(read_seq, other_seq, except_char):
     """
-    Compare two sequences, handling 'N' bases.
-
-    Parameters:
-    - seq1, seq2: numpy.ndarray
-        Arrays representing the sequences to compare.
-    - N_value: int
-        Integer representation of 'N' in the sequence arrays.
-
-    Returns:
-    - bool: True if sequences match (ignoring 'N's), False otherwise.
+    Compares two sequences, return True if they are equivalent. Ambiguous bases ("N") as ignored as except_char.
     """
     if read_seq.shape != other_seq.shape:
         return False
 
-    total_match = True
     for i in range(read_seq.size):
         if read_seq[i] != other_seq[i]:
             if read_seq[i] != except_char and other_seq[i] != except_char:
                 return False
 
-    return total_match
+    return True
 
 
-
-def get_read_id(read):
+def get_read_id(read) -> str:
     """
-    Generate a unique identifier for a read.
-
-    This function creates a unique identifier for a read by combining its query name
-    and flag. The flag is included because:
-
-    1. It distinguishes between reads in a pair: For paired-end sequencing, each pair
-       of reads will have the same query name but different flags.
-
-    2. It provides information about the read's properties: The flag contains important
-       information such as whether the read is paired, mapped, secondary alignment, etc.
-
-    3. It ensures uniqueness: In cases where the same read might appear multiple times
-       (e.g., secondary alignments), the flag helps to differentiate these instances.
-
-    Parameters:
-    -----------
-    read : pysam.AlignedSegment
-        The read object from which to generate the ID.
-
-    Returns:
-    --------
-    str
-        A string in the format "query_name:flag" that uniquely identifies the read.
+    Generate a unique identifier for each read in a pair, using also alignment information as BAM flags
     """
     return f"{read.query_name}:{read.flag}"
-
 
 
 def prepare_ref_query_idx_map(qseq_ref_pos_arr):
@@ -169,7 +107,6 @@ def prepare_ref_query_idx_map(qseq_ref_pos_arr):
         if ri >= 0:
             numba_dict[ri] = qi
     return numba_dict
-
 
 
 def get_interval_seq(read, interval_start, interval_end, read_ref_pos_dict = {}):
@@ -263,7 +200,6 @@ def get_interval_seq_qual(read, interval_start, interval_end, read_ref_pos_dict 
         ref_positions = prepare_ref_query_idx_map(qseq_ref_positions)
         read_ref_pos_dict[read_id] = (ref_positions, qseq_ref_positions)
 
-    size = interval_end - interval_start + 1
     preseq = []
     qual_preseq = []
 
@@ -705,7 +641,7 @@ def determine_same_haplotype(read, other_read,
     The following code block is used to calculate the edge weight between two reads and it is based on the overlapping span and the number of shared variants.
     1. overlap span is calculated based on the number of identical bases between two reads
     2. The number of shared variants is calculated by the function count_var
-    3. The number of indels is calculated by the function count_continuous_blocks
+    3. The number of indels is calculated by the function count_continuous_indel_blocks
 
     We created the score array, this score array is used to assign weight to edges depending on the number of SNVs shared by two read pairs
     It will be later used by the function determine_same_haplotype to assign weight to edges
@@ -714,7 +650,7 @@ def determine_same_haplotype(read, other_read,
     identical_part = interval_hap_vector[interval_hap_vector == interval_other_hap_vector]
     overlap_span = identical_part.size
     var_count = count_var(identical_part)
-    indel_num = count_continuous_blocks(identical_part, vartype="indel")
+    indel_num = count_continuous_indel_blocks(identical_part)
     # assert var_size is not None, f"The size of the variant should not be None, but the actual size is {var_size}, the input array is {interval_hap_vector}"
 
     snvcount_score_arr = np.array([mean_read_length * 1 - 50 + mean_read_length * i for i in range(50)])
