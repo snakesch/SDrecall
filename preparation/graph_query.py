@@ -217,6 +217,13 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                     continue
                 sd_paralog_pairs[tup[0]] = tup[1]
                 qnode, counterparts_nodes, query_counter_nodes = tup
+                if len(counterparts_nodes) == 0:
+                    # WGAC contains one interval (chrX, 70902050, 71018311) which only corresponds with itself, and is thus filtered out
+                    logger.debug(f"No counterparts nodes are found for query node {qnode}, skipping current query node")
+                    logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************")
+                    i+=1
+                    continue
+                
                 # Add edges between qnode and its counterparts in the connected qnodes graph
                 connected_qnodes_graph.add_node(qnode)
                 for cnode in query_counter_nodes:
@@ -225,12 +232,6 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                 # qnode: tuple = (tuple_node, [list of nodes in self-defined class HOMOSEQ_REG])
                 assert isinstance(qnode, tuple)
                 
-                if len(counterparts_nodes) == 0:
-                    # WGAC contains one interval (chrX, 70902050, 71018311) which only corresponds with itself, and is thus filtered out
-                    logger.debug(f"No counterparts nodes are found for query node {qnode}, skipping current query node")
-                    logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************")
-                    i+=1
-                    continue
                 
                 # # First annotate the query node
                 # unfiltered_graph.nodes[qnode]["FRA_dest"] = str(i)
