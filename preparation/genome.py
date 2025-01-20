@@ -7,6 +7,7 @@ import sys
 from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
+from pyfaidx import Fasta
 
 from pybedtools import BedTool
 from src.utils import executeCmd, update_plain_file_on_md5
@@ -45,7 +46,7 @@ class Genome:
         region = self._extract_region_name(bedf)
         target_bed = self._prepare_target_bed(bedf, avg_frag_size, std_frag_size, genome, logger)
 
-        ref_genome_seq = SeqIO.to_dict(SeqIO.parse(self.path, "fasta"))
+        ref_genome_seq = Fasta(self.path)
         masked_genome_contigs = self._mask_intervals(target_bed, ref_genome_seq, logger)
 
         masked_genome = self._write_masked_genome(masked_genome_contigs, region)
@@ -65,11 +66,11 @@ class Genome:
         return target_bed
 
     def _mask_intervals(self, target_bed, ref_genome_seq, logger):
-        return [SeqRecord(self._apply_mask(ref_genome_seq[interval.chrom].seq[interval.start:interval.stop], logger, interval),
+        mask_seq = "N" * 1000
+        return [SeqRecord(self._apply_mask(ref_genome_seq[interval.chrom][interval.start:interval.stop].seq, logger, interval, mask_seq),
                           id=f"{interval.chrom}:{interval.start}", description="") for interval in target_bed]
 
-    def _apply_mask(self, interval_seq, logger, interval):
-        mask_seq = "N" * 1000
+    def _apply_mask(self, interval_seq, logger, interval, mask_seq):
         masked_seq = mask_seq + str(interval_seq)[1000:-1000] + mask_seq
         if str(masked_seq) != str(interval_seq):
             logger.debug(f"Sequence already contains Ns at both ends: {interval.chrom}:{interval.start}-{interval.stop}")

@@ -1,10 +1,12 @@
 import logging
 import sys
+import os
 
-import networkx as nx
 import graph_tool.all as gt
+from typing import Tuple
 
 from src.log import log_command
+from src.utils import executeCmd, prepare_tmp_file
 from preparation.homoseq_region import HOMOSEQ_REGION
 
 logger = logging.getLogger('SDrecall')
@@ -72,11 +74,112 @@ def inspect_cnode_along_route(graph,
         qnode = cnode
     return cnode
 
+
+def compare_homologous_sequences(
+    ori_qnode: tuple,
+    cnode: HOMOSEQ_REGION,
+    reference_fasta: str,
+    min_similarity: float = 0.95,
+    tmp_dir: str = "/paedyl01/disk1/yangyxt/test_tmp",
+    logger: logging.Logger = logger) -> Tuple[bool, float]:
+    """
+    Compare genomic sequences between original query node and counterpart node.
+    
+    Args:
+        ori_qnode: Original query node
+        cnode: Counterpart node
+        reference_fasta: Path to reference genome fasta
+        min_similarity: Minimum sequence similarity threshold (default: 0.95)
+        tmp_dir: Directory for temporary files
+        logger: Logger instance
+    
+    Returns:
+        Tuple of (is_similar: bool, similarity_score: float)
+    """
+    # Get relative coordinates for comparison
+    qnode_rela_start, qnode_rela_end = cnode.qnode_relative_region(ori_qnode.data, logger=logger)
+    qnode_region = f"{ori_qnode[0]}:{ori_qnode[1] + qnode_rela_start}-{ori_qnode[1] + qnode_rela_end}"
+    qnode_strand = ori_qnode[3]
+    logger.info(f"The query node {ori_qnode} has relative coordinates {qnode_rela_start} and {qnode_rela_end} and the region is {qnode_region} at strand {qnode_strand}")
+
+    cnode_region_tup = tuple([str(field) for field in cnode])
+    cnode_region = f"{cnode_region_tup[0]}:{cnode_region_tup[1]}-{cnode_region_tup[2]}"
+    cnode_strand = cnode_region_tup[3]
+    logger.info(f"The counterpart node {cnode.data} has relative coordinates {cnode.ups_rela_start} and {cnode.ups_rela_end} and the region is {cnode_region} at strand {cnode_strand}")
+
+    if qnode_rela_start == "NaN" or qnode_rela_end == "NaN":
+        logger.warning(f"Invalid relative coordinates for {cnode.data}")
+        return False, 0.0
+
+    # Create temporary FASTA files for the regions
+    tmp_q = prepare_tmp_file(suffix=".fa")
+    tmp_c = prepare_tmp_file(suffix=".fa")
+    
+    try:
+        # Extract query sequence
+        cmd_q = f"samtools faidx {reference_fasta} "
+        cmd_q += f"{qnode_region}"
+        cmd_q += f" > {tmp_q.name}"
+        executeCmd(cmd_q, logger=logger)
+
+        # Extract counterpart sequence
+        cmd_c = f"samtools faidx {reference_fasta} "
+        cmd_c += f"{cnode_region}"
+        # Handle different strands
+        if cnode_strand != qnode_strand:
+            cmd_c += " -i"
+        cmd_c += f" > {tmp_c.name}"
+        executeCmd(cmd_c, logger=logger)
+
+        # Close files to ensure writing is complete
+        tmp_q.close()
+        tmp_c.close()
+
+        # Run minimap2 for alignment
+        tmp_paf = prepare_tmp_file(suffix=".paf")
+        cmd_map = f"minimap2 -x asm5 --eqx --cs -c {tmp_q.name} {tmp_c.name} > {tmp_paf.name}"
+        executeCmd(cmd_map, logger=logger)
+
+        # Parse PAF file to calculate similarity
+        with open(tmp_paf.name) as f:
+            for line in f:
+                fields = line.strip().split('\t')
+                if len(fields) < 12:
+                    continue
+                    
+                # Extract alignment statistics
+                query_len = int(fields[1])
+                matches = int(fields[9])
+                aln_len = int(fields[10])
+                
+                # Calculate similarity score
+                similarity = matches / aln_len if aln_len > 0 else 0
+                
+                # Check if similarity meets threshold
+                is_similar = similarity >= min_similarity
+                
+                logger.info(f"Sequence similarity between qnode {qnode_region} and cnode {cnode_region}: {similarity:.3f}")
+                return is_similar, similarity
+
+        # If no alignment found
+        logger.warning(f"No alignment found between qnode {qnode_region} and cnode {cnode_region}")
+        return False, 0.0
+
+    finally:
+        # Cleanup temporary files
+        for tmp_file in [tmp_q, tmp_c, tmp_paf]:
+            try:
+                os.unlink(tmp_file.name)
+            except:
+                pass
+
+
 def summarize_shortest_paths_per_subgraph(ori_qnode, 
                                           subgraph, 
                                           graph, 
                                           subgraph_label,
                                           all_qnode_vertices,
+                                          reference_fasta,
                                           avg_frag_size = 500, 
                                           std_frag_size = 150,
                                           logger = logger):
@@ -109,7 +212,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
         # Skip the current path in case of adjacent PO edges
         if len([i for i in range(0, len(shortest_path_edges) - 1) if graph.ep["overlap"][shortest_path_edges[i]] == "True" and graph.ep["overlap"][shortest_path_edges[i+1]] == "True"]) > 1:
             continue
-        if reduce(mul, [1 - graph.ep["weight"][e] for e in shortest_path_edges if graph.ep["type"][e] == "segmental_duplication"]) < 0.6:
+        if reduce(mul, [1 - graph.ep["weight"][e] for e in shortest_path_edges if graph.ep["type"][e] == "segmental_duplication"]) < 0.95:
             continue
         
         # If the last edge is segmental duplication, then check if the region is considerably large
@@ -119,9 +222,23 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
                                           avg_frag_size, 
                                           std_frag_size, 
                                           logger = logger)
+        
         if cnode:
-            logger.debug(f"Found a new counterparts node {cnode} for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes. The traversal route is {cnode.traverse_route}")
+            is_similar, similarity = compare_homologous_sequences(ori_qnode, 
+                                                                  cnode, 
+                                                                  reference_fasta, 
+                                                                  min_similarity = 0.95, 
+                                                                  tmp_dir = "/paedyl01/disk1/yangyxt/test_tmp", 
+                                                                  logger = logger )
+        else:
+            is_similar = False
+            similarity = 0.0
+        
+        if is_similar:
+            logger.info(f"Found a new counterparts node {cnode} for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes. The traverse route is {cnode.traverse_route} \n")
             counter_nodes.append(cnode)
+        else:
+            logger.info(f"The cnode {cnode} is not similar to (similarity only {similarity}) the query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes. The traverse route is {cnode.traverse_route} \n")
 
     if len(counter_nodes) == 0:
         logger.debug(f"No cnodes found for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes, (one of the node is {HOMOSEQ_REGION(shortest_path_verts[-1], graph)}).")
@@ -134,6 +251,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
 def traverse_network_to_get_homology_counterparts(qnode, 
                                                   directed_graph, 
                                                   all_qnode_vertices,
+                                                  reference_fasta,
                                                   avg_frag_size=500, 
                                                   std_frag_size=150,
                                                   logger = logger):
@@ -164,6 +282,7 @@ def traverse_network_to_get_homology_counterparts(qnode,
                                                                             directed_graph, 
                                                                             uniq_comp_labels[i],
                                                                             all_qnode_vertices, 
+                                                                            reference_fasta,
                                                                             avg_frag_size, 
                                                                             std_frag_size,
                                                                             logger = logger)
