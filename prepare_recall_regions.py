@@ -203,6 +203,7 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
     sd_paralog_pairs, connected_qnode_components = extract_SD_paralog_pairs_from_graph( query_nodes, 
                                                                                 graph, 
                                                                                 graph_path = final_graph_path, 
+                                                                                reference_fasta = ref_genome,
                                                                                 avg_frag_size = avg_frag_size, 
                                                                                 std_frag_size = std_frag_size, 
                                                                                 threads=threads )

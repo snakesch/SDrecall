@@ -123,6 +123,7 @@ def imap_traverse(tup_args):
 def extract_SD_paralog_pairs_from_graph(query_nodes, 
                                     directed_graph, 
                                     graph_path = "", 
+                                    reference_fasta = "",
                                     avg_frag_size = 500, 
                                     std_frag_size = 150, 
                                     threads = 12,
@@ -194,6 +195,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                                           zip(sorted_query_nodes,
                                               qnode_components,
                                               repeat(tuple([int(v) for v in qnode_vertices])),
+                                              repeat(reference_fasta),
                                               repeat(avg_frag_size), 
                                               repeat(std_frag_size)))
 
