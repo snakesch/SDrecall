@@ -2,6 +2,7 @@ import os
 import subprocess
 import logging
 import tempfile
+import re
 
 from pybedtools import BedTool
 
@@ -110,6 +111,27 @@ def perform_bedtools_sort_and_merge(bed_file,
 
 
 def filter_bed_by_interval_size(bed_obj, interval_size_cutoff):
-
     return bed_obj.filter(lambda x: len(x) > interval_size_cutoff).sort()
 
+
+
+def convert_input_value(v):
+    if type(v) == str:
+        if re.search(r"^[Tt][Rr][Uu][Ee]$", v):
+            return True
+        elif re.search(r"^[Ff][Aa][Ll][Ss][Ee]$", v):
+            return False
+        elif re.search(r"^[0-9]+$", v):
+            return int(v)
+        elif re.search(r"^[0-9]*\.[0-9]+$", v):
+            return float(v)
+        elif v == "None":
+            return None
+        elif re.search(r"^[Nn][Aa][Nn]$", v):
+            return np.nan
+        elif "," in v:
+            return [convert_input_value(sub_v) for sub_v in v.split(",")]
+        else:
+            return v
+    else:
+        return v

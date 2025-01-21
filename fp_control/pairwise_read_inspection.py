@@ -6,7 +6,10 @@ from numba import types
 from numba_operators import numba_diff_indices, \
                             numba_sum, \
                             numba_not, \
-                            numba_and
+                            numba_and, \
+                            numba_slicing, \
+                            numba_indexing_int32, \
+                            numba_indexing_int8
 
 logger = logging.getLogger('SDrecall')
 
@@ -33,13 +36,13 @@ def count_continuous_blocks(arr):
     return numba_sum(block_bools)
 
 
-@numba.njit(types.int32(types.int32[:]), fastmath=True)
+@numba.njit(types.int32(types.int16[:]), fastmath=True)
 def count_snv(array):
     snv_bools = array == -4
     return count_continuous_blocks(snv_bools)
 
 
-@numba.njit(types.int32(types.int32[:]), fastmath=True)
+@numba.njit(types.int32(types.int16[:]), fastmath=True)
 def count_continuous_indel_blocks(array):
     """
     This function counts the number of blocks of -6 and positive integers in a numpy array.
@@ -49,7 +52,7 @@ def count_continuous_indel_blocks(array):
     return count_continuous_blocks(is_var)
 
 
-@numba.njit(types.int32(types.int32[:]), fastmath=True)
+@numba.njit(types.int32(types.int16[:]), fastmath=True)
 def count_var(array):
     return count_snv(array) + count_continuous_indel_blocks(array)
 
@@ -77,7 +80,8 @@ def get_read_id(read) -> str:
     return f"{read.query_name}:{read.flag}"
 
 
-def prepare_ref_query_idx_map(qseq_ref_pos_arr):
+@numba.njit(types.int32[:](types.int32[:], types.int32), fastmath=True)
+def prepare_ref_query_idx_map(qseq_ref_pos_arr, read_ref_start):
     '''
     This function is used to create a mapping from reference genomic positions to query sequence positions
     input qseq_ref_pos_arr is an array of reference genomic positions corresponding to each base in the query sequence
@@ -101,131 +105,51 @@ def prepare_ref_query_idx_map(qseq_ref_pos_arr):
 
     ri stands for reference index, qi stands for query index
     '''
-    numba_dict = {}
+    numba_arr_2d = np.full((qseq_ref_pos_arr.max() - read_ref_start + 1), -1, dtype=np.int32)
     for qi in range(qseq_ref_pos_arr.size):
         ri = qseq_ref_pos_arr[qi]
         if ri >= 0:
-            numba_dict[ri] = qi
-    return numba_dict
+            numba_arr_2d[ri - read_ref_start] = qi
+    return numba_arr_2d
 
 
-def get_interval_seq(read, interval_start, interval_end, read_ref_pos_dict = {}):
-    """
-    Extract the sequence of a read within a given genomic interval.
 
-    Parameters:
-    - read: pysam.AlignedSegment
-        The read to extract sequence from.
-    - start, end: int
-        The start and end positions of the interval in genomic coordinates.
-        both should be inclusive
-    - read_ref_pos_dict: dict
-        Dictionary mapping read positions to reference positions. read_id -> (ref_positions, qseq_ref_positions)
-        where detailed explanation of the qseq_ref_positions and ref_positions can be found in the docstring of the prepare_ref_query_idx_map function
+@numba.njit(types.Tuple((types.int8[:], types.int32[:]))(types.int32, types.int32, types.int32, types.int32[:], types.int32[:], types.int8[:]), fastmath=True)
+def get_interval_seq(read_start, 
+                     interval_start, 
+                     interval_end, 
+                     ref_positions,
+                     qseq_ref_positions,
+                     query_sequence_encoded):
+    '''
+    This function is used to get the interval sequence and the corresponding reference positions
+    The interval_start and interval_end are both 0-indexed, interval_end is exclusive
+    '''
 
-    Returns:
-    - str: Extracted sequence.
-    - dict: Updated read_ref_pos_dict.
-    - numpy.ndarray: Array of reference genomic positions corresponding to each base in the extracted sequence. -1 means the base is not aligned to the reference.
-
-    The detailed explanation of the returned qidx_ridx_arr can be found in the docstring of the prepare_ref_query_idx_map function
-    """
-    # Both interval_start and interval_end are inclusive
-    # Input interval_start and interval_end are both 0-indexed
-    # get_reference_positions() also returns 0-indexed positions (a list)
-    read_id = get_read_id(read)
-
-    if read_id in read_ref_pos_dict:
-        ref_positions, qseq_ref_positions = read_ref_pos_dict[read_id]
-    else:
-        # Detailed explanation of the qseq_ref_positions can be found in the docstring of the prepare_ref_query_idx_map function
-        qseq_ref_positions = np.array([ idx if idx is not None else -1 for idx in read.get_reference_positions(full_length=True) ], dtype=np.int32)
-        ref_positions = prepare_ref_query_idx_map(qseq_ref_positions)
-        read_ref_pos_dict[read_id] = (ref_positions, qseq_ref_positions)
-
-    size = interval_end - interval_start + 1
-
-    preseq = []
-    interval_start_qidx = ref_positions.get(interval_start, None)
-    if interval_start_qidx is not None:
+    interval_start_qidx = ref_positions[interval_start - read_start]
+    if interval_start_qidx < 0:
         # logger.debug(f"Found the interval start {interval_start} is not in the reference positions: \n{ref_positions} of read {read.query_name}. Might locate in the middle of a deletion event.")
-        while interval_start not in ref_positions and interval_start <= interval_end:
+        while ref_positions[interval_start - read_start] < 0 and interval_start <= interval_end:
             interval_start += 1
         if interval_start > interval_end:
-            return_seq = preseq
-            logger.warning(f"The whole specified interval (size {size}) is in a deletion event for read {read_id}. Now the returned seq is: {return_seq}\n")
-            return return_seq, read_ref_pos_dict, np.array([], dtype=np.int32)
-        interval_start_qidx = ref_positions[interval_start]
+            # logger.warning(f"The whole specified interval (size {size}) is in a deletion event for read {read_id}. Now the returned seq is: {return_seq}\n")
+            return np.array([np.int8(x) for x in range(0)], dtype=np.int8), np.array([np.int32(x) for x in range(0)], dtype=np.int32)
+        interval_start_qidx = ref_positions[interval_start - read_start]
 
-    interval_end_qidx = ref_positions.get(interval_end, None)
-    if not interval_end_qidx:
+    interval_end_qidx = ref_positions[interval_end - read_start]
+    if interval_end_qidx < 0:
         # logger.debug(f"Found the interval end {interval_end} is not in the reference positions: \n{ref_positions} of read {read.query_name}. Might locate in the middle of a deletion event.")
-        while interval_end not in ref_positions:
-            # postseq = postseq + ["D"]
+        while ref_positions[interval_end - read_start] < 0:
             interval_end -= 1
-        interval_end_qidx = ref_positions[interval_end] + 1
+        interval_end_qidx = ref_positions[interval_end - read_start] + 1
     else:
         interval_end_qidx += 1
 
-    interval_read_seq = read.query_sequence[interval_start_qidx:interval_end_qidx]
-    # Detailed explanation of the returned qidx_ridx_arr can be found in the docstring of the prepare_ref_query_idx_map function
+    interval_read_seq = query_sequence_encoded[interval_start_qidx:interval_end_qidx]
     qidx_ridx_arr = qseq_ref_positions[interval_start_qidx:interval_end_qidx]
 
-    return interval_read_seq, read_ref_pos_dict, qidx_ridx_arr
+    return interval_read_seq, qidx_ridx_arr
 
-
-
-def get_interval_seq_qual(read, interval_start, interval_end, read_ref_pos_dict = {}):
-    '''
-    Extract the sequence and base quality sequence of a read within a given genomic interval.
-
-    Parameters:
-    - read: pysam.AlignedSegment
-        The read to extract sequence and base quality sequence from.
-    - start, end: int
-        The start and end positions of the interval in genomic coordinates.
-        both should be inclusive and 0-indexed
-    - read_ref_pos_dict: dict
-        Dictionary mapping read positions to reference positions. read_id -> (ref_positions, qseq_ref_positions)
-        where detailed explanation of the qseq_ref_positions and ref_positions can be found in the docstring of the prepare_ref_query_idx_map function
-    '''
-    # Both interval_start and interval_end are inclusive
-    # Input interval_start and interval_end are both 0-indexed
-    # get_reference_positions() also returns 0-indexed positions (a list)
-    read_id = get_read_id(read)
-    if read_id in read_ref_pos_dict:
-        ref_positions, qseq_ref_positions = read_ref_pos_dict[read_id]
-    else:
-        qseq_ref_positions = np.array([ idx if idx is not None else -1 for idx in read.get_reference_positions(full_length=True) ], dtype=np.int32)
-        ref_positions = prepare_ref_query_idx_map(qseq_ref_positions)
-        read_ref_pos_dict[read_id] = (ref_positions, qseq_ref_positions)
-
-    preseq = []
-    qual_preseq = []
-
-    interval_start_qidx = ref_positions.get(interval_start, None)
-    if not interval_start_qidx:
-        while interval_start not in ref_positions and interval_start <= interval_end:
-            preseq = preseq + ["D"]
-            qual_preseq = qual_preseq + [99]
-            interval_start += 1
-        if interval_start > interval_end:
-            return preseq, qual_preseq, read_ref_pos_dict, np.array([], dtype=np.int32)
-        interval_start_qidx = ref_positions[interval_start]
-
-    interval_end_qidx = ref_positions.get(interval_end, None)
-    if not interval_end_qidx:
-        while interval_end not in ref_positions:
-            interval_end -= 1
-        interval_end_qidx = ref_positions[interval_end] + 1
-    else:
-        interval_end_qidx += 1
-
-    interval_read_seq = read.query_sequence[interval_start_qidx:interval_end_qidx]
-    interval_qual_seq = read.query_qualities[interval_start_qidx:interval_end_qidx]
-    qidx_ridx_arr = qseq_ref_positions[interval_start_qidx:interval_end_qidx]
-
-    return interval_read_seq, interval_qual_seq, read_ref_pos_dict, qidx_ridx_arr
 
 
 
@@ -425,82 +349,90 @@ def get_errorvector_from_cigar(read, cigar_tuples, logger=logger):
 
 
 
-def seq_err_det_stacked_bases(target_read,
+@numba.njit(types.bool_(types.int32, types.int8[:], types.int8[:], types.int32[:], types.int32, types.DictType(types.int8, types.int16)), fastmath=True)
+def seq_err_det_stacked_bases(target_read_start,
+                              target_read_qseq_encoded,
+                              target_read_qseq_qualities,
+                              target_read_ref_positions,
                               position0,
-                              nested_ad_dict,
-                              read_ref_pos_dict = {},
-                              logger = logger):
-    '''
-    This function is used to stat the stacked bases at position0 (meaning 0-indexed positions) to:
-    1. Identify the base quality of the base in the target read
-    2. Calculate the allele depth of the allele in target_read at position0 to deduce whether this lowqual base is sequencing error or not
-
-    Detailed structure of the nested_ad_dict can be found in the docstring of the function
-    As to read_ref_pos_dict, it is read_id -> (ref_positions, qseq_ref_positions)
-    where detailed explanation of the qseq_ref_positions and ref_positions can be found in the docstring of the prepare_ref_query_idx_map function
-
-    Returns:
-    - bool: True if the mismatches can be explained by sequencing artifacts, False otherwise
-    - dict: Updated read_ref_pos_dict
-    '''
-
-    # Get the base quality of the base at position0 in the target read, as well as the base at position0 (0-indexed) in the query read
-    target_base, base_qual, read_ref_pos_dict, qr_idx_arr = get_interval_seq_qual(target_read, position0, position0, read_ref_pos_dict)
-    base_qual = base_qual[0]
-    target_base = target_base[0]
+                              nested_dict):
+    ridx = position0 - target_read_start
+    target_read_qidx = numba_indexing_int32(target_read_ref_positions, ridx)
+    target_base_encoded = numba_indexing_int8(target_read_qseq_encoded, target_read_qidx)
+    base_qual = numba_indexing_int8(target_read_qseq_qualities, target_read_qidx)
+    
     if base_qual >= 10:
-        return False, read_ref_pos_dict
-
-    chrom = target_read.reference_name
-
-    ad = nested_ad_dict.get(target_read.reference_name, {}).get(position0, {}).get(target_base, 0)
-    dp = nested_ad_dict.get(target_read.reference_name, {}).get(position0, {}).get("DP", 0)
+        return False
+    
+    ad = nested_dict.get(target_base_encoded, 0)
+    dp = nested_dict.get(np.int8(5), 0)
 
     if int(dp) == 0:
-        logger.warning(f"The depth at position {position0} is 0. The AD is {ad}. The target base is {target_base}. The base quality is {base_qual}. The read is {target_read.query_name}.")
-        return False, read_ref_pos_dict
+        return False
 
     af = int(ad) / int(dp)
 
     if (af <= 0.02 or (int(ad) == 1 and int(dp) >= 10)) and base_qual < 10:
-        return True, read_ref_pos_dict
+        return True
     else:
-        return False, read_ref_pos_dict
+        return False
 
 
 
-def tolerate_mismatches_two_seq(read1, read2,
+def tolerate_mismatches_two_seq(read1_package, 
+                                read2_package,
                                 abs_diff_indices,
-                                nested_ad_dict,
-                                read_ref_pos_dict,
-                                logger = logger):
+                                nested_ad_dict):
     '''
     This function is used to compare two sequences and identify the mismatch positions
     And to decide whether we are safe to determine the mismatches are originated from sequencing error or not.
 
     Use seq_err_det_stacked_bases() to determine if the mismatches can be explained by sequencing artifacts, details can be found in the docstring of the function
     '''
+    read1_start, read1_qseq_encoded, read1_qseq_qualities, read1_ref_positions = read1_package
+    read2_start, read2_qseq_encoded, read2_qseq_qualities, read2_ref_positions = read2_package
 
     tolerate_mismatches = []
     for diff_ind in abs_diff_indices:
-        seq_err1, read_ref_pos_dict = seq_err_det_stacked_bases(read1,
-                                                                diff_ind,
-                                                                nested_ad_dict,
-                                                                read_ref_pos_dict,
-                                                                logger = logger)
+        seq_err1 = seq_err_det_stacked_bases(read1_start,
+                                             read1_qseq_encoded,
+                                             read1_qseq_qualities,
+                                             read1_ref_positions,
+                                             diff_ind,
+                                             nested_ad_dict[diff_ind])
+        # if added_stack_base_dict:
+        #     stack_base_dict.update(added_stack_base_dict)
 
-        seq_err2, read_ref_pos_dict = seq_err_det_stacked_bases(read2,
-                                                                diff_ind,
-                                                                nested_ad_dict,
-                                                                read_ref_pos_dict,
-                                                                logger = logger)
+        seq_err2 = seq_err_det_stacked_bases(read2_start,
+                                             read2_qseq_encoded,
+                                             read2_qseq_qualities,
+                                             read2_ref_positions,
+                                             diff_ind,
+                                             nested_ad_dict[diff_ind])
         tolerate_mismatches.append(seq_err1 or seq_err2)
 
     if all(tolerate_mismatches):
-        return True, read_ref_pos_dict, len(tolerate_mismatches)
+        return True, len(tolerate_mismatches)
     else:
-        return False, read_ref_pos_dict, 0
+        return False, 0
 
+
+
+def extract_read_qseqs(read, read_ref_pos_dict):
+    read_id = get_read_id(read)
+    read_start = read.reference_start
+
+    if read_id in read_ref_pos_dict:
+        ref_positions, qseq_ref_positions, query_sequence_encoded, query_sequence_qualities = read_ref_pos_dict[read_id]
+    else:
+        qseq_ref_positions = np.array([ idx if idx is not None else -1 for idx in read.get_reference_positions(full_length=True) ], dtype=np.int32)  # An numpy array mapping query sequence index to reference genome index
+        ref_positions = prepare_ref_query_idx_map(qseq_ref_positions, read_start) # An numpy array mapping reference genome index to query sequence index
+        base_dict = {"A": 0, "C": 1, "G": 2, "T": 3, "N": 4}
+        query_sequence_encoded = np.array([ base_dict[base] for base in read.query_sequence ], dtype=np.int8)
+        query_sequence_qualities = np.array(read.query_qualities, dtype=np.int8) if read.query_qualities is not None else np.array([np.int8(x) for x in range(0)], dtype=np.int8)
+        read_ref_pos_dict[read_id] = (ref_positions, qseq_ref_positions, query_sequence_encoded, query_sequence_qualities)
+
+    return ref_positions, qseq_ref_positions, query_sequence_encoded, query_sequence_qualities, read_ref_pos_dict
 
 
 
@@ -557,160 +489,109 @@ def determine_same_haplotype(read, other_read,
 
     read_id = get_read_id(read)
     start = read.reference_start
-    end = read.reference_end
 
-    # Below we extract the haplotype vector for both reads, which are an array of int values indicating the alignment status of each base within the reference genome span aligned by the read
-    # Detailed explanation can be found in the docstring of the function get_hapvector_from_cigar
+    ref_positions, qseq_ref_positions, query_sequence_encoded, query_sequence_qualities, read_ref_pos_dict = extract_read_qseqs(read, read_ref_pos_dict)
+    other_ref_positions, other_qseq_ref_positions, other_query_sequence_encoded, other_query_sequence_qualities, read_ref_pos_dict = extract_read_qseqs(other_read, read_ref_pos_dict)
+
     if read_id in read_hap_vectors:
         read_hap_vector = read_hap_vectors[read_id]
     else:
-        read_hap_vector = get_hapvector_from_cigar(read.cigartuples, read.query_sequence, logger = logger)
+        cigar_arr = np.array(read.cigartuples, dtype=np.int32)
+        read_hap_vector = get_hapvector_from_cigar(cigar_arr, query_sequence_encoded)
         read_hap_vectors[read_id] = read_hap_vector
 
-    # We need a unique identifier for every read, which is a string composed by query name and the alignment flag.
     other_read_id = get_read_id(other_read)
     other_start = other_read.reference_start
-    other_end = other_read.reference_end
 
     if other_read_id in read_hap_vectors:
         other_read_hap_vector = read_hap_vectors[other_read_id]
     else:
-        other_read_hap_vector = get_hapvector_from_cigar(other_read.cigartuples, other_read.query_sequence, logger = logger)
+        other_read_hap_vector = get_hapvector_from_cigar(np.array(other_read.cigartuples, dtype=np.int32), other_query_sequence_encoded)
         read_hap_vectors[other_read_id] = other_read_hap_vector
 
-    # Extract the haplotype vector within the overlapping region
-    interval_hap_vector = read_hap_vector[overlap_start - start:overlap_end - start]
-    interval_other_hap_vector = other_read_hap_vector[overlap_start - other_start:overlap_end - other_start]
+    interval_hap_vector = numba_slicing(read_hap_vector, overlap_start, overlap_end, start)
+    interval_other_hap_vector = numba_slicing(other_read_hap_vector, overlap_start, overlap_end, other_start)
 
-    # Calculate the overlap span
     overlap_span = overlap_end - overlap_start
-
-    # Find the indices where two haplotype vectors differ
+   
     diff_indices = numba_diff_indices(interval_hap_vector, interval_other_hap_vector)
 
     # First test whether there are too many mismatches between two reads that we wont tolerate
     if len(diff_indices) >= 3:
         # Cannot tolerate such mismatches
-        # Short-circuit evaluation, if this condition is true, the following code will not be evaluated
         return False, read_ref_pos_dict, read_hap_vectors, None
 
-    # Extract the positions in the read's haplotype vector where two haplotype vectors differ
     diff_pos_read = interval_hap_vector[diff_indices]
-    # Extract the positions in the other read's haplotype vector where two haplotype vectors differ
     diff_pos_oread = interval_other_hap_vector[diff_indices]
 
-    # Check if there are indels in the positions of the read's haplotype vector where two haplotype vectors differ
     read_indel_overlap = get_indel_bools(diff_pos_read)
-    # Check if there are indels in the positions of the other read's haplotype vector where two haplotype vectors differ
     oread_indel_overlap = get_indel_bools(diff_pos_oread)
 
-    # If there are indels in the positions of the read's haplotype vector where two haplotype vectors differ or the other read's haplotype vector where two haplotype vectors differ, then we cannot make a call on whether they belong to the same haplotype
-    # Why we use hap vectors to compare ahead of using raw sequence?
-    # The reason is that the haplotype vector comparison is much more efficient than string comparison
-    # This is a short-circuit evaluation, if the first condition is true, the following condition will not be evaluated
-    if numba_sum(read_indel_overlap) > 0 or numba_sum(oread_indel_overlap) > 0:
+    if numba_sum(read_indel_overlap) > 0:
+        return False, read_ref_pos_dict, read_hap_vectors, None
+    if numba_sum(oread_indel_overlap) > 0:
         return False, read_ref_pos_dict, read_hap_vectors, None
 
-    # Now use overlap_start and overlap_end to extract the read sequence (a string series) of two reads within the overlap region
-    # If two read sequences are not the same length, then it indicates they have difference in indels. A clear evidence to reject the possiblity of being the same haplotype
-    read_seq, read_ref_pos_dict, qr_idx_arr = get_interval_seq(read, overlap_start, overlap_end - 1, read_ref_pos_dict)
-    other_seq, read_ref_pos_dict, other_qr_idx_arr = get_interval_seq(other_read, overlap_start, overlap_end - 1, read_ref_pos_dict)
+    # Now use overlap_start and overlap_end to extract the sequence
+    read_seq, qr_idx_arr = get_interval_seq(np.int32(read.reference_start), 
+                                            np.int32(overlap_start), 
+                                            np.int32(overlap_end - 1), 
+                                            ref_positions, 
+                                            qseq_ref_positions, 
+                                            query_sequence_encoded)
+    
+    other_seq, other_qr_idx_arr = get_interval_seq( np.int32(other_read.reference_start), 
+                                                    np.int32(overlap_start), 
+                                                    np.int32(overlap_end - 1), 
+                                                    other_ref_positions, 
+                                                    other_qseq_ref_positions, 
+                                                    other_query_sequence_encoded )
 
-    # We need to ignore N during the comparison for read_seq and other_seq
-    if "N" in read_seq or "N" in other_seq:
-        base_dict = {"A": 0, "C": 1, "G": 2, "T": 3, "N": 4}
-        read_seq_arr = np.array(list(map(base_dict.get, read_seq)), dtype=np.int8)
-        other_seq_arr = np.array(list(map(base_dict.get, other_seq)), dtype=np.int8)
-        total_match = compare_sequences(read_seq_arr, other_seq_arr, np.int8(base_dict["N"]))
-    else:
-        total_match = read_seq == other_seq
-        read_seq_arr = None
+    # We need to cut N output comparison for read_seq and other_seq
+    
+    total_match = compare_sequences(read_seq, other_seq, np.int8(4))
 
-    '''
-    # code block for debugging
-    # Allow us to review the extracted read sequence at specified overlap region
-    print(read_seq, file = sys.stderr)
-    print(other_seq, file = sys.stderr)
-    print("\n", file = sys.stderr)
-    logger.info(f"The read sequence is {read_seq} for {read_id} \nand the other read sequence is {other_seq} for other read_id {other_read_id} at region {overlap_span}")
-    logger.info(f"The hap vector is {interval_hap_vector} for {read_id} \nand the other hap vector is {interval_other_hap_vector} for other read_id {other_read_id} at region {overlap_span}")
-    assert interval_hap_vector.size == interval_other_hap_vector.size, f"The interval hap vector size {interval_hap_vector} is not the same as the other interval hap vector size {interval_other_hap_vector}"
-    '''
-
-    '''
-    The following code block is used to calculate the edge weight between two reads and it is based on the overlapping span and the number of shared variants.
-    1. overlap span is calculated based on the number of identical bases between two reads
-    2. The number of shared variants is calculated by the function count_var
-    3. The number of indels is calculated by the function count_continuous_indel_blocks
-
-    We created the score array, this score array is used to assign weight to edges depending on the number of SNVs shared by two read pairs
-    It will be later used by the function determine_same_haplotype to assign weight to edges
-    '''
 
     identical_part = interval_hap_vector[interval_hap_vector == interval_other_hap_vector]
     overlap_span = identical_part.size
     var_count = count_var(identical_part)
     indel_num = count_continuous_indel_blocks(identical_part)
-    # assert var_size is not None, f"The size of the variant should not be None, but the actual size is {var_size}, the input array is {interval_hap_vector}"
 
-    snvcount_score_arr = np.array([mean_read_length * 1 - 50 + mean_read_length * i for i in range(50)])
-    edge_weight = overlap_span + numba_sum(snvcount_score_arr[:var_count])
-    edge_weight = overlap_span + mean_read_length * 3 * indel_num
-
-    '''
-    # Below is a code block for debugging
-    # Allow us to review the read sequence of your interest query name at specified overlap region
-
-    vis_qnames = ["HISEQ1:21:H9V1VADXX:2:1112:21127:38421:PC0",
-                  "HISEQ1:26:HA2RRADXX:1:1113:11601:32503:PC0"]
-
-    if read.query_name in vis_qnames and other_read.query_name in vis_qnames:
-        logger.info(f"The read sequence is {interval_hap_vector.tolist()} for {read_id} \nand the other read sequence is {interval_other_hap_vector.tolist()} for other read_id {other_read_id} at region {overlap_start}, {overlap_end}. \nThe different indices are {diff_indices.tolist()} and the identical part is {identical_part.tolist()}")
-        logger.info(f"The raw read sequence is {read_hap_vector.tolist()} for {read_id} with cigar {read.cigartuples} and query_sequence {read.query_sequence} \nand the other read sequence is {other_read_hap_vector.tolist()} for other read_id {other_read_id} with cigar {other_read.cigartuples} and query sequence {other_read.query_sequence}")
-    '''
+    overlap_span = overlap_span + numba_sum(score_arr[:var_count])
+    overlap_span = overlap_span + mean_read_length * 3 * indel_num
 
     if total_match:
-        # Basically edge weight is overlap_span + indel_added_score + snv_added_score
-        # If edge weight is greater than mean_read_length - 50 (minimum score), we consider the two reads belong to the same haplotype and return the edge weight.
-        # This is just a heuristic cutoff and can be further tuned according to different sequencing profiles
-        if edge_weight >= mean_read_length - 50:
-            return True, read_ref_pos_dict, read_hap_vectors, edge_weight
+        if overlap_span >= mean_read_length - 50:
+            return True, read_ref_pos_dict, read_hap_vectors, overlap_span
         else:
-            # If edge weight is smaller than mean_read_length - 50, we consider not enough evidence to make a call and return None edge weight
             return np.nan, read_ref_pos_dict, read_hap_vectors, None
     else:
-        # Check if two reads within this overlapping region are of the same length
-        # If not, we cannot make a conclusion on whether they belong to the same haplotype because they have a difference in indel
         if len(read_seq) != len(other_seq) or interval_hap_vector.size != interval_other_hap_vector.size:
             return False, read_ref_pos_dict, read_hap_vectors, None
 
-        # Here, we know that though two reads are not identical, they do have the same length
+        # Here we know that there are only equal to or smaller than 2 mismatches between the two reads
         # Then we need to know whether the two mismatches are in-trans variants or in-cis variants, if its in-trans we cannot tolerate the two mismatches
-        if read_seq_arr is None:
-            base_dict = {"A": 0, "C": 1, "G": 2, "T": 3, "N": 4}
-            read_seq_arr = np.array(list(map(base_dict.get, read_seq)), dtype=np.int8)
-            other_seq_arr = np.array(list(map(base_dict.get, other_seq)), dtype=np.int8)
+        # if read_seq_arr is None:
+        #     base_dict = {"A": 0, "C": 1, "G": 2, "T": 3, "N": 4}
+        #     read_seq_arr = np.array(list(map(base_dict.get, read_seq)), dtype=np.int8)
+        #     other_seq_arr = np.array(list(map(base_dict.get, other_seq)), dtype=np.int8)
 
-        # Use numba_diff_indices to find the location indices where two sequences differ
-        q_diff_indices = numba_diff_indices(read_seq_arr, other_seq_arr)
-        # Map the q_diff_indices to the reference positions
+        q_diff_indices = numba_diff_indices(read_seq, other_seq)
         r_diff_indices = qr_idx_arr[q_diff_indices]
-        # If -1 in r_diff_indices, it means the two reads are not aligned properly and we cannot make a conclusion on whether they belong to the same haplotype
         if -1 in r_diff_indices:
             return False, read_ref_pos_dict, read_hap_vectors, None
-        abs_diff_inds = r_diff_indices + overlap_start
-        # See if the mismatches can be explained by sequencing artifacts
-        tolerate, read_ref_pos_dict, tolerated_count = tolerate_mismatches_two_seq( read,
-                                                                                    other_read,
-                                                                                    abs_diff_inds,
-                                                                                    nested_ad_dict,
-                                                                                    read_ref_pos_dict,
-                                                                                    logger = logger )
+        read_package = (np.int32(read.reference_start), query_sequence_encoded, query_sequence_qualities, ref_positions)
+        other_read_package = (np.int32(other_read.reference_start), other_query_sequence_encoded, other_query_sequence_qualities, other_ref_positions)
+        # logger.info(f"The ref positions that two overlap reads are different are {r_diff_indices.tolist()}, while the read ref start is {read.reference_start} and the other read ref start is {other_read.reference_start}")
+        tolerate, tolerated_count = tolerate_mismatches_two_seq(read_package,
+                                                                other_read_package,
+                                                                r_diff_indices,
+                                                                nested_ad_dict )
 
         if tolerate:
-            edge_weight = edge_weight - tolerated_count * 20
-            if edge_weight >= mean_read_length - 50:
-                return True, read_ref_pos_dict, read_hap_vectors, edge_weight
+            overlap_span = overlap_span - tolerated_count * 20
+            if overlap_span >= mean_read_length - 50:
+                return True, read_ref_pos_dict, read_hap_vectors, overlap_span
             else:
                 return np.nan, read_ref_pos_dict, read_hap_vectors, None
         else:

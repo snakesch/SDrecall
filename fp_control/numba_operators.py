@@ -91,8 +91,6 @@ def apply_index_mask(size, initial_index_mask):
     return np.arange(size, dtype=np.int32)[initial_index_mask]
 
 
-
-
 @numba.njit
 def numba_diff_indices(arr1, arr2):
     """
@@ -109,3 +107,17 @@ def numba_diff_indices(arr1, arr2):
     """
     return np.where(arr1 != arr2)[0]
 
+
+@numba.njit(types.int16[:](types.int16[:], types.int32, types.int32, types.int32), fastmath=True)
+def numba_slicing(arr, overlap_start, overlap_end, start):
+    return arr[overlap_start - start:overlap_end - start]
+
+
+@numba.njit(types.int32(types.int32[:], types.int32), fastmath=True)
+def numba_indexing_int32(arr, idx):
+    return arr[idx]
+
+
+@numba.njit(types.int8(types.int8[:], types.int32), fastmath=True)
+def numba_indexing_int8(arr, idx):
+    return arr[idx]

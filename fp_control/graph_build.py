@@ -1,25 +1,25 @@
 import logging
+import numba
 import graph_tool.all as gt
 import numpy as np
 import pandas as pd
 
-from intervaltree import IntervalTree
+
+from collections import defaultdict
+from numba import types
+from numba.typed import Dict
 
 from shell_cmds import executeCmd
-from numba_operators import any_false_numba, custom_all_numba
-from bam_ncls import overlapping_qname_idx_generator
+from numba_operators import any_false_numba, custom_all_numba, numba_sum
+from bam_ncls import overlap_qname_idx_iterator
 from pairwise_read_inspection import determine_same_haplotype
 
 
 logger = logging.getLogger('SDrecall')
 
 
-
-def stat_ad_dict(bam_file, logger = logger):
-    '''
-    This function is to extract the allele depth (AD) information from the BAM file
-    The AD info is stored in a nested dictionary, which is then used to calculate the edge weights in the graph
-    '''
+def stat_ad_to_dict(bam_file, logger = logger):
+    # Build up an AD query dict by bcftools mpileup
     bam_ad_file = f"{bam_file}.ad"
     cmd = f"""bcftools mpileup -Ou --no-reference -a FORMAT/AD --indels-2.0 -q 10 -Q 15 {bam_file} | \
               bcftools query -f '%CHROM\\t%POS\\t%ALT\\t[%AD]\\n' - > {bam_ad_file}"""
@@ -31,25 +31,23 @@ def stat_ad_dict(bam_file, logger = logger):
     if alt_expanded.shape[1] <= 1 or ad_expanded.shape[1] <= 1:
         logger.warning(f"No ALT allele found in this BAM file. Skip this entire script")
         logger.warning(f"Look at the two dataframes now: \n{alt_expanded.to_string(index=False)}\n{ad_expanded.to_string(index=False)}\n")
-        return None
+        return None, None, None, None
 
     logger.info("\n{}\n{}\n".format(ad_expanded.loc[~ad_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False),
                                     alt_expanded.loc[~alt_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False)))
 
-    # After getting the table, we seek to organize the AD info by chromsome, pos, and alt into a nested dictionary
-    # The dict structure is like:
-    # nested_ad_dict[chrom][pos][alt] = ad
-    # nested_ad_dict[chrom][pos]["DP"] = total_dp
     # Initialize the nested dictionary
     nested_ad_dict = {chrom: {} for chrom in ad_table["chrom"].unique()}
     column_width = alt_expanded.shape[1]
 
-    # Iterate over the rows of ad_table to build the nested_ad_dict
+    base_dict = {"A": np.int8(0), "T": np.int8(1), "C": np.int8(2), "G": np.int8(3), "N": np.int8(4), "DP": np.int8(5)}
+
+    # Iterate over the rows of dfA and dfB
     for i in range(len(ad_table)):
         chrom = ad_table.iloc[i, 0]
         outer_key = ad_table.iloc[i, 1]
-        inner_key = alt_expanded.iloc[i, 0]
-        value = ad_expanded.iloc[i, 0]
+        inner_key = base_dict[alt_expanded.iloc[i, 0]]
+        value = np.int16(ad_expanded.iloc[i, 0])
 
         if pd.isna(value):
             continue
@@ -58,22 +56,20 @@ def stat_ad_dict(bam_file, logger = logger):
 
         # Initialize the inner dictionary if the outer key is not present
         if outer_key not in nested_ad_dict[chrom]:
-            nested_ad_dict[chrom][outer_key] = {}
-
+            nested_ad_dict[chrom][outer_key] = Dict.empty(key_type=types.int8,
+                                                       value_type=types.int16)
         # Add the first pair of inner key-value
         nested_ad_dict[chrom][outer_key][inner_key] = value
 
         # Check for the second pair of inner key-value
         for c in range(1, column_width):
             if not pd.isna(ad_expanded.iloc[i, c]) and not pd.isna(alt_expanded.iloc[i, c]):
-                nested_ad_dict[chrom][outer_key][alt_expanded.iloc[i, c]] = ad_expanded.iloc[i, c]
-                total_dp += ad_expanded.iloc[i, c]
+                nested_ad_dict[chrom][outer_key][base_dict[alt_expanded.iloc[i, c]]] = np.int16(ad_expanded.iloc[i, c])
+                total_dp += np.int16(ad_expanded.iloc[i, c])
 
-        nested_ad_dict[chrom][outer_key]["DP"] = total_dp
-
+        nested_ad_dict[chrom][outer_key][base_dict["DP"]] = np.int16(total_dp)
+    
     return nested_ad_dict
-
-
 
 
 def check_edge(u, v, adj_set):
@@ -85,9 +81,6 @@ def check_edge(u, v, adj_set):
     Cant use 0 here because python treats 0 as False
     '''
     return adj_set.get((u, v), False) or adj_set.get((v, u), False)
-
-
-
 
 
 def get_overlap_intervals(read_pair1, read_pair2):
@@ -119,30 +112,56 @@ def get_overlap_intervals(read_pair1, read_pair2):
 
 
 
+class FastIntervals:
+    def __init__(self, max_size = 10):
+        self.starts = np.empty(max_size, dtype=np.int32)
+        self.ends = np.empty(max_size, dtype=np.int32)
+        self.size = 0
+    
+    def add(self, start, end):
+        """Add new interval maintaining sorted order"""
+        self.starts[self.size] = start
+        self.ends[self.size] = end
+        self.size += 1
 
-def find_uncovered_regions(existing_intervals, new_interval):
-    # Find overlapping intervals
-    overlapping_intervals = existing_intervals.overlap(new_interval[0], new_interval[1])
+    def clear(self):
+        """Reset arrays"""
+        self.starts = np.array([], dtype=np.int32)
+        self.ends = np.array([], dtype=np.int32)
 
-    # Sort the overlapping intervals by start time
-    sorted_intervals = sorted(overlapping_intervals, key=lambda x: x.begin)
 
-    # Determine the uncovered regions
-    uncovered_regions = []
-    current_start = new_interval[0]
 
-    if len(overlapping_intervals) == 0:
-        return [new_interval]
-
-    for interval in sorted_intervals:
-        if interval.begin > current_start:
-            uncovered_regions.append((current_start, interval.begin))
-        current_start = max(current_start, interval.end)
-
-    if current_start < new_interval[1]:
-        uncovered_regions.append((current_start, new_interval[1]))
-
-    return uncovered_regions
+@numba.njit(types.int32[:, :](types.int32[:], types.int32[:], types.int32, types.int32), fastmath=True)
+def find_uncovered_regions_numba(existing_starts, existing_ends, new_start, new_end):
+    n = len(existing_starts)
+    if n == 0:
+        return np.array([[new_start, new_end]], dtype=np.int32)
+        
+    # Find overlapping intervals using binary search
+    overlaps = (existing_starts <= new_end) & (existing_ends >= new_start)
+    
+    if numba_sum(overlaps) == 0:
+        return np.array([[new_start, new_end]], dtype=np.int32)
+    
+    # Pre-allocate result array
+    result = np.empty((len(existing_starts) + 1, 2), dtype=np.int32)
+    n_results = 0
+    current_start = new_start
+    
+    for i in range(len(existing_starts)):
+        if overlaps[i]:
+            if existing_starts[i] > current_start:
+                result[n_results, 0] = current_start
+                result[n_results, 1] = existing_starts[i]
+                n_results += 1
+            current_start = max(current_start, existing_ends[i])
+    
+    if current_start < new_end:
+        result[n_results, 0] = current_start
+        result[n_results, 1] = new_end
+        n_results += 1
+    
+    return result[:n_results]
 
 
 
@@ -213,65 +232,44 @@ def build_phasing_graph(bam_file,
     - Edge weights are calculated based on two factors:
         1. The total overlapping span between two read pairs
         2. The number of variants (SNVs and small indels) shared by two read pairs
-    - The resulting graph is used for subsequent haplotype identification through clique finding (Bron-Kerbosch algorithm).
+    - The resulting graph is used for subsequent haplotype identification through clique finding (Greedy-Clique-Expansion algorithm).
 
     See Also:
     ---------
     migrate_bam_to_ncls : For creating the NCLS data structures.
-    clique_generator_per_component : For identifying haplotypes in the constructed graph.
+    clique_iterator_per_component : For identifying haplotypes in the constructed graph.
     '''
 
     logger.info(f"There are totally {len(ncls_read_dict)} pair of reads, mean read length is {mean_read_length}. with adequate mapping or base quality which can be used to build the graph")
     # Create an empty graph
     g = gt.Graph(directed = False)
     g.set_fast_edge_removal(fast = True)
+    # Create another empty graph to store reads as vertices (uniq identifier of reads are qname+":"+flag)
+    g_reads = gt.Graph()
 
     # Create a property map to store the query names for each node
     qname_prop = g.new_vertex_property("string")
+    read_prop = g_reads.new_vertex_property("string")
     weight = g.new_edge_property("float")
 
-    # When we try to identify a mismatch between two reads are due to a true variant or due to sequencing errors,
-    # we need to know the allele depth at the mismatch site. This allows us to estimate the sequencing artifact likelihood by observing the allele's depth fraction at this site.
-    # We would like an efficient way to extract AD info for all covered sites across this BAM. So we chose bcftools mpileup + bcftools query.
-    # The output file is stored in the same directory as the input BAM file
-    nested_ad_dict = stat_ad_dict(bam_file, logger = logger)
-    if nested_ad_dict is None:
-        return None, None, None, None
+    # Create a dictionary to map query names to their corresponding nodes
+    qname_to_node = {}
 
-    '''
-    Now we start to build an undirected graph of read pairs,
-    The graph is constructed as follows:
-    - Each read pair is represented by a vertex
-    - Iterate through all the read pairs in the ncls_read_dict
-       - For each read pair, extract its overlapping read pairs
-       - Iterate through all the overlapping read pairs, skip the read pairs that have been inspected (undirected)
-
-    '''
-
-    # Create a dictionary to store tuples of vertex indices (v1, v2) as keys, and the value is a boolean indicating whether the pair of read pairs has been inspected
-    # This is a temporary data hub to avoid repeated edge inspection for the same pair of reads
-    qname_check_dict = {}
-
-    # Initialize the weight matrix (adjacency matrix, which is diagonal symmetric) with np.eye
-    total_qname_num = len(ncls_read_dict)
-    weight_matrix = np.eye(total_qname_num, dtype=np.float32)
-
-    # Create a dictionary to store the haplotype vectors corresponding to each read (read_ids -> haplotype_vectors), please refer read_ids to function get_read_id
-    # This is a temporary data hub to avoid repeated hapvector extraction from the same read
-    # The variable is primarily aggregated in the iterative calling of function determine_same_haplotype
+    # Create a set to store the hap_vectors corresponding to each read
     read_hap_vectors = {}
 
     # Create a dictionary to store the start and end positions for each read pair
-    # This is a temporary data hub to avoid repeated read pair start and end position extraction from the same read
-    # The variable is primarily aggregated in the iterative calling of function determine_same_haplotype
     read_ref_pos_dict = {}
 
-    # Create a dictionary to map query names to their corresponding nodes (qnames -> graph_vertices_indices)
-    # This is a temporary data hub to record whether a read pair has been added to the graph as a vertex(node)
-    qname_to_node = {}
+    # Create a dictionary to store Allele Depth for each position
+    nested_ad_dict = stat_ad_to_dict(bam_file, logger = logger)
 
-    # Create an IntervalTree to record the inspected overlapping intervals
-    inspected_overlaps = IntervalTree()
+    qname_check_dict = {}
+    other_qnames = defaultdict(set)
+    # Use NCLS read dict to iterate through all the reads to build a graph. One good thing is that every key: value stores a pair of read objects
+    total_qname_num = len(ncls_read_dict)
+    weight_matrix = np.eye(total_qname_num, dtype=np.float32)
+    score_arr = np.array([mean_read_length * 1 - 50 + mean_read_length * i for i in range(50)])
 
     for qname_idx, paired_reads in ncls_read_dict.items():
         qname = ncls_qname_dict[qname_idx]
@@ -279,40 +277,31 @@ def build_phasing_graph(bam_file,
 
         # Check if the query name already exists in the graph
         if qname not in qname_to_node:
-            # Add a new node to the graph in case that the read pair has not been added to the graph
+            # Add a new node to the graph
             qv = g.add_vertex()
             qname_prop[qv] = qname
             qname_to_node[qname] = int(qv)
+            # logger.debug(f"Added a new node {v} for qname {qname} to the graph. The current vertices are {g.get_vertices()}")
         else:
-            # Directly retrieve the existing vertex (graph-tool vertex object) from the graph
             qv = g.vertex(qname_to_node[qname])
 
-        # Extract the overlapping span of the current iterating read pair
-        # And get a generator of qname indices of the read pairs overlapping with the current read pair
-        # Note that the span also include the inner gap between a pair of reads
         chrom = paired_reads[0].reference_name
         start = min(r.reference_start for r in paired_reads)
         end = max(r.reference_end for r in paired_reads)
-        qidx_iter = overlapping_qname_idx_generator(ncls_dict, chrom, start, end)
+        qidx_iter = overlap_qname_idx_iterator(ncls_dict, 
+                                               ncls_read_dict, 
+                                               ncls_qname_dict, 
+                                               chrom, start, end)
 
-        # Iterate through the overlapping read pairs
+        # Iterate through the reads
         for qidx in qidx_iter:
             other_reads = ncls_read_dict[qidx]
             # Get the query name
             other_qname = other_reads[0].query_name
-            # When extracting overlapping reads from NCLS, the result qnames might contain the iterating qname itself
+            other_qnames[qname].add(other_qname)
             if qname == other_qname:
                 continue
-
-            '''
-            # Below is a code block for debugging, this allows you to check whether two read pairs overlap with each other during the inspection of them
-            assert len(dict.fromkeys(r.query_name for r in other_reads)) == 1, f"The query names of the reads in the other_reads are not the same: {other_reads}"
-            vis_qnames = ["HISEQ1:21:H9V1VADXX:2:1112:21127:38421:PC0",
-                            "HISEQ1:26:HA2RRADXX:1:1113:11601:32503:PC0"]
-            if qname in vis_qnames and other_qname in vis_qnames:
-                logger.info(f"Found the qname {qname} and other_qname {other_qname} might overlap with each other.")
-            '''
-
+                
             # Check if the query name already exists in the graph
             if not other_qname in qname_to_node:
                 # Add a new node to the graph
@@ -323,116 +312,78 @@ def build_phasing_graph(bam_file,
             else:
                 oqv = g.vertex(qname_to_node[other_qname])
 
-            # Check if the pair of read pairs has been inspected, if yes, skip the current iteration
             inspect_res = check_edge(int(qv), int(oqv), qname_check_dict)
             if inspect_res:
                 continue
 
-            # Proceeding to this step, we mark the pair of read pairs as inspected
             qname_check_dict[(int(qv), int(oqv))] = True
 
-            # Inspect the overlap between the two pair of reads
-            # There might be multiple overlapping intervals between two pair of reads
+            # Inspect the overlap between the two pairs of reads
             overlap_intervals = get_overlap_intervals(paired_reads, other_reads)
             # logger.info(f"Found these overlap intervals for the read pair {qname} and {other_qname}: {overlap_intervals}")
 
-            # If there is no overlap between two pair of reads, skip the current iteration
-            # This might be some edge case when a read in pair A completely enclosed by the inner gap of pair B, while the other read in pair A exceeds the coverage span of pair B
             if len(overlap_intervals) == 0:
                 continue
 
-            '''
-            There are four comparison results (C 2 2) to be recorded between two pair of reads
-            - read1 in pair A and read1 in pair B comparison result
-            - read1 in pair A and read2 in pair B comparison result
-            - read2 in pair A and read1 in pair B comparison result
-            - read2 in pair A and read2 in pair B comparison result
+            # logger.info("These are the overlapping intervals: {}".format("\n".join([f"{oi}: {[get_read_id(r) for r in (read1, read2)]}" for oi, (read1, read2) in overlap_intervals.items()])))
 
-            There are also three possible results for the comparison of two reads
-             1: meaning we found two reads from distinct pairs overlap with each other with enough size, (or share variants), so they should be in the same haplotype
-             0: meaning we found two reads from distinct pairs do not overlap with each other or the overlapping span is too small (e.g < 100bp). So we do not have enough evidence to determine if they are in the same haplotype or not
-            -1: meaning we found two reads from distinct pairs overlap with each other and we found clear evidence that they are not in the same haplotype (e.g. different variants)
-            '''
-
-            # Initialize the same_hap_bools with 4 zeros
-            same_hap_bools = np.zeros(4, dtype=np.int32)
-
+            qname_bools = np.zeros(4, dtype=np.int32)
             n = 0
             pair_weight = None
+            # Clear all the contents inside the inspected_overlaps
+            inspected_overlaps = FastIntervals(max_size = len(overlap_intervals))
 
-            # Remember the overlap intervals we extracted for two pair of reads
-            # Now we iterate through all the overlap intervals and use an IntervalTree to record the inspected intervals
-            inspected_overlaps = IntervalTree()
             for (overlap_start, overlap_end), (read1, read2) in overlap_intervals.items():
-                '''
-                First we identify whehter the iterating overlap interval has some part of it that has been inspected
-                If yes, we crop out the inspected part and only keep the uncovered overlapping span for downstream analysis
-                Note that after cropping out the inspected part, the remaining span might not be continuous, leaving multiple uncovered intervals
-                For example, the inspected intervals is [100, 200], [300, 400], [500, 600]
-                If the current iterating overlap interval is [250, 550], then the remaining uncovered intervals are [250, 400] and [500, 550]
-                The function IntervalTree.addi will return the following uncovered intervals: [250, 400], [500, 550]
-                '''
-                uncovered_overlaps = find_uncovered_regions(inspected_overlaps, (overlap_start, overlap_end))
+                uncovered_overlaps = find_uncovered_regions_numba(inspected_overlaps.starts[:inspected_overlaps.size], inspected_overlaps.ends[:inspected_overlaps.size], 
+                                                                  overlap_start, overlap_end)
                 # logger.info(f"Found the uncovered regions {uncovered_overlaps} for the reads {read1.query_name} and {read2.query_name} in the overlap region ({overlap_start}-{overlap_end})")
-                for uncovered_start, uncovered_end in uncovered_overlaps:
-                    # Iterate over one uncovered interval at a time, and determine whether two read from distinct pairs overlapping at the current interval show evidence of being in the same haplotype or not
+                for row_ind in range(uncovered_overlaps.shape[0]):
+                    uncovered_start, uncovered_end = uncovered_overlaps[row_ind][0], uncovered_overlaps[row_ind][1]
                     bool_res, read_ref_pos_dict, read_hap_vectors, read_weight = determine_same_haplotype(read1, read2,
                                                                                                           uncovered_start, uncovered_end,
+                                                                                                          score_arr,
                                                                                                           read_hap_vectors = read_hap_vectors,
-                                                                                                          nested_ad_dict = nested_ad_dict,
+                                                                                                          nested_ad_dict = nested_ad_dict[chrom],
                                                                                                           read_ref_pos_dict = read_ref_pos_dict,
                                                                                                           mean_read_length = mean_read_length,
                                                                                                           logger = logger)
-                    # If the bool_res is NaN, we assign 0 to record the inspection result within this overlapping interval
-                    # Otherwise, we assign 1 or -1 based on the bool_res
                     if np.isnan(bool_res):
-                        same_hap_bools[n] = 0
+                        qname_bools[n] = 0
                     elif bool_res:
-                        same_hap_bools[n] = 1
+                        qname_bools[n] = 1
+                        # logger.info(f"Weight is {read_weight}. Found the reads {read1.query_name} ({read1.reference_name}:{read1.reference_start}-{read1.reference_end}) and {read2.query_name} ({read2.reference_name}:{read2.reference_start}-{read2.reference_end}) are in the same haplotype, overlap region ({overlap_start}-{overlap_end})")
+                        # assert read_weight is not None, f"The read weight {read_weight} is not calculated for the reads {read1.query_name} and {read2.query_name}"
+                        # logger.info(f"Found the reads {read1.query_name} ({read1.reference_name}:{read1.reference_start}-{read1.reference_end}) and {read2.query_name} ({read2.reference_name}:{read2.reference_start}-{read2.reference_end}) are in the same haplotype, overlap region ({overlap_start}-{overlap_end})")
                     else:
-                        same_hap_bools[n] = -1
+                        qname_bools[n] = -1
+                        # logger.info(f"Found the reads {read1.query_name} ({read1.reference_name}:{read1.reference_start}-{read1.reference_end}) and {read2.query_name} ({read2.reference_name}:{read2.reference_start}-{read2.reference_end}) are in different haplotypes, overlap region ({overlap_start}-{overlap_end})")
 
                     if read_weight is not None:
-                        # Assign 1 (an aritificial very small number) to read_weight unless it a positive value
                         read_weight = read_weight if read_weight > 0 else 1
-                        # Normalize the read_weight to adjust the scale of the weight, why denominate by mean_read_length * 10?
-                        # mean_read_length * 10 is just a big enough number to make sure ur normal weight is at the scale between 0 and 1, u can understand it as a maximum normalization factor
                         norm_weight = read_weight/(mean_read_length * 10)
+                        # norm_weight = norm_weight if norm_weight < 1 else 1 - 1e-6
+                        # assert norm_weight is not None, f"The normalized weight {norm_weight} is not calculated while the raw weight is {read_weight} for the reads {read1.query_name} and {read2.query_name}"
+                        # logger.info(f"Found the reads {read1.query_name} ({read1.reference_name}:{read1.reference_start}-{read1.reference_end}) and {read2.query_name} ({read2.reference_name}:{read2.reference_start}-{read2.reference_end}) are in the same haplotype, overlap region ({overlap_start}-{overlap_end}) with weight {norm_weight} (raw score {read_weight})")
                         if pair_weight is None:
-                            # If pair_weight is None, assign norm_weight to it
                             pair_weight = norm_weight
                         else:
-                            # If pair_weight is not None, add norm_weight to it
                             pair_weight += norm_weight
                     else:
                         norm_weight = None
-
-                # After inspecting the current uncovered interval, we add it to the inspected_overlaps
-                # And adding 1 to n for next overlapping interval.
-                inspected_overlaps.addi(overlap_start, overlap_end)
+                    
+                inspected_overlaps.add(overlap_start, overlap_end)
                 n += 1
-
-            # Now we iterated through all the overlapping intervals, we can trim the same_hap_bools to the actual number of overlapping intervals
-            same_hap_bools = same_hap_bools[:n]
-
-            # Because 1 in the adjacency matrix has a special meaning. The diagonal values are all 1 (representing self-self comparison)
-            # So we add a very small number to the pair_weight to distinguish it from 1
+            qname_bools = qname_bools[:n]
             pair_weight = pair_weight if pair_weight != 1 else 1 + 1e-4
-
-            # Below is just a debug code block
-            # if qname in vis_qnames and other_qname in vis_qnames:
-            #     logger.info(f"Found the qname {qname} (qv is {int(qv)}) and other_qname {other_qname} (oqv is {int(oqv)}) overlap with each other with pair_weight {pair_weight}. The same_hap_bools are {same_hap_bools}")
-
-            # We need to consider all the overlapping intervals between two read pairs to decide the value we record inside the adjacency matrix
-            if custom_all_numba(same_hap_bools):
-                # logger.info(f"The same_hap_bools are {same_hap_bools}")
+            
+            if custom_all_numba(qname_bools):
                 if pair_weight > edge_weight_cutoff:
                     e = g.add_edge(qv, oqv)
                     weight[e] = pair_weight
                 weight_matrix[int(qv), int(oqv)] = pair_weight
                 weight_matrix[int(oqv), int(qv)] = pair_weight
-            elif any_false_numba(same_hap_bools):
-                # We found clear evidence that two read pairs are not in the same haplotype
+            elif any_false_numba(qname_bools):
+                # logger.info(f"Qname_bools are {qname_bools}, Found two pairs {qname_prop[qv]} and {qname_prop[oqv]} are in different haplotypes, Removing the edge with the biggest weight")
                 weight_matrix[int(qv), int(oqv)] = -1
                 weight_matrix[int(oqv), int(qv)] = -1
 
@@ -441,4 +392,4 @@ def build_phasing_graph(bam_file,
     g.edge_properties["weight"] = weight
 
     logger.info(f"Now we finished building up the edges in the graph. There are currently {g.num_vertices()} vertices and {g.num_edges()} edges in the graph")
-    return g, weight_matrix, qname_to_node, read_hap_vectors
+    return g, weight_matrix, qname_to_node, read_hap_vectors, read_ref_pos_dict
