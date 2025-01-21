@@ -121,3 +121,20 @@ def numba_indexing_int32(arr, idx):
 @numba.njit(types.int8(types.int8[:], types.int32), fastmath=True)
 def numba_indexing_int8(arr, idx):
     return arr[idx]
+
+
+@numba.njit(fastmath=True)
+def numba_compare(arr1, arr2):
+    return arr1 == arr2
+
+
+
+@numba.njit(types.int16[:](types.int16[:], types.bool_[:]), fastmath=True)
+def numba_bool_indexing(arr, idx_arr):
+    return arr[idx_arr]
+
+
+
+@numba.njit(types.bool_(types.int32[:], types.int32), fastmath=True)
+def numba_contain(arr, scalar):
+    return (arr == scalar).any()
