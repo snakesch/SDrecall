@@ -117,8 +117,10 @@ def sort_query_nodes(query_nodes, graph):
     sorted_query_nodes = sorted(query_nodes, key=lambda x: node_info[x], reverse=True)
     return sorted_query_nodes
 
+
 def imap_traverse(tup_args):
     return traverse_network_to_get_homology_counterparts(*tup_args)
+
 
 def extract_SD_paralog_pairs_from_graph(query_nodes, 
                                     directed_graph, 

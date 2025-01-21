@@ -6,7 +6,7 @@ from numba import get_num_threads
 from collections import defaultdict
 
 
-from bk_algorithm import bk_algorithm
+from gce_algorithm import gce_algorithm
 from numba_operators import numba_isin, \
 							numba_and, \
 							numba_sum, \
@@ -19,7 +19,7 @@ Haplotype Phasing Module for Read Clustering
 
 This module implements the steps of haplotype phasing by grouping reads
 into distinct haplotypes using graph-based methods. It works in conjunction with
-the Bron-Kerbosch algorithm implementation (bk_algorithm.py) and follows the graph building
+the Greedy-Clique-Expansion algorithm implementation (gce_algorithm.py) and follows the graph building
 module (graph_build.py).
 
 Key features:
@@ -34,7 +34,7 @@ Main functions:
 Dependencies:
 - graph_tool
 - numpy
-- bk_algorithm (custom module for Bron-Kerbosch algorithm)
+- gce_algorithm (custom module for Greedy-Clique-Expansion algorithm)
 - numba_operators (custom module for optimized operations)
 
 This module contains the high-level framework of haplotype phasing pipeline, taking the
@@ -110,7 +110,7 @@ def clique_generator_per_component(graph, weight_matrix, ew_cutoff = 0.101, logg
             logger.info(f"Adding the {len(component_verts)} vertices in the component {component_id} to the small row indices")
             continue
         else:
-            cliques_iter = bk_algorithm(selected_indices, big_weight_matrix, cutoff = ew_cutoff, logger = logger)
+            cliques_iter = gce_algorithm(selected_indices, big_weight_matrix, cutoff = ew_cutoff, logger = logger)
             # logger.debug(f"Found {len(cliques)} cliques in the component {component_id}\n")
             for clique in cliques_iter:
                 logger.info(f"Receiving a clique containing {[graph.vertex_properties['qname'][qid] for qid in clique]} in the component {component_id}")
@@ -132,7 +132,7 @@ def clique_generator_per_component(graph, weight_matrix, ew_cutoff = 0.101, logg
         small_weight_matrix = weight_matrix[np.ix_(small_row_mask, small_row_mask)]
 
         logger.info(f"Start to find the largest clique in the small weight matrix, which contains {numba_sum(small_row_mask)} rows and columns. Contiguous? {small_weight_matrix.flags['C_CONTIGUOUS']}")
-        cliques_iter = bk_algorithm(selected_indices, small_weight_matrix, cutoff = ew_cutoff/2, logger = logger)
+        cliques_iter = gce_algorithm(selected_indices, small_weight_matrix, cutoff = ew_cutoff/2, logger = logger)
         for clique in cliques_iter:
             yield clique
 

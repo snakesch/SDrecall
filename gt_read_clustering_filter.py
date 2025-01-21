@@ -83,7 +83,7 @@ def main_function(bam,
     This function performs the following main tasks:
     1. Migrates BAM files to NCLS format for efficient query of reads or read pairs overlapping a query genomic region
     2. Builds a read-pair graph from the BAM data for phasing, where each vertex represents a read pair and each edge represents the confidence that two read pairs are originated from the same haplotype
-    3. Identifies haplotypes in the graph by finding non-overlapping maximal cliques iteratively (using an approximate but not exact algorithm for efficient clique search, basically we iteratively run Bron-Kerbosch algorithm)
+    3. Identifies haplotypes in the graph by finding non-overlapping maximal cliques iteratively (using an approximate but not exact algorithm for efficient clique search, basically we iteratively run Greedy-Clique-Expansion algorithm)
     4. After read pair grouped into different haplotypes, we put them into a binary integer linear programming model to solve the haplotype-level misalignment with HiGHs solver.
     5. Generates output BAM files with filtered and annotate haplotype index assigned to each read pairs.
 
@@ -154,14 +154,14 @@ def main_function(bam,
 
     # Create the read-pair graph used for phasing
     # Detailed description of the graph construction can be found in the function docstring.
-    phased_graph, weight_matrix, qname_to_node, total_readhap_vector = build_phasing_graph(bam,
-                                                                                           ncls_dict,
-                                                                                           read_dict,
-                                                                                           qname_dict,
-                                                                                           qname_idx_dict,
-                                                                                           mean_read_length,
-                                                                                           edge_weight_cutoff = edge_weight_cutoff,
-                                                                                           logger = logger)
+    phased_graph, weight_matrix, qname_to_node, total_readhap_vector, read_ref_pos_dict = build_phasing_graph(bam,
+                                                                                                            ncls_dict,
+                                                                                                            read_dict,
+                                                                                                            qname_dict,
+                                                                                                            qname_idx_dict,
+                                                                                                            mean_read_length,
+                                                                                                            edge_weight_cutoff = edge_weight_cutoff,
+                                                                                                            logger = logger)
     if phased_graph is None:
         return None
 
@@ -193,18 +193,19 @@ def main_function(bam,
     compare_haplotype_meta_tab = bam.replace(".bam", ".haplotype_meta.tsv")
 
     correct_qnames, mismap_qnames = inspect_by_haplotypes(bam,
-                                                          hap_qname_info,
-                                                          qname_hap_info,
-                                                          bam_ncls,
-                                                          intrin_bam_ncls,
-                                                          qname_to_node,
-                                                          total_lowqual_qnames,
-                                                          total_readhap_vector,
-                                                          total_readerr_vector,
-                                                          total_genomic_haps,
-                                                          compare_haplotype_meta_tab = compare_haplotype_meta_tab,
-                                                          mean_read_length = mean_read_length,
-                                                          logger = logger )
+                                                        hap_qname_info,
+                                                        qname_hap_info,
+                                                        bam_ncls,
+                                                        intrin_bam_ncls,
+                                                        qname_to_node,
+                                                        total_lowqual_qnames,
+                                                        total_readhap_vector,
+                                                        total_readerr_vector,
+                                                        total_genomic_haps,
+                                                        read_ref_pos_dict,
+                                                        compare_haplotype_meta_tab = compare_haplotype_meta_tab,
+                                                        mean_read_length = mean_read_length,
+                                                        logger = logger )
 
     assert len(correct_qnames & mismap_qnames) == 0, f"The correct_qnames and mismap_qnames have overlap: {correct_qnames & mismap_qnames}"
 

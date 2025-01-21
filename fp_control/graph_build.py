@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 
 from intervaltree import IntervalTree
+from numba import types
+from numba.typed import Dict
 
 from shell_cmds import executeCmd
 from numba_operators import any_false_numba, custom_all_numba
@@ -12,7 +14,6 @@ from pairwise_read_inspection import determine_same_haplotype
 
 
 logger = logging.getLogger('SDrecall')
-
 
 
 def stat_ad_dict(bam_file, logger = logger):
@@ -41,15 +42,17 @@ def stat_ad_dict(bam_file, logger = logger):
     # nested_ad_dict[chrom][pos][alt] = ad
     # nested_ad_dict[chrom][pos]["DP"] = total_dp
     # Initialize the nested dictionary
-    nested_ad_dict = {chrom: {} for chrom in ad_table["chrom"].unique()}
+    nested_dict = {chrom: {} for chrom in ad_table["chrom"].unique()}
     column_width = alt_expanded.shape[1]
+    inspected_overlaps = IntervalTree()
+    base_dict = {"A": np.int8(0), "T": np.int8(1), "C": np.int8(2), "G": np.int8(3), "N": np.int8(4), "DP": np.int8(5)}
 
-    # Iterate over the rows of ad_table to build the nested_ad_dict
+    # Iterate over the rows of dfA and dfB
     for i in range(len(ad_table)):
         chrom = ad_table.iloc[i, 0]
         outer_key = ad_table.iloc[i, 1]
-        inner_key = alt_expanded.iloc[i, 0]
-        value = ad_expanded.iloc[i, 0]
+        inner_key = base_dict[alt_expanded.iloc[i, 0]]
+        value = np.int16(ad_expanded.iloc[i, 0])
 
         if pd.isna(value):
             continue
@@ -57,21 +60,20 @@ def stat_ad_dict(bam_file, logger = logger):
         total_dp = value
 
         # Initialize the inner dictionary if the outer key is not present
-        if outer_key not in nested_ad_dict[chrom]:
-            nested_ad_dict[chrom][outer_key] = {}
-
+        if outer_key not in nested_dict[chrom]:
+            nested_dict[chrom][outer_key] = Dict.empty(key_type=types.int8,
+                                                       value_type=types.int16)
         # Add the first pair of inner key-value
-        nested_ad_dict[chrom][outer_key][inner_key] = value
+        nested_dict[chrom][outer_key][inner_key] = value
 
         # Check for the second pair of inner key-value
         for c in range(1, column_width):
             if not pd.isna(ad_expanded.iloc[i, c]) and not pd.isna(alt_expanded.iloc[i, c]):
-                nested_ad_dict[chrom][outer_key][alt_expanded.iloc[i, c]] = ad_expanded.iloc[i, c]
-                total_dp += ad_expanded.iloc[i, c]
+                nested_dict[chrom][outer_key][base_dict[alt_expanded.iloc[i, c]]] = np.int16(ad_expanded.iloc[i, c])
+                total_dp += np.int16(ad_expanded.iloc[i, c])
 
-        nested_ad_dict[chrom][outer_key]["DP"] = total_dp
-
-    return nested_ad_dict
+        nested_dict[chrom][outer_key][base_dict["DP"]] = np.int16(total_dp)
+        return nested_dict
 
 
 
@@ -213,7 +215,7 @@ def build_phasing_graph(bam_file,
     - Edge weights are calculated based on two factors:
         1. The total overlapping span between two read pairs
         2. The number of variants (SNVs and small indels) shared by two read pairs
-    - The resulting graph is used for subsequent haplotype identification through clique finding (Bron-Kerbosch algorithm).
+    - The resulting graph is used for subsequent haplotype identification through clique finding (Greedy-Clique-Expansion algorithm).
 
     See Also:
     ---------
@@ -379,7 +381,7 @@ def build_phasing_graph(bam_file,
                     bool_res, read_ref_pos_dict, read_hap_vectors, read_weight = determine_same_haplotype(read1, read2,
                                                                                                           uncovered_start, uncovered_end,
                                                                                                           read_hap_vectors = read_hap_vectors,
-                                                                                                          nested_ad_dict = nested_ad_dict,
+                                                                                                          nested_ad_dict = nested_ad_dict[chrom],
                                                                                                           read_ref_pos_dict = read_ref_pos_dict,
                                                                                                           mean_read_length = mean_read_length,
                                                                                                           logger = logger)
@@ -441,4 +443,4 @@ def build_phasing_graph(bam_file,
     g.edge_properties["weight"] = weight
 
     logger.info(f"Now we finished building up the edges in the graph. There are currently {g.num_vertices()} vertices and {g.num_edges()} edges in the graph")
-    return g, weight_matrix, qname_to_node, read_hap_vectors
+    return g, weight_matrix, qname_to_node, read_hap_vectors, read_ref_pos_dict

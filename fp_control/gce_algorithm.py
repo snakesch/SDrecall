@@ -9,9 +9,9 @@ from numba_operators import numba_and, numba_sum
 
 
 """
-Bron-Kerbosch Algorithm (Adapted by implementing an edge weight cutoff when extending cliques) Implementation for Clique Finding in Phasing Graphs
+Greedy-Clique-Expansion Algorithm (Adapted by implementing an edge weight cutoff when extending cliques) Implementation for Clique Finding in Phasing Graphs
 
-This module implements an optimized version of the Bron-Kerbosch algorithm for finding
+This module implements an optimized version of the Greedy-Clique-Expansion algorithm for finding
 maximal cliques in phasing graphs. It is specifically designed to work with sparse
 matrices representing edge weights between read pairs in haplotype phasing.
 
@@ -20,7 +20,7 @@ Key features:
 - Integrates with numba for just-in-time compilation and performance optimization
 
 Main function:
-- bk_algorithm: Implements the core Bron-Kerbosch algorithm (with minor adaptations to implement an edge weight cutoff when extending cliques), yielding cliques iteratively
+- gce_algorithm: Implements the core Greedy-Clique-Expansion algorithm (with minor adaptations to implement an edge weight cutoff when extending cliques), yielding cliques iteratively
 
 Helper functions:
 - Various numba-optimized functions for mask creation, matrix operations, and clique finding
@@ -339,7 +339,7 @@ def heuristic_find_largest_edge_weight_clique_sparse(matrix_data,
                                                          max_row_cols,
                                                          index_mask)
 
-        # There is the major adaptation to the original Bron-Kerbosch algorithm
+        # There is the major adaptation to the original Greedy-Clique-Expansion algorithm
         # If the edge weight between the selected vertex and the extending vertex is not high enough, there is a chance that two read pairs from two haplotypes share identical sequence within their overlappings. Which is a False Positive case.
         # So, if the next selected vertex has edge weight <= cutoff (meaning the current clique member does not contain any edges with a weight larger than the cutoff), then we need to find another extending edge from the previous clique members
         if next_max_value <= cutoff:
@@ -412,7 +412,7 @@ def pretty_print_matrix(matrix, precision=3):
 
 
 
-def bk_algorithm(selected_indices,
+def gce_algorithm(selected_indices,
                  weight_matrix,
                  cutoff = 0.1,
                  logger = logger):
