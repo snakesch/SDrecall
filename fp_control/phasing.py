@@ -28,7 +28,7 @@ Key features:
 - Perform twice BK algorithm to balance accuracy and sensitivity
 
 Main functions:
-- clique_generator_per_component: Identifies cliques within a given component
+- clique_iterator_per_component: Identifies cliques within a given component
 - find_components_inside_filtered_cliques: Removing zero weight edges and identifying components inside the cliques
 
 Dependencies:
@@ -54,7 +54,7 @@ def graph_vertex_iter(vertex_indices, graph):
 
 
 
-def clique_generator_per_component(graph, weight_matrix, ew_cutoff = 0.101, logger = logger):
+def clique_iterator_per_component(graph, weight_matrix, ew_cutoff = 0.101, logger = logger):
     '''
     This function is to find the largest cliques in each component of the graph
 
@@ -193,7 +193,7 @@ def find_components_inside_filtered_cliques(final_cliques,
 
 def phasing_realigned_reads(phased_graph, weight_matrix, edge_weight_cutoff, logger = logger):
     logger.info(f"Now start finding haplotypes in the setup weight matrix, the numba parallel threads are set to {get_num_threads()}")
-    total_cliques = clique_generator_per_component( phased_graph,
+    total_cliques = clique_iterator_per_component( phased_graph,
                                                     weight_matrix,
                                                     ew_cutoff = edge_weight_cutoff,
                                                     logger = logger )

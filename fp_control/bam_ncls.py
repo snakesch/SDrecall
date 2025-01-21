@@ -8,7 +8,7 @@ from numba_operators import fast_median, numba_sum
 logger = logging.getLogger("SDrecall")
 
 
-def overlapping_reads_generator(ncls_dict, read_dict, chrom, start, end):
+def overlapping_reads_iterator(ncls_dict, read_dict, chrom, start, end):
     """
     Generator function to lazily yield overlapping read objects.
 
@@ -51,7 +51,7 @@ def overlapping_reads_generator(ncls_dict, read_dict, chrom, start, end):
 
 
 
-def overlapping_qname_idx_generator(ncls_dict, chrom, start, end):
+def overlap_qname_idx_iterator(ncls_dict, chrom, start, end):
     """
     Generator function to lazily yield query name indices of overlapping reads.
 

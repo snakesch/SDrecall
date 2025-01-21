@@ -11,23 +11,18 @@ import os
 import gc
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
-import graph_tool.all as gt
-import numpy as np
 import pandas as pd
-import pybedtools as pb
 import pysam
 import logging
 import argparse as ap
-import numba
+# import numba
 # numba.config.THREADING_LAYER = 'omp'
 # numba.set_num_threads(4)
-from numba import types, prange, get_num_threads
+# from numba import types, prange, get_num_threads
 from io import StringIO
-from collections import defaultdict
 
 
-
-from src.utils import executeCmd
+from src.utils import executeCmd, convert_input_value
 from fp_control.bam_ncls import migrate_bam_to_ncls, calculate_mean_read_length
 from fp_control.graph_build import build_phasing_graph
 from fp_control.identify_misaligned_haps import inspect_by_haplotypes

@@ -7,7 +7,7 @@ import pybedtools as pb
 from collections import defaultdict
 from numba import types, prange
 
-from bam_ncls import overlapping_reads_generator
+from bam_ncls import overlapping_reads_iterator
 from bilc import lp_solve_remained_haplotypes
 from numba_operators import numba_sum
 from shell_cmds import executeCmd, prepare_tmp_file
@@ -426,11 +426,11 @@ def identify_misalignment_per_region(region,
     '''
     ## Identify reads overlapping region
     chrom, start, end = region
-    overlap_reads_iter = overlapping_reads_generator(bam_ncls,
+    overlap_reads_iter = overlapping_reads_iterator( bam_ncls,
                                                      read_pair_dict,
                                                      chrom,
                                                      start,
-                                                     end)
+                                                     end )
 
     # Identify a map that
     # (vertex_idx, qname) --> read object (pysam.AlignedSegment)
@@ -565,7 +565,7 @@ def stat_refseq_similarity(intrin_bam_ncls,
 
     varcounts_among_refseqs = defaultdict(dict)
     intrin_ncls_dict, intrin_read_dict, _, _ = intrin_bam_ncls
-    for homo_refseq in overlapping_reads_generator(intrin_ncls_dict, intrin_read_dict, chrom, span[0], span[1]):
+    for homo_refseq in overlapping_reads_iterator(intrin_ncls_dict, intrin_read_dict, chrom, span[0], span[1]):
         homo_refseq_start = homo_refseq.reference_start
         homo_refseq_end = homo_refseq.reference_end
         homo_refseq_qname = homo_refseq.query_name
@@ -692,10 +692,10 @@ def inspect_by_haplotypes(input_bam,
             # Iterate over all the reads overlapping with the iterating continuous region covered by the iterating haplotype
             # Record the haplotype vectors and error vectors for all the reads overlapping with the iterating continuous region to the prepared 2d arrays
             read_spans, hap_vectors, err_vectors, total_hap_vectors, total_err_vectors, read_ref_pos_dict = record_hap_err_vectors_per_region(reads,
-                                                                                                                           total_hap_vectors,
-                                                                                                                           total_err_vectors,
-                                                                                                                           read_ref_pos_dict = read_ref_pos_dict,
-                                                                                                                           logger = logger)
+                                                                                                                                              total_hap_vectors,
+                                                                                                                                              total_err_vectors,
+                                                                                                                                              read_ref_pos_dict = read_ref_pos_dict,
+                                                                                                                                              logger = logger)
 
             # Assemble the consensus sequence for the iterating continuous region
             consensus_sequence = assemble_consensus(hap_vectors, err_vectors, read_spans)
