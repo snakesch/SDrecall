@@ -46,10 +46,14 @@ def stat_ad_to_dict(bam_file, logger = logger):
     for i in range(len(ad_table)):
         chrom = ad_table.iloc[i, 0]
         outer_key = ad_table.iloc[i, 1]
-        inner_key = base_dict[alt_expanded.iloc[i, 0]]
+        inner_key = base_dict.get(alt_expanded.iloc[i, 0], None)
         value = np.int16(ad_expanded.iloc[i, 0])
 
         if pd.isna(value):
+            continue
+
+        if inner_key is None:
+            logger.warning(f"The inner key is None for the row {i} of the ad table: {ad_table.iloc[i, :].to_string(index=False)}")
             continue
 
         total_dp = value
