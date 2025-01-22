@@ -9,7 +9,10 @@ from numba_operators import numba_diff_indices, \
                             numba_and, \
                             numba_slicing, \
                             numba_indexing_int32, \
-                            numba_indexing_int8
+                            numba_indexing_int8, \
+                            numba_compare, \
+                            numba_bool_indexing, \
+                            numba_contain
 
 logger = logging.getLogger('SDrecall')
 
@@ -438,6 +441,7 @@ def extract_read_qseqs(read, read_ref_pos_dict):
 
 def determine_same_haplotype(read, other_read,
                              overlap_start, overlap_end,
+                             score_arr,
                              read_hap_vectors = {},
                              nested_ad_dict = {},
                              read_ref_pos_dict = {},
@@ -551,8 +555,8 @@ def determine_same_haplotype(read, other_read,
     
     total_match = compare_sequences(read_seq, other_seq, np.int8(4))
 
-
-    identical_part = interval_hap_vector[interval_hap_vector == interval_other_hap_vector]
+    identical_idx = numba_compare(interval_hap_vector, interval_other_hap_vector)
+    identical_part = numba_bool_indexing(interval_hap_vector, identical_idx)
     overlap_span = identical_part.size
     var_count = count_var(identical_part)
     indel_num = count_continuous_indel_blocks(identical_part)
@@ -578,7 +582,7 @@ def determine_same_haplotype(read, other_read,
 
         q_diff_indices = numba_diff_indices(read_seq, other_seq)
         r_diff_indices = qr_idx_arr[q_diff_indices]
-        if -1 in r_diff_indices:
+        if numba_contain(r_diff_indices, np.int32(-1)):
             return False, read_ref_pos_dict, read_hap_vectors, None
         read_package = (np.int32(read.reference_start), query_sequence_encoded, query_sequence_qualities, ref_positions)
         other_read_package = (np.int32(other_read.reference_start), other_query_sequence_encoded, other_query_sequence_qualities, other_ref_positions)
