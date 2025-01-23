@@ -31,7 +31,7 @@ def stat_ad_to_dict(bam_file, logger = logger):
     if alt_expanded.shape[1] <= 1 or ad_expanded.shape[1] <= 1:
         logger.warning(f"No ALT allele found in this BAM file. Skip this entire script")
         logger.warning(f"Look at the two dataframes now: \n{alt_expanded.to_string(index=False)}\n{ad_expanded.to_string(index=False)}\n")
-        return None, None, None, None
+        return None
 
     logger.info("\n{}\n{}\n".format(ad_expanded.loc[~ad_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False),
                                     alt_expanded.loc[~alt_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False)))
@@ -267,6 +267,8 @@ def build_phasing_graph(bam_file,
 
     # Create a dictionary to store Allele Depth for each position
     nested_ad_dict = stat_ad_to_dict(bam_file, logger = logger)
+    if nested_ad_dict is None:
+        return None, None, None, None, None
 
     qname_check_dict = {}
     other_qnames = defaultdict(set)
