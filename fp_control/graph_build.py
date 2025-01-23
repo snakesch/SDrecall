@@ -342,7 +342,7 @@ def build_phasing_graph(bam_file,
                                                                   overlap_start, overlap_end)
                 # logger.info(f"Found the uncovered regions {uncovered_overlaps} for the reads {read1.query_name} and {read2.query_name} in the overlap region ({overlap_start}-{overlap_end})")
                 for row_ind in range(uncovered_overlaps.shape[0]):
-                    uncovered_start, uncovered_end = uncovered_overlaps[row_ind][0], uncovered_overlaps[row_ind][1]
+                    uncovered_start, uncovered_end = uncovered_overlaps[row_ind, 0], uncovered_overlaps[row_ind, 1]
                     bool_res, read_ref_pos_dict, read_hap_vectors, read_weight = determine_same_haplotype(read1, read2,
                                                                                                           uncovered_start, uncovered_end,
                                                                                                           score_arr,
