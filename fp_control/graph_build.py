@@ -275,7 +275,7 @@ def build_phasing_graph(bam_file,
     # Use NCLS read dict to iterate through all the reads to build a graph. One good thing is that every key: value stores a pair of read objects
     total_qname_num = len(ncls_read_dict)
     weight_matrix = np.eye(total_qname_num, dtype=np.float32)
-    score_arr = np.array([mean_read_length * 1 - 50 + mean_read_length * i for i in range(50)])
+    score_arr = np.array([mean_read_length + mean_read_length * i for i in range(50)])
 
     for qname_idx, paired_reads in ncls_read_dict.items():
         qname = ncls_qname_dict[qname_idx]
@@ -382,16 +382,15 @@ def build_phasing_graph(bam_file,
             qname_bools = qname_bools[:n]
             pair_weight = pair_weight if pair_weight != 1 else 1 + 1e-4
             
-            if custom_all_numba(qname_bools):
-                if pair_weight > edge_weight_cutoff:
-                    e = g.add_edge(qv, oqv)
-                    weight[e] = pair_weight
-                weight_matrix[int(qv), int(oqv)] = pair_weight
-                weight_matrix[int(oqv), int(qv)] = pair_weight
-            elif any_false_numba(qname_bools):
+            if any_false_numba(qname_bools):
                 # logger.info(f"Qname_bools are {qname_bools}, Found two pairs {qname_prop[qv]} and {qname_prop[oqv]} are in different haplotypes, Removing the edge with the biggest weight")
                 weight_matrix[int(qv), int(oqv)] = -1
                 weight_matrix[int(oqv), int(qv)] = -1
+			else:
+				weight_matrix[int(qv), int(oqv)] = pair_weight
+                weight_matrix[int(oqv), int(qv)] = pair_weight
+                e = g.add_edge(qv, oqv)
+                weight[e] = pair_weight
 
     # Set the query name property for the graph
     g.vertex_properties["qname"] = qname_prop

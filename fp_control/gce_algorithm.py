@@ -339,7 +339,26 @@ def heuristic_find_largest_edge_weight_clique_sparse(matrix_data,
                                                          max_row_cols,
                                                          index_mask)
 
-        # There is the major adaptation to the original Greedy-Clique-Expansion algorithm
+		# Lookback at the last 3 members (or fewer if clique is smaller)
+        lookback_start = max(0, i - 3)  # Ensure we don't go out of bounds
+        for trial in range(lookback_start, i):
+            trial_member = select_indices[trial]
+            trial_start = matrix_indptr[trial_member]
+            trial_end = matrix_indptr[trial_member + 1]
+            trial_data = matrix_data[trial_start: trial_end]
+            trial_cols = matrix_indices[trial_start: trial_end]
+            
+            # Find the best edge for this trial member
+            trial_max_ind, trial_max_value = efficient_row_max(trial_data, 
+                                                               trial_cols, 
+                                                               index_mask)
+            
+            # Update global maximum if this trial member has a better edge
+            if trial_max_value > next_max_value:
+                next_max_ind = trial_max_ind
+                next_max_value = trial_max_value
+
+        # There is the major adaptation to the classic non-weighted Greedy-Clique-Expansion algorithm
         # If the edge weight between the selected vertex and the extending vertex is not high enough, there is a chance that two read pairs from two haplotypes share identical sequence within their overlappings. Which is a False Positive case.
         # So, if the next selected vertex has edge weight <= cutoff (meaning the current clique member does not contain any edges with a weight larger than the cutoff), then we need to find another extending edge from the previous clique members
         if next_max_value <= cutoff:
@@ -450,7 +469,7 @@ def gce_algorithm(selected_indices,
     # The component members are specified by selected_indices (an array of indices).
     # The index_mask is the boolean array specifying which vertices are in the component and remained to be assigned to a clique.
     while True:
-        logger.info(f"Start to find the largest clique inside a subgraph of {index_mask.size} nodes, left {numba_sum(index_mask)} nodes to be inspected.")
+        # logger.info(f"Start to find the largest clique inside a subgraph of {index_mask.size} nodes, left {numba_sum(index_mask)} nodes to be inspected.")
         if matrix_size == 0:
             logger.warning(f"Found that in this iteration, the subgraph size is already 0")
             break
@@ -479,7 +498,7 @@ def gce_algorithm(selected_indices,
         # logger.info(f"The returned qname idx are  {raw_clique_indices.tolist()}")
         # logger.info(f"Found a clique containing qnames {[(qname_dict[qname_idx], qname_idx) for qname_idx in raw_clique_indices]} composing the largest clique in the subgraph. Remaining {drop_mask.sum()} nodes in this iteration. ")
         remain_ind_count = numba_sum(drop_mask)
-        logger.info(f"Found {clique_indices.size} composing the largest clique in the subgraph. Remaining {remain_ind_count} nodes after this iteration. ")
+        # logger.info(f"Found {clique_indices.size} composing the largest clique in the subgraph. Remaining {remain_ind_count} nodes after this iteration. ")
         if raw_clique_indices.size >= 1:
             yield set(raw_clique_indices)
         elif remain_ind_count > 0:
@@ -488,7 +507,7 @@ def gce_algorithm(selected_indices,
             break
 
         if remain_ind_count == 0:
-            logger.warning(f"Found that after this iteration, remain 0 nodes. All the nodes has been assigned to cliques")
+            # logger.warning(f"Found that after this iteration, remain 0 nodes. All the nodes has been assigned to cliques")
             break
 
         # Prepare the index_mask for next_round

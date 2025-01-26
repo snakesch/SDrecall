@@ -113,14 +113,14 @@ def clique_iterator_per_component(graph, weight_matrix, ew_cutoff = 0.101, logge
             cliques_iter = gce_algorithm(selected_indices, big_weight_matrix, cutoff = ew_cutoff, logger = logger)
             # logger.debug(f"Found {len(cliques)} cliques in the component {component_id}\n")
             for clique in cliques_iter:
-                logger.info(f"Receiving a clique containing {[graph.vertex_properties['qname'][qid] for qid in clique]} in the component {component_id}")
+                # logger.info(f"Receiving a clique containing {[graph.vertex_properties['qname'][qid] for qid in clique]} in the component {component_id}")
                 if len(clique) <= 3:
-                    logger.info(f"Found {[graph.vertex_properties['qname'][qid] for qid in clique]} read pairs in a very small clique.")
+                    # logger.info(f"Found {[graph.vertex_properties['qname'][qid] for qid in clique]} read pairs in a very small clique.")
                     small_row_indices.update(clique)
-                    logger.info(f"Adding the {len(clique)} vertices in the clique to the small row indices")
+                    # logger.info(f"Adding the {len(clique)} vertices in the clique to the small row indices")
                     continue
                 else:
-                    logger.info(f"The clique is big enough to be directly yielded")
+                    # logger.info(f"The clique is big enough to be directly yielded")
                     yield clique
 
     logger.info(f"Remaining {len(small_row_indices)} vertices that are not included in the cliques. Here we find cliques again among them:\n{small_row_indices}")
