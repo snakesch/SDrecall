@@ -130,26 +130,20 @@ def get_interval_seq(read_start,
     '''
 
     interval_start_qidx = ref_positions[interval_start - read_start]
-    if interval_start_qidx < 0:
-        # logger.debug(f"Found the interval start {interval_start} is not in the reference positions: \n{ref_positions} of read {read.query_name}. Might locate in the middle of a deletion event.")
-        while ref_positions[interval_start - read_start] < 0 and interval_start <= interval_end:
-            interval_start += 1
-        if interval_start > interval_end:
-            # logger.warning(f"The whole specified interval (size {size}) is in a deletion event for read {read_id}. Now the returned seq is: {return_seq}\n")
-            return np.array([np.int8(x) for x in range(0)], dtype=np.int8), np.array([np.int32(x) for x in range(0)], dtype=np.int32)
+    while interval_start_qidx < 0 and interval_start <= interval_end:
+        interval_start += 1
         interval_start_qidx = ref_positions[interval_start - read_start]
+    if interval_start > interval_end:
+        # logger.warning(f"The whole specified interval (size {size}) is in a deletion event for read {read_id}. Now the returned seq is: {return_seq}\n")
+        return np.array([np.int8(x) for x in range(0)], dtype=np.int8), np.array([np.int32(x) for x in range(0)], dtype=np.int32)
 
-    interval_end_qidx = ref_positions[interval_end - read_start]
-    if interval_end_qidx < 0:
-        # logger.debug(f"Found the interval end {interval_end} is not in the reference positions: \n{ref_positions} of read {read.query_name}. Might locate in the middle of a deletion event.")
-        while ref_positions[interval_end - read_start] < 0:
-            interval_end -= 1
-        interval_end_qidx = ref_positions[interval_end - read_start] + 1
-    else:
-        interval_end_qidx += 1
+    interval_end_qidx = ref_positions[interval_end - 1 - read_start]
+    while interval_end_qidx < 0:
+        interval_end -= 1
+        interval_end_qidx = ref_positions[interval_end - 1 - read_start]
 
-    interval_read_seq = query_sequence_encoded[interval_start_qidx:interval_end_qidx]
-    qidx_ridx_arr = qseq_ref_positions[interval_start_qidx:interval_end_qidx]
+    interval_read_seq = query_sequence_encoded[interval_start_qidx:interval_end_qidx + 1]
+    qidx_ridx_arr = qseq_ref_positions[interval_start_qidx:interval_end_qidx + 1]
 
     return interval_read_seq, qidx_ridx_arr
 
@@ -565,10 +559,7 @@ def determine_same_haplotype(read, other_read,
     overlap_span = overlap_span + mean_read_length * 3 * indel_num
 
     if total_match:
-        if overlap_span >= mean_read_length - 50:
-            return True, read_ref_pos_dict, read_hap_vectors, overlap_span
-        else:
-            return np.nan, read_ref_pos_dict, read_hap_vectors, None
+        return True, read_ref_pos_dict, read_hap_vectors, overlap_span
     else:
         if len(read_seq) != len(other_seq) or interval_hap_vector.size != interval_other_hap_vector.size:
             return False, read_ref_pos_dict, read_hap_vectors, None
@@ -594,9 +585,6 @@ def determine_same_haplotype(read, other_read,
 
         if tolerate:
             overlap_span = overlap_span - tolerated_count * 20
-            if overlap_span >= mean_read_length - 50:
-                return True, read_ref_pos_dict, read_hap_vectors, overlap_span
-            else:
-                return np.nan, read_ref_pos_dict, read_hap_vectors, None
+            return True, read_ref_pos_dict, read_hap_vectors, overlap_span
         else:
             return False, read_ref_pos_dict, read_hap_vectors, None
