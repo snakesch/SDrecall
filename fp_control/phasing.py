@@ -142,7 +142,7 @@ def find_components_inside_filtered_cliques(final_cliques,
                                             graph,
                                             final_components,
                                             weight_matrix,
-                                            ew_cutoff = 0.101,
+                                            ew_cutoff = 0.201,
                                             logger=logger):
     '''
     Drop the zero weight edges for the graph before performing this function
@@ -165,8 +165,8 @@ def find_components_inside_filtered_cliques(final_cliques,
         # Supplement the small weight edges to the graph
         for i in range(len(clique)):
             for j in range(i+1, len(clique)):
-                    if 0.05 < weight_matrix[clique[i], clique[j]] <= ew_cutoff:
-                        logger.info(f"Adding an edge between {graph.vertex_properties['qname'][graph.vertex(clique[i])]}, {clique[i]} and {graph.vertex_properties['qname'][graph.vertex(clique[j])]}, {clique[j]} because their weight in matrix at {clique[i]} row and {clique[j]} column is {weight_matrix[clique[i], clique[j]]}")
+                    if 0.1 < weight_matrix[clique[i], clique[j]] <= ew_cutoff:
+                        # logger.info(f"Adding an edge between {graph.vertex_properties['qname'][graph.vertex(clique[i])]}, {clique[i]} and {graph.vertex_properties['qname'][graph.vertex(clique[j])]}, {clique[j]} because their weight in matrix at {clique[i]} row and {clique[j]} column is {weight_matrix[clique[i], clique[j]]}")
                         v1 = subgraph.vertex(clique[i])
                         v2 = subgraph.vertex(clique[j])
                         subgraph.add_edge(v1, v2)
