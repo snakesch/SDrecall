@@ -21,8 +21,7 @@ def common_read_filter(read, min_mapq):
 
 def get_filtered_read_qname(read, min_mapq: int, filter_tags: list[str]) -> str:
     '''
-    For each qualifying read within target region (or whole exome/genome if no region specified), 
-    extract the mapped coordinates and query names.
+    Selects reads mapped with ambiguity for SDrecall
 
     Returns:
     bed_feature (str): chrom, start, end and query name in BED format
@@ -94,10 +93,9 @@ def calculate_inferred_coverage(bam_file,
                 else:
                     bam_iter = bam.fetch()
                     for read in bam_iter:
-                        for read in bam_iter:
-                            bed_feature = get_filtered_read_qname(read, min_mapq, filter_tags)
-                            if bed_feature is not None:
-                                ob.write(bed_feature)
+                        bed_feature = get_filtered_read_qname(read, min_mapq, filter_tags)
+                        if bed_feature is not None:
+                            ob.write(bed_feature)
 
         # Sometimes the adjacent interval might fetch the same pair twice. To prevent double counting in the depth calculation. We need to drop the duplicates
         executeCmd(f"echo \"First 5 qualifying reads are:\" && head -n5 {tmp_output_bed}")

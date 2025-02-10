@@ -17,7 +17,7 @@ from src.utils import is_file_up_to_date, executeCmd, filter_bed_by_interval_siz
 
 logger = logging.getLogger('SDrecall')
 
-def deploy_PCs_for_SDrecall_main(ref_genome: str,
+def preparation(ref_genome: str,
                                  work_dir: str, 
                                  input_bam: str,
                                  reference_sd_map: str,
@@ -33,14 +33,12 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
     genome_file = rg.fai_index
 
     # Step 0: Calculate the distribution of fragment sizes
-    avg_frag_size, std_frag_size = get_bam_frag_size(input_bam)
-    # avg_frag_size, std_frag_size = 570.4, 150.7
+    # avg_frag_size, std_frag_size = get_bam_frag_size(input_bam)
+    avg_frag_size, std_frag_size = 570.4, 150.7
     logger.info(f"BAM {input_bam} has an average fragment size of {avg_frag_size}bp (std: {std_frag_size}bp)")
     
     ## Define names of intermediate files. Intermediate / final outputs will be written to work_dir.
     basename = os.path.basename(input_bam).replace(".bam", "")
-    qname_lst = os.path.join(work_dir, basename + f".{target_tag}.qname.lst")
-    bam_json = os.path.join(work_dir, basename + f".{target_tag}.json")   
     multi_align_bed = os.path.join(work_dir, basename + f".{target_tag}.multialign.bed")
     
     # Step 1 : Pick the multi_aligned regions within the target regions
@@ -108,7 +106,7 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
     
     # Step 3: Create the SD + PO graph
     graph_path = os.path.join(work_dir, basename + "-multiplexed_homologous_sequences.graphml")
-    if os.path.exists(graph_path) and is_file_up_to_date(graph_path, [input_bam, bam_json]):
+    if os.path.exists(graph_path) and is_file_up_to_date(graph_path, [input_bam]):
         graph = read_graphml(graph_path)
     else:
         graph = create_multiplex_graph( total_bin_sd_df, graph_path, threads = threads)
@@ -181,14 +179,14 @@ def deploy_PCs_for_SDrecall_main(ref_genome: str,
                                     nthreads = threads,
                                     avg_frag_size = avg_frag_size,
                                     std_frag_size = std_frag_size)
-   
+
 def main():
     parser = argparse.ArgumentParser(description='Deploy PCs for SDrecall.')
 
     parser.add_argument('-r', '--ref_genome', required=True, help='Path to the reference genome.')
     parser.add_argument('-d', '--work_dir', required=True, help='Base directory for output files.')
     parser.add_argument('-i', '--input_bam', required=True, help='Input BAM file.')
-    parser.add_argument('-m', '--reference_sd_map', required=True, help='Reference structural variant map file.')
+    parser.add_argument('-m', '--reference_sd_map', required=True, help='Reference SD map file.')
     parser.add_argument('-b', '--target_bed', default="", help='Optional target BED file.')
     parser.add_argument('-e', '--error_rate', type=float, default=0.05, help='Error rate for determining reads with extreme template lengths.')
     parser.add_argument('-t', '--threads', type=int, default=10, help='Number of threads to use.')
@@ -205,8 +203,7 @@ def main():
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # Call the main function with parsed arguments
-    deploy_PCs_for_SDrecall_main(
+    preparation(
         ref_genome=args.ref_genome,
         work_dir=args.work_dir,
         input_bam=args.input_bam,

@@ -22,11 +22,8 @@ def executeCmd(cmd, logger = logging.getLogger('SDrecall')) -> None:
 
 
 
-def prepare_tmp_file(tmp_dir="/paedyl01/disk1/yangyxt/test_tmp", **kwargs):
-    try:
-        os.mkdir(tmp_dir)
-    except FileExistsError:
-        pass
+def prepare_tmp_file(tmp_dir="/tmp", **kwargs):
+    os.makedirs(tmp_dir, exist_ok=True)
 
     return tempfile.NamedTemporaryFile(dir = tmp_dir, delete = False, **kwargs)
 
@@ -63,16 +60,22 @@ def update_plain_file_on_md5(old_file, new_file, logger=logging.getLogger('SDrec
 def construct_folder_struc(base_folder,
                            label="",
                            logger = logging.getLogger('SDrecall')):
+    
+    if label == "":
+        raise ValueError("Cannot initialize file tree with empty label.")
+    
     parent_folder_name = label+ "_related_homo_regions"
     parent_folder_full_path = os.path.join(base_folder, parent_folder_name)
 
     os.makedirs(parent_folder_full_path, exist_ok=True)
 
+    os.makedirs(os.path.join(parent_folder_full_path, label + "_all"), exist_ok=True)
     total_bed_name = label + "_related_homo_regions.bed"
-    total_bed_path = os.path.join(parent_folder_full_path, total_bed_name)
+    total_bed_path = os.path.join(parent_folder_full_path, label + "_all", total_bed_name)
 
+    os.makedirs(os.path.join(parent_folder_full_path, label + "_counterparts"), exist_ok=True)
     counterparts_bed_name = label + "_counterparts_regions.bed"
-    counterparts_bed_path = os.path.join(parent_folder_full_path, counterparts_bed_name)
+    counterparts_bed_path = os.path.join(parent_folder_full_path, label + "_counterparts", counterparts_bed_name)
 
     PC_folder_name = label
     PC_folder_full_path = os.path.join(parent_folder_full_path, PC_folder_name)

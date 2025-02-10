@@ -103,8 +103,13 @@ def sort_query_nodes(query_nodes, graph):
     """
     # Create a dictionary to store the edge count and subgraph size for each query node
     node_info = {}
+    
+    all_graph_nodes = list(graph.nodes)
+    
     # Iterate over each query node
     for node in query_nodes:
+        if node not in all_graph_nodes:
+            raise ValueError(f"Node {node} not found in graph.")
         # Get the edge count for the current node
         edge_count = graph.degree(node)
         # Find the connected component (subgraph) containing the current node
@@ -234,12 +239,6 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                 # qnode: tuple = (tuple_node, [list of nodes in self-defined class HOMOSEQ_REG])
                 assert isinstance(qnode, tuple)
                 
-                
-                # # First annotate the query node
-                # unfiltered_graph.nodes[qnode]["FRA_dest"] = str(i)
-                # # Then annotate the counterparts nodes
-                # for cnode in counterparts_nodes:
-                #     unfiltered_graph.nodes[cnode.data]["FRA_source"] = (unfiltered_graph.nodes[cnode.data].get("FRA_source", "") + "," + str(i)).lstrip(",")
             logger.debug(logs)
             logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************")
             i+=1
@@ -276,7 +275,7 @@ def query_connected_nodes(sd_paralog_pairs,
       
     # Identify qnodes that can be put into the same masked genome
     unique_qnodes = pick_from_each_group(connected_qnode_components)
-    logger.info("{} groups of qnodes can be put into the same masked genome: {}".format(len(unique_qnodes), "\n".join(str(g) for g in unique_qnodes)))
+    logger.debug("{} groups of qnodes can be put into the same masked genome: {}".format(len(unique_qnodes), "\n".join(str(g) for g in unique_qnodes)))
     
     grouped_results = []
     for group in unique_qnodes:

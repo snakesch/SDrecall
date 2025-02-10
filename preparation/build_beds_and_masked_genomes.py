@@ -1,5 +1,6 @@
 import os
 import sys
+from glob import glob
 from itertools import repeat
 from multiprocessing import Pool
 import logging
@@ -52,18 +53,19 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
                                                       repeat(ref_genome),
                                                       repeat(avg_frag_size),
                                                       repeat(std_frag_size),
+                                                      repeat(2),
                                                       repeat(logger)))
     i = 0
     intrinsic_bams = []
     for success, result, logs in results:
-        logger.debug(f"*********************************** {i}_subprocess_start ***************************************")
+        logger.debug(f"{i}th subprocess started")
         if not success:
             error_mes, tb_str = result
             logger.error(f"An error occurred: {error_mes}\nTraceback: {tb_str}\n")
         else:
             intrinsic_bams.append(result)
         logger.debug(logs)
-        logger.debug(f"*********************************** {i}_subprocess_end ***************************************")
+        logger.debug(f"{i}th subprocess completed")
         i+=1
     
     pool.close()
@@ -72,46 +74,27 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
 
     ## total_intrinsic_alignments.bam is a merged alignment file for BILC model.
     total_intrinsic_bam = os.path.join(output_folder, "total_intrinsic_alignments.bam")
-    test_cmd = f"source {shell_utils}; check_bam_validity {total_intrinsic_bam}"
-    try:
-        executeCmd(test_cmd)
-    except RuntimeError:
-        ## Create total_intrinsic_alignments.bam
-        intrinsic_bam_header = total_intrinsic_bam.replace(".bam", ".bam.header")
-        cmd = f"source {shell_utils}; modify_bam_sq_lines {intrinsic_bams[0]} {ref_genome} {intrinsic_bam_header}"
-        executeCmd(cmd, logger=logger)
-
-        intrinsic_bam_list = total_intrinsic_bam.replace(".bam", ".bams.list.txt")
-        with open(intrinsic_bam_list, "w") as f:
-            f.write("\n".join(intrinsic_bams))
-
-        cmd = f"samtools merge -@ {nthreads} -h {intrinsic_bam_header} -b {intrinsic_bam_list} -o - | \
-                samtools sort -O bam -o {total_intrinsic_bam} && \
-                samtools index {total_intrinsic_bam} && \
-                ls -lht {total_intrinsic_bam} || \
-                echo Failed to concatenate all the filtered realigned BAM files."
-        executeCmd(cmd)
     
-    # Third remove leftover PC folders
-    subdir_gen = os.walk(output_folder)
-    # Prepare all target folder names in this time's generation, the naming syntax should follow the function called construct_folder
-    if len(grouped_qnode_cnodes) > 1:
-        target_folder_names = set([f"PC{x}_related_homo_regions" for x in range(0, len(grouped_qnode_cnodes))])
-    else:
-        target_folder_names = ["PC0_related_homo_regions"]
-    logger.info(f"Generated PC regions: {sorted(target_folder_names)}")
-    first_level_dirs = next(subdir_gen)[1]  # The first item should be a 3-item tuple containin: 1. Current dir full path 2. All subdir names 3. All subfile names
-    for subdir in first_level_dirs:
-        if subdir not in target_folder_names:
-            # Remove the subdir forcely
-            rmtree(os.path.join(output_folder, subdir))
-            
-    # Fourth, extract all PC*_related_homo_regions.bed file and concat them together.
-    first_level_dirs = next(os.walk(output_folder))[1]
+    ## Create total_intrinsic_alignments.bam
+    intrinsic_bam_header = total_intrinsic_bam.replace(".bam", ".bam.header")
+    cmd = f"source {shell_utils}; modify_bam_sq_lines {intrinsic_bams[0]} {ref_genome} {intrinsic_bam_header}"
+    executeCmd(cmd, logger=logger)
 
+    intrinsic_bam_list = total_intrinsic_bam.replace(".bam", ".bams.list.txt")
+    with open(intrinsic_bam_list, "w") as f:
+        f.write("\n".join(intrinsic_bams))
+
+    cmd = f"samtools merge -@ {nthreads} -h {intrinsic_bam_header} -b {intrinsic_bam_list} -o - | \
+            samtools sort -O bam -o {total_intrinsic_bam} && \
+            samtools index {total_intrinsic_bam} && \
+            ls -lht {total_intrinsic_bam} || \
+            echo Failed to concatenate all the filtered realigned BAM files."
+    executeCmd(cmd)
+               
+    # Fourth, extract all PC*_related_homo_regions.bed file and concat them together.
     with NamedTemporaryFile(dir = "/tmp") as fp:
         total_lines = []
-        for bed_file in [os.path.join(output_folder, subdir, subdir + ".bed") for subdir in first_level_dirs]:
+        for bed_file in glob(os.path.join(output_folder, "*/*_all/", "*_related_homo_regions.bed")):
             with open(bed_file, "r") as bf:
                 total_lines = total_lines + bf.readlines()
         encoded_string = "".join(total_lines).rstrip("\n").encode()
@@ -226,9 +209,11 @@ def establish_beds_per_PC_cluster(cluster_dict={"PCs":{},
     update_plain_file_on_md5(paths["All_region_bed"], tmp_total_bed, logger=logger)
     
     contig_sizes = ref_genome.replace(".fasta", ".fasta.fai")
+    
     # Prepare masked genomes
-    masked_genome = Genome(ref_genome).mask(paths["PC_bed"], avg_frag_size = avg_frag_size, std_frag_size=std_frag_size, genome=contig_sizes, logger=logger)
-      
+    masked_genome_path = os.path.join( os.path.dirname(paths["PC_bed"]), label + ".masked.fasta")
+    masked_genome = Genome(ref_genome).mask(paths["PC_bed"], avg_frag_size = avg_frag_size, std_frag_size=std_frag_size, genome=contig_sizes, logger=logger, path=masked_genome_path)
+    
     # Call intrinsic variants
     bam_path = getIntrinsicVcf( pc_bed = paths["PC_bed"], 
                                 all_homo_regions_bed = paths["All_region_bed"], 
