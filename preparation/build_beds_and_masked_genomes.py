@@ -27,7 +27,6 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
                                         avg_frag_size = 400,
                                         std_frag_size = 140):
     # Label SD-paralog pairs. Name disconnected qnodes as PC0, connected qnodes as PC1, PC2, ...
-    from shutil import rmtree
     from itertools import repeat
     import re
     
