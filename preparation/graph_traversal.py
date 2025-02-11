@@ -37,7 +37,7 @@ def inspect_cnode_along_route(graph,
                 logger.error(f"The relative end is smaller than the relative start for {cnode} at the end of {i}th edge, rela_start is {cnode.rela_start} and rela_end is {cnode.rela_end}. The upstream qnode is {qnode}, rela_start is {qnode.rela_start} and rela_end is {qnode.rela_end}")
                 sys.exit(1)
             cnode.traverse_route = tuple(list(qnode.traverse_route) + [(qnode, "segmental_duplication")])
-        elif graph.ep["overlap"][edge] == "True":
+        elif graph.ep.get("overlap", {}).get(edge, "False") == "True":
             qnode_rela_start = cnode.start - qnode.start
             qnode_rela_end = min(qnode_rela_start + cnode.size, qnode.size)
             qnode_rela_start = max(qnode_rela_start, 0)
@@ -210,7 +210,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
         if graph.ep["overlap"][shortest_path_edges[-1]] == "True":
             continue
         # Skip the current path in case of adjacent PO edges
-        if len([i for i in range(0, len(shortest_path_edges) - 1) if graph.ep["overlap"][shortest_path_edges[i]] == "True" and graph.ep["overlap"][shortest_path_edges[i+1]] == "True"]) > 1:
+        if len([i for i in range(0, len(shortest_path_edges) - 1) if graph.ep.get("overlap", {}).get(shortest_path_edges[i], "False") == "True" and graph.ep.get("overlap", {}).get(shortest_path_edges[i+1], "False") == "True"]) > 1:
             continue
         if reduce(mul, [1 - graph.ep["weight"][e] for e in shortest_path_edges if graph.ep["type"][e] == "segmental_duplication"]) < 0.95:
             continue
@@ -268,7 +268,7 @@ def traverse_network_to_get_homology_counterparts(qnode,
         qnode = HOMOSEQ_REGION(node_to_vertex[qnode], directed_graph)
 
     # First identify subgraphs only connected by overlap edges
-    overlap_graph = gt.GraphView(directed_graph, efilt = lambda e: directed_graph.ep["overlap"][e] == "True")
+    overlap_graph = gt.GraphView(directed_graph, efilt = lambda e: directed_graph.ep.get("overlap", {}).get(e, "False") == "True")
     overlap_components, hist = gt.label_components(overlap_graph, directed = False)
     
     uniq_comp_labels = np.unique(overlap_components.a)
