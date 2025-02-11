@@ -79,6 +79,10 @@ def convert_networkx_to_graphtool(nx_graph):
                 eprop[attr] = gt_graph.new_edge_property("object")
         else:
             eprop[attr] = gt_graph.new_edge_property("object")
+    
+    # Make sure "overlap" is added as an edge attribute
+    if "overlap" not in eprop:
+        eprop["overlap"] = gt_graph.new_edge_property("string")
 
     # Set edge attributes
     for u, v, data in nx_graph.edges(data=True):
