@@ -18,14 +18,14 @@ from src.utils import is_file_up_to_date, executeCmd, filter_bed_by_interval_siz
 logger = logging.getLogger('SDrecall')
 
 def preparation(ref_genome: str,
-                                 work_dir: str, 
-                                 input_bam: str,
-                                 reference_sd_map: str,
-                                 target_bed = "",
-                                 err_rate = 0.05, 
-                                 threads = 10,
-                                 mq_cutoff = 20,
-                                 target_tag = "target"):
+                 work_dir: str, 
+                 input_bam: str,
+                 reference_sd_map: str,
+                 target_bed = "",
+                 err_rate = 0.05, 
+                 threads = 10,
+                 mq_cutoff = 20,
+                 target_tag = "target"):
 
     os.makedirs(work_dir, exist_ok=True)
 
@@ -157,19 +157,19 @@ def preparation(ref_genome: str,
     # Step 6: Collapse qnodes by identifying qnodes that can be put in the same masked genome
     grouped_qnode_cnodes = query_connected_nodes(sd_paralog_pairs, connected_qnode_components)
 
-    # Step 6.5: Enumerate qnodes and cnodes in the graph. (FC -> qnode; NFC -> cnode)
-    final_graph = graph.copy()
-    for i, result in enumerate(grouped_qnode_cnodes):
-        tag = "PC" + str(i)
-        for node in result["PCs"]:
-            if not isinstance(node, tuple):
-                raise TypeError(f"Expected {node} (type: {type(node)}) to be tuple.")
-            final_graph.nodes[node]["FC"] = ",".join([e for e in list(dict.fromkeys(final_graph.nodes[node].get("FC", "").split(",") + [tag])) if len(e) > 0])
-        for node in result["SD_counterparts"]:
-            if not isinstance(node, HOMOSEQ_REGION):
-                raise TypeError(f"Expected {node} (type: {type(node)}) to be HOMOSEQ_REGION. ")
-            final_graph.nodes[node.data]["NFC"] = ",".join([e for e in list(dict.fromkeys(final_graph.nodes[node.data].get("NFC", "").split(",") + [tag])) if len(e) > 0])
-    nx.write_graphml(final_graph, final_graph_path)
+    # # (Debug code) Enumerate qnodes and cnodes in the graph. (FC -> qnode; NFC -> cnode)
+    # final_graph = graph.copy()
+    # for i, result in enumerate(grouped_qnode_cnodes):
+    #     tag = "PC" + str(i)
+    #     for node in result["PCs"]:
+    #         if not isinstance(node, tuple):
+    #             raise TypeError(f"Expected {node} (type: {type(node)}) to be tuple.")
+    #         final_graph.nodes[node]["FC"] = ",".join([e for e in list(dict.fromkeys(final_graph.nodes[node].get("FC", "").split(",") + [tag])) if len(e) > 0])
+    #     for node in result["SD_counterparts"]:
+    #         if not isinstance(node, HOMOSEQ_REGION):
+    #             raise TypeError(f"Expected {node} (type: {type(node)}) to be HOMOSEQ_REGION. ")
+    #         final_graph.nodes[node.data]["NFC"] = ",".join([e for e in list(dict.fromkeys(final_graph.nodes[node.data].get("NFC", "").split(",") + [tag])) if len(e) > 0])
+    # nx.write_graphml(final_graph, final_graph_path)
 
     # Step 7: Create beds and masked genomes
     build_beds_and_masked_genomes(grouped_qnode_cnodes = grouped_qnode_cnodes,
