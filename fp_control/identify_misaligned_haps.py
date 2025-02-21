@@ -181,11 +181,11 @@ def judge_misalignment_by_extreme_vardensity(seq):
     six_vard = count_window_var_density(seq, padding_size = 65)
     read_vard = count_window_var_density(seq, padding_size = 74)
     
-    if numba_sum(five_vard >= 5/85) > 0:
-        select_bool = five_vard >= 5/85
+    if numba_sum(five_vard >= 7/85) > 0:
+        select_bool = five_vard >= 7/85
         padding = 42
-    elif numba_sum(six_vard >= 6/131) > 0:
-        select_bool = six_vard >= 6/131
+    elif numba_sum(six_vard >= 9/131) > 0:
+        select_bool = six_vard >= 9/131
         padding = 65
     elif numba_sum(read_vard > 11/148) > 0:
         return True
