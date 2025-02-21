@@ -12,6 +12,7 @@ logger = logging.getLogger('SDrecall')
 
 
 ## Helper functions
+
 def merge_bed_files(bed_files: List[str], logger: logging.Logger = logger) -> pb.BedTool:
     """Merges and sorts multiple BED files using pybedtools. Returns BedTool."""
     bed_files = list(dict.fromkeys(bed_files))  # Remove duplicates
@@ -23,6 +24,7 @@ def merge_bed_files(bed_files: List[str], logger: logging.Logger = logger) -> pb
     for bt in bedtools_list[1:]:
         merged_bedtool = merged_bedtool.cat(bt, postmerge=False)
     return merged_bedtool.sort().merge()
+
 
 def select_reads_by_qnames(input_bam: str,
                                    qname_set: Set[str],
@@ -173,10 +175,10 @@ def imap_process_masked_bam(tup_args):
 def bam_reads_selection_by_region(input_bam: str, 
                                   region_bed: str, 
                                   output_bam = None,
-                                  output_freads = None,
-                                  output_rreads = None,
-                                  input_freads = None,
-                                  input_rreads = None,
+                                  # output_freads = None,
+                                  # output_rreads = None,
+                                  # input_freads = None,
+                                  # input_rreads = None,
                                   multi_aligned = False,
                                   threads = 1,
                                   mq_cutoff = 20, 
