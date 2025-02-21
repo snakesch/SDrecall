@@ -227,7 +227,6 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
                                                                   cnode, 
                                                                   reference_fasta, 
                                                                   min_similarity = 0.95, 
-
                                                                   logger = logger )
         else:
             continue

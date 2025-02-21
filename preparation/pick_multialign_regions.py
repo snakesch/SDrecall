@@ -62,8 +62,6 @@ def calculate_inferred_coverage(bam_file,
 
     filter_tags = filter_tags.split(",") if filter_tags != "" else []
 
-    target_tag = os.path.basename(target_region).split(".")[0] if target_region else None
-
     output_prefix = os.path.join(os.path.dirname(output_bed), os.path.basename(bam_file).replace(".bam", ""))
 
     if len(filter_tags) > 0:

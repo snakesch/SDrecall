@@ -22,9 +22,7 @@ def preparation(ref_genome: str,
                  input_bam: str,
                  reference_sd_map: str,
                  target_bed = "",
-                 err_rate = 0.05, 
                  threads = 10,
-                 mq_cutoff = 20,
                  target_tag = "target"):
 
     os.makedirs(work_dir, exist_ok=True)
