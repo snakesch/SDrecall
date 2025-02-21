@@ -13,6 +13,19 @@ logger = logging.getLogger('SDrecall')
 
 ## Helper functions
 
+def merge_bed_files(bed_files: List[str], logger: logging.Logger = logger) -> pb.BedTool:
+    """Merges and sorts multiple BED files using pybedtools. Returns BedTool."""
+    bed_files = list(dict.fromkeys(bed_files))  # Remove duplicates
+    if not bed_files:
+        return pb.BedTool("", from_string=True)  # Return empty BedTool
+
+    bedtools_list = [pb.BedTool(f) for f in bed_files]
+    merged_bedtool = bedtools_list[0]
+    for bt in bedtools_list[1:]:
+        merged_bedtool = merged_bedtool.cat(bt, postmerge=False)
+    return merged_bedtool.sort().merge()
+
+
 def select_reads_by_qnames(input_bam: str,
                                    qname_set: Set[str],
                                    output_freads: str,

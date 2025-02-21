@@ -55,7 +55,7 @@ class HOMOSEQ_REGION:
     def fix_coord(self):
         return tuple([self.chrom, self.start + self.ups_rela_start, self.start + self.ups_rela_end, self.strand])
     
-    def qnode_relative_region(self, qnode_tuple):
+    def qnode_relative_region(self, qnode_tuple, logger=logger):
         # The qnode tuple should be a 4-item tuple containint (chrom, start, end, strand)
         # We also need to utilize the record info in the traverse route.
         total_route = list(self.traverse_route)

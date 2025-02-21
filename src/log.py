@@ -96,7 +96,7 @@ def error_handling_decorator(func):
         ch = logging.StreamHandler(log_stream)
         logger = init_logger(handler = ch, tag = tmp_tag)
         try:
-            result = func(*args, logger=logger, **kwargs)
+            result = func(*args, **kwargs)
             log_contents = log_stream.getvalue()
             log_stream.close()
         except Exception as e:

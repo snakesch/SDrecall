@@ -228,11 +228,10 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
                                                                   cnode, 
                                                                   reference_fasta, 
                                                                   min_similarity = 0.95, 
-                                                                  tmp_dir = "/paedyl01/disk1/yangyxt/test_tmp", 
+                                                                  tmp_dir = "/tmp", 
                                                                   logger = logger )
         else:
-            is_similar = False
-            similarity = 0.0
+            continue
         
         if is_similar:
             logger.info(f"Found a new counterparts node {cnode} for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes. The traverse route is {cnode.traverse_route} \n")
