@@ -43,7 +43,7 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
     # Load balancing
     new_results = sorted(new_results, key = lambda x: sum(v[0][2] - v[0][1] for k,v in x["PCs"].items()) * sum(len(v) for k,v in x["SD_counterparts"].items()), reverse=True)
     labels = [ "PC" + str(n) for n in range(0, len(grouped_qnode_cnodes))]
-    
+
     pool = Pool(nthreads)
     results = pool.imap_unordered(imap_establish, zip(new_results,
                                                       repeat(output_folder),
@@ -163,6 +163,7 @@ def establish_beds_per_PC_cluster(cluster_dict={"PCs":{},
     sortBed_and_merge(paths["Counterparts_bed"])
     # update_plain_file_on_md5(paths["Counterparts_bed"], tmp_counterparts_bed, logger=logger)
     
+    # TODO: The indexing below is problematic since the indices are before bed merging
     ## Create the total region bed file by combining PC BED and counterpart BED
     ## Invoke __iter__ method instead of __getitem__
     with open(paths["All_region_bed"], "w") as f:

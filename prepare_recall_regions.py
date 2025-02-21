@@ -168,7 +168,7 @@ def preparation(ref_genome: str,
     #             raise TypeError(f"Expected {node} (type: {type(node)}) to be HOMOSEQ_REGION. ")
     #         final_graph.nodes[node.data]["NFC"] = ",".join([e for e in list(dict.fromkeys(final_graph.nodes[node.data].get("NFC", "").split(",") + [tag])) if len(e) > 0])
     # nx.write_graphml(final_graph, final_graph_path)
-
+    
     # Step 7: Create beds and masked genomes
     build_beds_and_masked_genomes(grouped_qnode_cnodes = grouped_qnode_cnodes,
                                     sd_paralog_pairs = sd_paralog_pairs,
