@@ -3,31 +3,35 @@ import subprocess
 import logging
 import tempfile
 import re
+from typing import List
 
 from pybedtools import BedTool
 
+logger = logging.getLogger("SDrecall")
 
-def executeCmd(cmd, logger = logging.getLogger('SDrecall')) -> None:
+# - Miscellaneous helper functions - #
+
+def executeCmd(cmd, logger = logger) -> None:
 
     proc = subprocess.run(cmd, shell=True, capture_output=True)
-
+        
     logger.debug(f"Command run:{cmd}")
     logger.debug(f"Return code: {proc.returncode}")
 
     err_msg = proc.stderr.decode()
     if err_msg != "":
         logger.debug(proc.stderr.decode())
+        
+    if proc.returncode != 0:
+        raise RuntimeError(err_msg)
 
     return proc.stdout.decode()
-
 
 
 def prepare_tmp_file(tmp_dir="/tmp", **kwargs):
     os.makedirs(tmp_dir, exist_ok=True)
 
     return tempfile.NamedTemporaryFile(dir = tmp_dir, delete = False, **kwargs)
-
-
 
 def is_file_up_to_date(file_to_check, list_of_dependency_files):
     file_to_check_time = os.path.getmtime(file_to_check)
@@ -56,6 +60,8 @@ def update_plain_file_on_md5(old_file, new_file, logger=logging.getLogger('SDrec
         shutil.move(new_file, old_file)
         executeCmd(f"ls -lht {old_file}", logger=logger)
         return True
+
+# - Construct file tree for homologous region BEDs - #
 
 def construct_folder_struc(base_folder,
                            label="",
@@ -90,51 +96,57 @@ def construct_folder_struc(base_folder,
             "All_region_bed": total_bed_path,
             "Counterparts_bed": counterparts_bed_path}
 
+# - BED file manipulation using pybedtools - #
 
-
-def perform_bedtools_sort_and_merge(bed_file,
-                                    output_bed_file=None,
-                                    logger = logging.getLogger('SDrecall')):
+def sortBed_and_merge(bed_file, output=None, logger = logger):
+    
     # Load your BED file
     bed = BedTool(bed_file)
-
-    # Sort the BED file
-    sorted_bed = bed.sort()
-
-    # Merge the BED file
-    merged_bed = sorted_bed.merge(s=True, c='4,5,6', o='first,first,first')
-
-    if not output_bed_file:
-        output_bed_file = bed_file
+    merged_bed = bed.sort().merge(s=True, c='4,5,6', o='first,first,first')
+    
+    # Inplace file sort and merge
+    if not output:
+        output = bed_file
 
     # You can save the results to a new file
-    merged_bed.saveas(output_bed_file)
+    merged_bed.saveas(output)
+    
+    return None
+    
+def merge_bed_files(bed_files: List[str], logger = logger) -> BedTool:
+    """Merges and sorts multiple BED files using pybedtools. Returns BedTool."""
+    bed_files = list(dict.fromkeys(bed_files))  # Remove duplicates
+    if not bed_files:
+        return BedTool("", from_string=True)  # Return empty BedTool
 
-
-
+    bedtools_list = [BedTool(f) for f in bed_files]
+    merged_bedtool = bedtools_list[0]
+    for bt in bedtools_list[1:]:
+        merged_bedtool = merged_bedtool.cat(bt, postmerge=False)
+    return merged_bedtool.sort().merge()
 
 def filter_bed_by_interval_size(bed_obj, interval_size_cutoff):
     return bed_obj.filter(lambda x: len(x) > interval_size_cutoff).sort()
 
+# - VCF/BCF file manipulation using bcftools -# 
+def combine_vcfs(*vcfs, output=None, threads=4):
+    ## Given a list of VCFs, runs bcftools concat + tabix + sort, returns the processed VCF path
+    import subprocess
+    
+    if output is None:
+        raise ValueError("No output specified. ")
+    elif not output.endswith(".gz"):
+        output += ".gz"
+        
+    cmd = f"bcftools concat -a --threads {threads} -d exact "
+    
+    for vcf in vcfs:
+        cmd += f"{vcf} "
+        
+    cmd += f"2>/dev/null | bcftools sort /dev/stdin -o {output} -Oz 2>/dev/null && tabix -f -p vcf {output} 2>/dev/null"
+    
+    proc = subprocess.run(cmd, shell=True, capture_output=False)
+    
+    if proc.returncode != 0: raise RuntimeError("Error combining VCFs")
 
 
-# def convert_input_value(v):
-#     if type(v) == str:
-#         if re.search(r"^[Tt][Rr][Uu][Ee]$", v):
-#             return True
-#         elif re.search(r"^[Ff][Aa][Ll][Ss][Ee]$", v):
-#             return False
-#         elif re.search(r"^[0-9]+$", v):
-#             return int(v)
-#         elif re.search(r"^[0-9]*\.[0-9]+$", v):
-#             return float(v)
-#         elif v == "None":
-#             return None
-#         elif re.search(r"^[Nn][Aa][Nn]$", v):
-#             return np.nan
-#         elif "," in v:
-#             return [convert_input_value(sub_v) for sub_v in v.split(",")]
-#         else:
-#             return v
-#     else:
-#         return v
