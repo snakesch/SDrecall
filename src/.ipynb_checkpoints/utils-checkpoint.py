@@ -27,7 +27,6 @@ def executeCmd(cmd, logger = logger) -> None:
 
     return proc.stdout.decode()
 
-
 def prepare_tmp_file(tmp_dir="/tmp", **kwargs):
     os.makedirs(tmp_dir, exist_ok=True)
 

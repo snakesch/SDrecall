@@ -80,6 +80,7 @@ def compare_homologous_sequences(
     cnode: HOMOSEQ_REGION,
     reference_fasta: str,
     min_similarity: float = 0.95,
+    tmp_dir: str = "/paedyl01/disk1/yangyxt/test_tmp",
     logger: logging.Logger = logger) -> Tuple[bool, float]:
     """
     Compare genomic sequences between original query node and counterpart node.
@@ -227,7 +228,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
                                                                   cnode, 
                                                                   reference_fasta, 
                                                                   min_similarity = 0.95, 
-
+                                                                  tmp_dir = "/tmp", 
                                                                   logger = logger )
         else:
             continue
