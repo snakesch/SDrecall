@@ -5,11 +5,10 @@ from multiprocessing import Pool
 import logging
 import uuid
 import subprocess
-from tempfile import NamedTemporaryFile
 
 from pybedtools import BedTool
 
-from src.utils import executeCmd, construct_folder_struc, perform_bedtools_sort_and_merge, update_plain_file_on_md5
+from src.utils import executeCmd, construct_folder_struc, sortBed_and_merge, combine_vcfs, merge_bed_files, update_plain_file_on_md5
 from src.const import *
 from src.log import error_handling_decorator
 from preparation.homoseq_region import HOMOSEQ_REGION
@@ -107,21 +106,10 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
             rmtree(os.path.join(output_folder, subdir))
             
     # Fourth, extract all PC*_related_homo_regions.bed file and concat them together.
-    first_level_dirs = next(os.walk(output_folder))[1]
-
-    with NamedTemporaryFile(dir = "/tmp") as fp:
-        total_lines = []
-        for bed_file in [os.path.join(output_folder, subdir, subdir + ".bed") for subdir in first_level_dirs]:
-            with open(bed_file, "r") as bf:
-                total_lines = total_lines + bf.readlines()
-        encoded_string = "".join(total_lines).rstrip("\n").encode()
-        fp.write(encoded_string)
-
-        executeCmd("cat {all} | bedtools sort -i stdin | bedtools merge -i stdin > {total} && ls -lht {total}".format(all = fp.name,
-                                                                                                            total = os.path.join(output_folder, "all_PC_related_homo_regions.bed")))
-        
-        executeCmd("cat {all} | bedtools sort -i stdin | bedtools merge -i stdin > {total} && ls -lht {total}".format(all = fp.name,
-                                                                                                            total = os.path.join(output_folder, "all_PC_regions.bed")))
+    beds = glob(os.path.join(output_folder, "*/*_all/", "*_related_homo_regions.bed"))
+    combined_bed = merge_bed_files(beds)
+    combined_bed.saveas(os.path.join(output_folder, "all_PC_related_homo_regions.bed"))
+    # combined_bed.saveas(os.path.join(output_folder, "all_PC_regions.bed"))
     
     # Fifth, extract all intrinsic vcfs and use bcftools to concat them together
     intrinsic_vcfs = []
@@ -130,13 +118,9 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
             if re.search(r'PC[0-9]+\.raw\.vcf\.gz$', file):
                 intrinsic_vcfs.append(os.path.join(root, file))
     
-    vcf_list_file = os.path.join(output_folder, "intrinsic_vcf.lst")
     final_intrinsic_vcf = os.path.join(output_folder, "all_pc_region_intrinsic_variants.vcf.gz")
-    tmp_intrinsic_vcf = os.path.join(output_folder, "all_pc_region_intrinsic_variants.tmp.vcf.gz")
-    with open(vcf_list_file, "w") as f:
-        for v in intrinsic_vcfs: f.write(v + "\n")
-    
-    executeCmd(f"bcftools concat -o {tmp_intrinsic_vcf} -a --no-version -Oz -f {vcf_list_file} && bcftools sort -o {final_intrinsic_vcf} -Oz {tmp_intrinsic_vcf} && ls -lh {final_intrinsic_vcf} && rm {tmp_intrinsic_vcf}")
+    combine_vcfs(*intrinsic_vcfs, output=final_intrinsic_vcf)
+
     return
 
 def imap_establish(tup_args):
@@ -165,15 +149,15 @@ def establish_beds_per_PC_cluster(cluster_dict={"PCs":{},
     paths = construct_folder_struc(base_folder=base_folder, label=label, logger=logger)
 
     # First convert the disconnected nodes to beds, each node is a 3-tuple (chr, start, end)
-    tmp_id = str(uuid.uuid4())
-    tmp_pc_bed = paths["PC_bed"].replace(".bed", "." + tmp_id + ".bed")
-    raw_pc_bed = paths["PC_bed"].replace(".bed", ".raw.bed")
-    tmp_counterparts_bed = paths["Counterparts_bed"].replace(".bed", "." + tmp_id + ".bed")
-    raw_counterparts_bed = paths["Counterparts_bed"].replace(".bed", ".raw.bed")
-    tmp_total_bed = paths["All_region_bed"].replace(".bed", "." + tmp_id + ".bed")
-    raw_total_bed = paths["All_region_bed"].replace(".bed", ".raw.bed")
+    # tmp_id = str(uuid.uuid4())
+    # tmp_pc_bed = paths["PC_bed"].replace(".bed", "." + tmp_id + ".bed")
+    # raw_pc_bed = paths["PC_bed"].replace(".bed", ".raw.bed")
+    # tmp_counterparts_bed = paths["Counterparts_bed"].replace(".bed", "." + tmp_id + ".bed")
+    # raw_counterparts_bed = paths["Counterparts_bed"].replace(".bed", ".raw.bed")
+    # tmp_total_bed = paths["All_region_bed"].replace(".bed", "." + tmp_id + ".bed")
+    # raw_total_bed = paths["All_region_bed"].replace(".bed", ".raw.bed")
     
-    with open(tmp_pc_bed, "w") as f:
+    with open(paths["PC_bed"], "w") as f:
         for idx, records in cluster_dict["PCs"].items():
             for record in records:
                 if len(record) >= 3:
@@ -181,13 +165,14 @@ def establish_beds_per_PC_cluster(cluster_dict={"PCs":{},
                     f.write("\t".join([str(value) for value in record][:3] + [".", ".", record[3]]) + "\n")
                 elif len(record) == 2:
                     f.write("\t".join([str(value) for value in record[0]][:3] + [".", ".", record[0][3]]) + "\n")
+    sortBed_and_merge(paths["PC_bed"])
     
-    subprocess.run(f"cp -f {tmp_pc_bed} {raw_pc_bed}", shell=True)
-    perform_bedtools_sort_and_merge(tmp_pc_bed, logger=logger)
-    update_plain_file_on_md5(paths["PC_bed"], tmp_pc_bed, logger=logger)
+    # executeCmd(f"cp -f {tmp_pc_bed} {raw_pc_bed}")
+    # sortBed_and_merge(tmp_pc_bed, logger=logger)
+    # update_plain_file_on_md5(paths["PC_bed"], tmp_pc_bed, logger=logger)
             
     ## Create the counterparts region bed file
-    with open(tmp_counterparts_bed, "w") as f:
+    with open(paths["Counterparts_bed"], "w") as f:
         for idx, records in cluster_dict["SD_counterparts"].items():
             fc_node = cluster_dict["PCs"][idx][0]
             for record in records:
@@ -195,16 +180,16 @@ def establish_beds_per_PC_cluster(cluster_dict={"PCs":{},
                 fc_node_rela_start, fc_node_rela_end = record.qnode_relative_region(fc_node)     
                 ## Invoke __iter__ method instead of __getitem__
                 f.write("\t".join([str(value) for value in record][:3] + [str(fc_node_rela_start), str(fc_node_rela_end), record[3]]) + "\n")
-    subprocess.run(f"cp -f {tmp_counterparts_bed} {raw_counterparts_bed}", shell=True)
+    # executeCmd(f"cp -f {tmp_counterparts_bed} {raw_counterparts_bed}")
 
     ## Remove PC regions from counterpart BEDs and force strandedness
-    BedTool(tmp_counterparts_bed).subtract(BedTool(paths["PC_bed"]), s=True).saveas(tmp_counterparts_bed)
-    perform_bedtools_sort_and_merge(tmp_counterparts_bed, logger=logger)
-    update_plain_file_on_md5(paths["Counterparts_bed"], tmp_counterparts_bed, logger=logger)
+    BedTool(paths["Counterparts_bed"]).subtract(BedTool(paths["PC_bed"]), s=True).saveas(paths["Counterparts_bed"])
+    sortBed_and_merge(paths["Counterparts_bed"], logger=logger)
+    # update_plain_file_on_md5(paths["Counterparts_bed"], tmp_counterparts_bed, logger=logger)
     
     ## Create the total region bed file by combining PC BED and counterpart BED
     ## Invoke __iter__ method instead of __getitem__
-    with open(tmp_total_bed, "w") as f:
+    with open(paths["All_region_bed"], "w") as f:
         for idx, records in cluster_dict["PCs"].items():
             for record in records:
                 if len(record) == 2:
@@ -221,9 +206,10 @@ def establish_beds_per_PC_cluster(cluster_dict={"PCs":{},
                 # The rela_start and rela_end are based on the corresponding PC region
                 f.write("\t".join([str(value) for value in record][:3] + [str(fc_node_rela_start), str(fc_node_rela_end), record[3], f"NFC:{label}_{idx}"]) + "\n")
     
-    subprocess.run(f"cp -f {tmp_total_bed} {raw_total_bed}", shell=True)
-    perform_bedtools_sort_and_merge(tmp_total_bed, logger = logger)
-    update_plain_file_on_md5(paths["All_region_bed"], tmp_total_bed, logger=logger)
+    sortBed_and_merge(paths["All_region_bed"])
+    # executeCmd(f"cp -f {tmp_total_bed} {raw_total_bed}")
+    # sortBed_and_merge(tmp_total_bed, logger = logger)
+    # update_plain_file_on_md5(paths["All_region_bed"], tmp_total_bed, logger=logger)
     
     contig_sizes = ref_genome.replace(".fasta", ".fasta.fai")
     # Prepare masked genomes
