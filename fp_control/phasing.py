@@ -104,7 +104,7 @@ def clique_iterator_per_component(graph, weight_matrix, ew_cutoff = 0.101, logge
 
         logger.info(f"Start to find the largest clique in the component {component_id}, which contains {len(component_verts)} vertices. Contiguous? {big_weight_matrix.flags['C_CONTIGUOUS']}. Does the current matrix a view of the original one ? {big_weight_matrix.base is weight_matrix}")
         # logger.debug(f"The selected indices are {selected_indices.tolist()}, here are the component vertices: {component_verts}")
-        if len(component_verts) <= 3:
+        if len(component_verts) <= 5:
             # If the component is too small, then we add all the vertices in the component to a collection of indices which will be used for clique identification in the next round
             small_row_indices.update(component_verts)
             logger.info(f"Adding the {len(component_verts)} vertices in the component {component_id} to the small row indices")
@@ -114,7 +114,7 @@ def clique_iterator_per_component(graph, weight_matrix, ew_cutoff = 0.101, logge
             # logger.debug(f"Found {len(cliques)} cliques in the component {component_id}\n")
             for clique in cliques_iter:
                 # logger.info(f"Receiving a clique containing {[graph.vertex_properties['qname'][qid] for qid in clique]} in the component {component_id}")
-                if len(clique) <= 3:
+                if len(clique) <= 5:
                     # logger.info(f"Found {[graph.vertex_properties['qname'][qid] for qid in clique]} read pairs in a very small clique.")
                     small_row_indices.update(clique)
                     # logger.info(f"Adding the {len(clique)} vertices in the clique to the small row indices")

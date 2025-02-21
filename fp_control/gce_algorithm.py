@@ -339,7 +339,7 @@ def heuristic_find_largest_edge_weight_clique_sparse(matrix_data,
                                                          max_row_cols,
                                                          index_mask)
 
-		# Lookback at the last 3 members (or fewer if clique is smaller)
+        # Lookback at the last 3 members (or fewer if clique is smaller)
         lookback_start = max(0, i - 3)  # Ensure we don't go out of bounds
         for trial in range(lookback_start, i):
             trial_member = select_indices[trial]
