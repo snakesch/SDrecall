@@ -1,8 +1,6 @@
 import logging
 import numpy as np
 
-from src.utils import executeCmd
-
 logger = logging.getLogger("SDrecall")
 
 class HOMOSEQ_REGION:
