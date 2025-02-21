@@ -186,9 +186,9 @@ def main():
     parser.add_argument('-i', '--input_bam', required=True, help='Input BAM file.')
     parser.add_argument('-m', '--reference_sd_map', required=True, help='Reference SD map file.')
     parser.add_argument('-b', '--target_bed', default="", help='Optional target BED file.')
-    parser.add_argument('-e', '--error_rate', type=float, default=0.05, help='Error rate for determining reads with extreme template lengths.')
+    # parser.add_argument('-e', '--error_rate', type=float, default=0.05, help='Error rate for determining reads with extreme template lengths.')
     parser.add_argument('-t', '--threads', type=int, default=10, help='Number of threads to use.')
-    parser.add_argument('--mq_cutoff', type=int, default=20, help='Mapping quality cutoff.')
+    # parser.add_argument('--mq_cutoff', type=int, default=20, help='Mapping quality cutoff.')
     parser.add_argument('--target_tag', type=str, default="target", help='Optional target tag for filtering.')
     parser.add_argument('-v', '--verbose', type=str, default="INFO", help='Level of verbosity (default = INFO).')
 
@@ -207,9 +207,7 @@ def main():
         input_bam=args.input_bam,
         reference_sd_map=args.reference_sd_map,
         target_bed=args.target_bed,
-        err_rate=args.error_rate,
         threads=args.threads,
-        mq_cutoff=args.mq_cutoff,
         target_tag=args.target_tag,
     )
 

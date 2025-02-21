@@ -132,15 +132,7 @@ def establish_beds_per_PC_cluster(cluster_dict={"PCs":{},
     ## Initialize file structure
     paths = construct_folder_struc(base_folder=base_folder, label=label, logger=logger)
 
-    # First convert the disconnected nodes to beds, each node is a 3-tuple (chr, start, end)
-    # tmp_id = str(uuid.uuid4())
-    # tmp_pc_bed = paths["PC_bed"].replace(".bed", "." + tmp_id + ".bed")
-    # raw_pc_bed = paths["PC_bed"].replace(".bed", ".raw.bed")
-    # tmp_counterparts_bed = paths["Counterparts_bed"].replace(".bed", "." + tmp_id + ".bed")
-    # raw_counterparts_bed = paths["Counterparts_bed"].replace(".bed", ".raw.bed")
-    # tmp_total_bed = paths["All_region_bed"].replace(".bed", "." + tmp_id + ".bed")
-    # raw_total_bed = paths["All_region_bed"].replace(".bed", ".raw.bed")
-    
+    # First convert the disconnected nodes to beds, each node is a 3-tuple (chr, start, end)   
     with open(paths["PC_bed"], "w") as f:
         for idx, records in cluster_dict["PCs"].items():
             for record in records:
@@ -168,7 +160,7 @@ def establish_beds_per_PC_cluster(cluster_dict={"PCs":{},
 
     ## Remove PC regions from counterpart BEDs and force strandedness
     BedTool(paths["Counterparts_bed"]).subtract(BedTool(paths["PC_bed"]), s=True).saveas(paths["Counterparts_bed"])
-    sortBed_and_merge(paths["Counterparts_bed"], logger=logger)
+    sortBed_and_merge(paths["Counterparts_bed"])
     # update_plain_file_on_md5(paths["Counterparts_bed"], tmp_counterparts_bed, logger=logger)
     
     ## Create the total region bed file by combining PC BED and counterpart BED

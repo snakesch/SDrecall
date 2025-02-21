@@ -98,14 +98,18 @@ def construct_folder_struc(base_folder,
 
 # - BED file manipulation using pybedtools - #
 
-def sortBed_and_merge(bed_file, output=None, logger = logger):
+def sortBed_and_merge(bed_file, output=None):
     
     # Load your BED file
     bed = BedTool(bed_file)
-    merged_bed = bed.sort().merge(s=True, c='4,5,6', o='first,first,first')
+    num_cols = bed.field_count()
+    c_arg = ','.join(str(i) for i in range(4, num_cols + 1))  # '4,5,6,...'
+    o_arg = ','.join('first' for _ in range(4, num_cols + 1))  # 'first,first,first,...'
+   
+    merged_bed = bed.sort().merge(s=True, c=c_arg, o=o_arg)
     
     # Inplace file sort and merge
-    if not output:
+    if output is None:
         output = bed_file
 
     # You can save the results to a new file
@@ -113,7 +117,7 @@ def sortBed_and_merge(bed_file, output=None, logger = logger):
     
     return None
     
-def merge_bed_files(bed_files: List[str], logger = logger) -> BedTool:
+def merge_bed_files(bed_files: List[str]) -> BedTool:
     """Merges and sorts multiple BED files using pybedtools. Returns BedTool."""
     bed_files = list(dict.fromkeys(bed_files))  # Remove duplicates
     if not bed_files:
