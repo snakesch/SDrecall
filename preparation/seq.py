@@ -19,8 +19,14 @@ def getRawseq(bedf_path: str, fastq_path: str, ref_genome: str, padding = 0):
         executeCmd(cmd)
     return fastq_path
 
-def get_bam_frag_size(input_bam):
-    cmd = f"samtools stats {input_bam}"
+
+def get_bam_frag_size(input_bam, output_file=None):
+    if output_file is None:
+        output_file = f"{input_bam}.stats"
+    if os.path.exists(output_file) and os.path.getmtime(output_file) > os.path.getmtime(input_bam):
+        cmd = f"cat {output_file}"
+    else:
+        cmd = f"samtools stats {input_bam} > {output_file} && cat {output_file}"
     output = executeCmd(cmd)
     for line in output.split('\n'):
         if line.startswith('SN'):
