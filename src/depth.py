@@ -5,6 +5,8 @@
 import pysam
 import numpy as np
 import random
+import logging
+logger = logging.getLogger("SDrecall")
 
 def get_insert_size_distribution(bam_file, num_runs=10, num_samples=2000, max_template_length=8000, sample_prob=0.001):
     """
@@ -43,7 +45,7 @@ def get_insert_size_distribution(bam_file, num_runs=10, num_samples=2000, max_te
                   all_stats.append(stats)
 
         except (FileNotFoundError, ValueError, Exception) as e:
-            print(f"Error during run {_ + 1}: {e}")
+            logger.error(f"Error during run {_ + 1}: {e}")
 
     return tuple(np.mean(np.stack(all_stats), axis=0)) if all_stats else (None, None, None)
 
