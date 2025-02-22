@@ -26,7 +26,7 @@ def get_filtered_read_qname(read, min_mapq: int, filter_tags: list[str]) -> str:
     Returns:
     bed_feature (str): chrom, start, end and query name in BED format
     '''
-    passed_filter = all([read.get_tag("AS") - read.get_tag("XS") <= 5 if tag == "XS" else read.has_tag(tag) for tag in filter_tags]) if len(filter_tags) > 1 else True
+    passed_filter = all([read.get_tag("AS") - read.get_tag("XS") <= 5 if tag == "XS" else read.has_tag(tag) for tag in filter_tags]) if len(filter_tags) >= 1 else True
     if not common_read_filter(read, min_mapq) or not passed_filter:
         return None
     if (not read.mate_is_unmapped) and read.is_proper_pair:
@@ -117,6 +117,7 @@ def calculate_inferred_coverage(bam_file,
     logger.debug("First 5 rows of coverage table {} are: \n{}".format(output_tsv + '.gz', depth_df[:5].to_string(index=False)))
     logger.debug("Inferred coverage of {} bases:\n{}".format(depth_df.shape[0], depth_df.head(5).to_string(index=False)))
     return depth_df
+
 
 def pick_region_by_depth(input_bam: str,
                 output_bed: str,
