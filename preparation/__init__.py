@@ -12,8 +12,8 @@ __all__ = [
     "create_multiplex_graph",
     "extract_SD_paralog_pairs_from_graph",
     "query_connected_nodes",
-    "get_region_and_realign",  # Added from the original question's context.
+    "get_region_and_realign",
     "filter_umbrella_pairs",
     "pick_multialigned_regions",
-    "build_beds_and_masked_genomes" # Missing from your list
+    "build_beds_and_masked_genomes"
 ]
