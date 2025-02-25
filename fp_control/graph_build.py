@@ -1,21 +1,17 @@
-import logging
 import numba
 import graph_tool.all as gt
 import numpy as np
 import pandas as pd
 
-
 from collections import defaultdict
 from numba import types
 from numba.typed import Dict
 
-from shell_cmds import executeCmd
-from numba_operators import any_false_numba, custom_all_numba, numba_sum
+from src.utils import executeCmd
+from numba_operators import any_false_numba, numba_sum
 from bam_ncls import overlap_qname_idx_iterator
 from pairwise_read_inspection import determine_same_haplotype
-
-
-logger = logging.getLogger('SDrecall')
+from src.log import logger
 
 
 def stat_ad_to_dict(bam_file, logger = logger):
@@ -386,8 +382,8 @@ def build_phasing_graph(bam_file,
                 # logger.info(f"Qname_bools are {qname_bools}, Found two pairs {qname_prop[qv]} and {qname_prop[oqv]} are in different haplotypes, Removing the edge with the biggest weight")
                 weight_matrix[int(qv), int(oqv)] = -1
                 weight_matrix[int(oqv), int(qv)] = -1
-			else:
-				weight_matrix[int(qv), int(oqv)] = pair_weight
+            else:
+                weight_matrix[int(qv), int(oqv)] = pair_weight
                 weight_matrix[int(oqv), int(qv)] = pair_weight
                 e = g.add_edge(qv, oqv)
                 weight[e] = pair_weight

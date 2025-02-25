@@ -10,7 +10,8 @@ from numba import types, prange
 from bam_ncls import overlapping_reads_iterator
 from bilc import lp_solve_remained_haplotypes
 from numba_operators import numba_sum
-from shell_cmds import executeCmd, prepare_tmp_file
+from src.log import logger
+from src.utils import executeCmd, prepare_tmp_file
 from pairwise_read_inspection import get_hapvector_from_cigar, \
                                      get_errorvector_from_cigar, \
                                      get_read_id, \
@@ -19,8 +20,6 @@ from pairwise_read_inspection import get_hapvector_from_cigar, \
                                      count_continuous_indel_blocks, \
                                      extract_read_qseqs
 
-
-logger = logging.getLogger('SDrecall')
 
 
 @numba.njit(types.Tuple((types.int32, types.int32))(types.int16[:], types.int16[:]), fastmath=True)

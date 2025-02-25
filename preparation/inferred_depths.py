@@ -1,11 +1,10 @@
 import os
-import logging
 
 import pysam
 import pandas as pd
 from pybedtools import BedTool
 
-logger = logging.getLogger("SDrecall")
+from src.utils import logger
 
 def filter_and_process_read(read, min_mapq, filter_tags, filter_logic):
     """Filters a single read and returns processed data or None if filtered."""

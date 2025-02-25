@@ -6,8 +6,7 @@ import re
 from typing import List
 
 from pybedtools import BedTool
-
-logger = logging.getLogger("SDrecall")
+from src.log import logger
 
 # - Miscellaneous helper functions - #
 
@@ -37,7 +36,7 @@ def is_file_up_to_date(file_to_check, list_of_dependency_files):
     file_to_check_time = os.path.getmtime(file_to_check)
     return all(file_to_check_time > os.path.getmtime(dep_file) for dep_file in list_of_dependency_files)
 
-def update_plain_file_on_md5(old_file, new_file, logger=logging.getLogger('SDrecall')):
+def update_plain_file_on_md5(old_file, new_file, logger=logger):
     import hashlib
 
     old_md5 = hashlib.md5(open(old_file,'r').read().encode()).hexdigest() if os.path.exists(old_file) else "non_existent"
@@ -65,7 +64,7 @@ def update_plain_file_on_md5(old_file, new_file, logger=logging.getLogger('SDrec
 
 def construct_folder_struc(base_folder,
                            label="",
-                           logger = logging.getLogger('SDrecall')):
+                           logger = logger):
     
     if label == "":
         raise ValueError("Cannot initialize file tree with empty label.")

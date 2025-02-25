@@ -5,6 +5,7 @@ import numba
 import numpy as np
 from highspy import Highs
 
+from src.log import logger
 
 """
 This module implements a Binary Integer Linear Constraint (BILC) Programming approach to select
@@ -41,9 +42,6 @@ This implementation assumes that the input DataFrame has specific columns includ
 'hap_id', 'coefficient', 'ref_genome_similarities', 'chrom', 'start', 'end', and 'rank'.
 Ensure that the input data is properly formatted before using this module.
 """
-
-
-logger = logging.getLogger("SDrecall")
 
 
 

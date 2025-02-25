@@ -13,7 +13,6 @@ import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
 import pandas as pd
 import pysam
-import logging
 import argparse as ap
 # import numba
 # numba.config.THREADING_LAYER = 'omp'
@@ -22,24 +21,16 @@ import argparse as ap
 from io import StringIO
 
 
-from src.utils import executeCmd, convert_input_value
+from src.utils import executeCmd
+from src.log import configure_logger
+from src.const import shell_utils
 from fp_control.bam_ncls import migrate_bam_to_ncls, calculate_mean_read_length
 from fp_control.graph_build import build_phasing_graph
 from fp_control.identify_misaligned_haps import inspect_by_haplotypes
 from fp_control.phasing import phasing_realigned_reads
 
-bash_utils_hub = "shell_utils.sh"
 
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-console_handler=logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(module)s:%(funcName)s:%(lineno)s:%(message)s")
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
-
-
+logger = configure_logger()
 
 
 def extract_var_pos(raw_vcf,
@@ -57,7 +48,6 @@ def extract_var_pos(raw_vcf,
     gc.collect()
 
     return df
-
 
 
 
@@ -174,7 +164,7 @@ def main_function(bam,
     # It's like active region identification for GATK HC
     if not bam_region_bed:
         bam_region_bed = bam.replace(".bam", ".coverage.bed")
-        cmd = f"bash {bash_utils_hub} samtools_bam_coverage \
+        cmd = f"bash {shell_utils} samtools_bam_coverage \
                 -i {bam} \
                 -d 0 \
                 -o {bam_region_bed}"

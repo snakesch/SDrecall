@@ -5,7 +5,7 @@ import graph_tool.all as gt
 from numba import get_num_threads
 from collections import defaultdict
 
-
+from src.log import logger
 from gce_algorithm import gce_algorithm
 from numba_operators import numba_isin, \
 							numba_and, \
@@ -41,11 +41,6 @@ This module contains the high-level framework of haplotype phasing pipeline, tak
 phasing graph and weight matrix as input and producing the final haplotype
 assignments for each read.
 """
-
-
-
-logger = logging.getLogger("SDrecall")
-
 
 
 def graph_vertex_iter(vertex_indices, graph):

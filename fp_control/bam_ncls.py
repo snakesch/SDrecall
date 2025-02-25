@@ -1,12 +1,9 @@
 import pysam
-import logging
 import numpy as np
 from ncls import NCLS
 from numba_operators import fast_median, numba_sum
 
-
-logger = logging.getLogger("SDrecall")
-
+from src.log import logger
 
 def overlapping_reads_iterator(ncls_dict, read_dict, chrom, start, end):
     """
@@ -92,7 +89,7 @@ def overlap_qname_idx_iterator(ncls_dict, chrom, start, end):
 
 
 
-def calculate_mean_read_length(bam_file_path, sample_size=1000000):
+def calculate_mean_read_length(bam_file_path, sample_size=100000):
     bamfile = pysam.AlignmentFile(bam_file_path, "rb")
 
     total_length = 0

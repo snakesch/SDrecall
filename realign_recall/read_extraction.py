@@ -1,8 +1,6 @@
 import os
 
-import logging
-
-logger = logging.getLogger("SDrecall")
+from src.utils import executeCmd, logger
 
 def bam_to_fastq_biobambam(input_bam, region_bed, output_freads, output_rreads, threads=1, logger=logger):
     """

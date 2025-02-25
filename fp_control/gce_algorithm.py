@@ -6,8 +6,7 @@ from scipy import sparse
 from numba import prange, types
 
 from numba_operators import numba_and, numba_sum
-
-
+from src.log import logger
 """
 Greedy-Clique-Expansion Algorithm (Adapted by implementing an edge weight cutoff when extending cliques) Implementation for Clique Finding in Phasing Graphs
 
@@ -37,8 +36,6 @@ to the same haplotype.
 The core principle of consideration of using cliques is that we do not allow any found evidence to reject the possiblity of sharing haplotype between any pair of grouped read pairs.
 """
 
-
-logger = logging.getLogger("SDrecall")
 
 
 @numba.njit(types.boolean[:](types.int32), fastmath=True)

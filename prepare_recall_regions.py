@@ -11,17 +11,20 @@ import graph_tool.all
 
 from preparation import *
 
-from src.log import ColoredFormatter
+from src.log import logger, configure_logger
 from src.suppress_warning import *
-from src.utils import is_file_up_to_date, executeCmd, filter_bed_by_interval_size
+from src.utils import is_file_up_to_date, filter_bed_by_interval_size
 
-logger = logging.getLogger('SDrecall')
 
-def preparation(ref_genome: str,
+def preparation( ref_genome: str,
                  work_dir: str, 
                  input_bam: str,
                  reference_sd_map: str,
                  target_bed = "",
+                 mq_threshold = 41,
+                 high_quality_depth = 10,
+                 minimum_depth = 3,
+                 multialign_frac = 0.5,
                  threads = 10,
                  target_tag = "target"):
 
@@ -43,10 +46,10 @@ def preparation(ref_genome: str,
     if not os.path.exists(multi_align_bed) or not is_file_up_to_date(multi_align_bed, [input_bam, target_bed]):
         multi_align_bed = pick_region_by_depth(input_bam, 
                                         multi_align_bed, 
-                                        MQ_threshold=41, 
-                                        high_quality_depth=10, 
-                                        minimum_depth=3, 
-                                        multialign_frac=0.5,
+                                        MQ_threshold=mq_threshold, 
+                                        high_quality_depth=high_quality_depth, 
+                                        minimum_depth=minimum_depth, 
+                                        multialign_frac=multialign_frac,
                                         target_region=target_bed, 
                                         genome_file=genome_file)
 
@@ -188,18 +191,16 @@ def main():
     parser.add_argument('-b', '--target_bed', default="", help='Optional target BED file.')
     # parser.add_argument('-e', '--error_rate', type=float, default=0.05, help='Error rate for determining reads with extreme template lengths.')
     parser.add_argument('-t', '--threads', type=int, default=10, help='Number of threads to use.')
-    # parser.add_argument('--mq_cutoff', type=int, default=20, help='Mapping quality cutoff.')
+    parser.add_argument('--mq_cutoff', type=int, default=41, help='Mapping quality cutoff.')
+    parser.add_argument('--high_quality_depth', type=int, default=10, help='High quality depth cutoff.')
+    parser.add_argument('--minimum_depth', type=int, default=3, help='Minimum depth cutoff.')
+    parser.add_argument('--multialign_frac', type=float, default=0.5, help='Multi-align fraction cutoff.')
     parser.add_argument('--target_tag', type=str, default="target", help='Optional target tag for filtering.')
     parser.add_argument('-v', '--verbose', type=str, default="INFO", help='Level of verbosity (default = INFO).')
 
     args = parser.parse_args()
 
-    logger.setLevel(getattr(logging, args.verbose))
-    console_handler=logging.StreamHandler()
-    console_handler.setLevel(getattr(logging, args.verbose))
-    formatter = ColoredFormatter("%(levelname)s:%(asctime)s:%(module)s:%(funcName)s:%(lineno)s:%(message)s")
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
+    configure_logger(log_level=args.verbose)
 
     preparation(
         ref_genome=args.ref_genome,
@@ -207,6 +208,10 @@ def main():
         input_bam=args.input_bam,
         reference_sd_map=args.reference_sd_map,
         target_bed=args.target_bed,
+        mq_threshold=args.mq_cutoff,
+        high_quality_depth=args.high_quality_depth,
+        minimum_depth=args.minimum_depth,
+        multialign_frac=args.multialign_frac,
         threads=args.threads,
         target_tag=args.target_tag,
     )

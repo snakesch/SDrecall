@@ -1,9 +1,12 @@
 import uuid
-from io import StringIO
 import inspect
 import logging
 import time
 import traceback
+import sys
+
+from io import StringIO
+
 
 class ColoredFormatter(logging.Formatter):
     COLORS = {
@@ -108,3 +111,26 @@ def error_handling_decorator(func):
             return (True, result, log_contents)
 
     return wrapper
+
+def configure_logger(log_level="INFO", log_file=None):
+    """Configure the SDrecall logger."""
+    # Get the logger
+    logger = logging.getLogger("SDrecall")
+    logger.setLevel(getattr(logging, log_level.upper()))
+    logger.handlers.clear()
+    
+    # Console handler
+    console = logging.StreamHandler(sys.stdout)
+    console.setFormatter(ColoredFormatter())
+    logger.addHandler(console)
+    
+    # File handler if specified
+    if log_file:
+        file_handler = logging.FileHandler(log_file)
+        file_format = logging.Formatter("[%(asctime)s] [%(levelname)s] [%(pathname)s:%(funcName)s:%(lineno)d] %(message)s")
+        file_handler.setFormatter(file_format)
+        logger.addHandler(file_handler)
+    
+    return logger
+
+logger = configure_logger()

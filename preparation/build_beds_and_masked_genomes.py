@@ -4,8 +4,6 @@ from glob import glob
 from itertools import repeat
 from multiprocessing import Pool
 import logging
-import uuid
-import subprocess
 
 from pybedtools import BedTool
 
@@ -184,9 +182,6 @@ def establish_beds_per_PC_cluster(cluster_dict={"PCs":{},
                 f.write("\t".join([str(value) for value in record][:3] + [str(fc_node_rela_start), str(fc_node_rela_end), record[3], f"NFC:{label}_{idx}"]) + "\n")
     
     sortBed_and_merge(paths["All_region_bed"])
-    # executeCmd(f"cp -f {tmp_total_bed} {raw_total_bed}")
-    # sortBed_and_merge(tmp_total_bed, logger = logger)
-    # update_plain_file_on_md5(paths["All_region_bed"], tmp_total_bed, logger=logger)
     
     contig_sizes = ref_genome.replace(".fasta", ".fasta.fai")
     
