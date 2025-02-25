@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 self=$(realpath ${BASH_SOURCE[0]})
 
-
 function log() {
     local msg="$1"
     local script_name="${BASH_SOURCE[1]##*/}"
@@ -605,121 +604,6 @@ function bcftools_concatvcfs {
     display_table ${merged_vcf} 20
 }
 
-
-
-# function sync_fastq() {
-#     local file1
-#     local file2
-#     local outprefix
-#     local OPTIND
-
-#     while getopts "1:2:p::t::" opt; do
-#         case "${opt}" in
-#             1) file1=${OPTARG} ;;
-#             2) file2=${OPTARG} ;;
-#             t) tmp_dir=${OPTARG} ;;
-#             p) outprefix=${OPTARG} ;;
-#             *)
-#                 echo "Invalid option: -${OPTARG}" >&2
-#                 exit 1
-#                 ;;
-#         esac
-#     done
-#     shift $((OPTIND -1))
-
-#     if [[ -z ${file1} || -z ${file2} ]]; then
-#         >&2 echo "Usage: $0 sync_fastq -1 file1.fastq -2 file2.fastq -p output_prefix" >&2
-#         return 1
-#     fi
-
-#     if [[ -z ${tmp_dir} ]]; then
-#         local tmp_dir=$TMPDIR
-#     fi
-
-#     if [[ -z ${outprefix} ]]; then
-#         local outprefix=${tmp_dir}/$(randomID)
-#         local replace="TRUE"
-#     fi
-
-#     # Detect if input files are gzipped and set commands accordingly
-#     file1_ext="${file1##*.}"
-#     file2_ext="${file2##*.}"
-#     if [[ "$file1_ext" == "gz" ]]; then
-#         read_cmd="zcat"
-#         write_cmd="gzip"
-#         out_suffix="fastq.gz"
-#     else
-#         read_cmd="cat"
-#         write_cmd="cat"
-#         out_suffix="fastq"
-#     fi
-
-#     # Extract read names, sort and find intersection, then filter original FASTQ files based on the intersection names
-#     mawk 'NR==FNR{ids[$1]; next} $1 in ids' \
-#     <(seqtk seq -A ${file1} | mawk '{if(FNR%2==1) print substr($1,2)}' | sort) \
-#     <(seqtk seq -A ${file2} | mawk '{if(FNR%2==1) print substr($1,2)}' | sort) > ${outprefix}.intersect.txt && \
-#     display_table ${outprefix}.intersect.txt
-
-#     if [[ $(cat ${outprefix}.intersect.txt | wc -l) -gt 0 ]]; then
-#         parallel -j2 --dry-run --link \
-#         seqtk subseq {1} ${outprefix}.intersect.txt '|' \
-#         paste - - - - '|' \
-#         sort -k1,1 -t \$\'\\t\' '|' \
-#         tr -s \'\\t\' \'\\n\' '|' \
-#         $write_cmd '>' ${outprefix}.{2}.sorted.${out_suffix} ::: \
-#         ${file1} ${file2} ::: \
-#         1 2 && \
-#         parallel -j2 --link \
-#         seqtk subseq {1} ${outprefix}.intersect.txt '|' \
-#         paste - - - - '|' \
-#         sort -k1,1 -t \$\'\\t\' '|' \
-#         tr -s \'\\t\' \'\\n\' '|' \
-#         $write_cmd '>' ${outprefix}.{2}.sorted.${out_suffix} ::: \
-#         ${file1} ${file2} ::: \
-#         1 2 && \
-#         ls -lht ${outprefix}.1.sorted.${out_suffix} ${outprefix}.2.sorted.${out_suffix}
-#     else
-#         log "No intersection query names found between ${file1} and ${file2}. Quit with error!"
-#         return 1;
-#     fi
-
-#     if check_fastq_pair_consistency ${outprefix}.1.sorted.${out_suffix} ${outprefix}.2.sorted.${out_suffix}; then
-#         log "Syncing and sorting finished. Results are stored in $(ls -lht ${outprefix}.1.sorted.${out_suffix}) and $(ls -lht ${outprefix}.2.sorted.${out_suffix})"
-#         silent_remove_tmps ${outprefix}.intersect.txt
-
-#         if [[ ${replace} == "TRUE" ]]; then
-#             mv ${outprefix}.1.sorted.${out_suffix} ${file1} && \
-#             mv ${outprefix}.2.sorted.${out_suffix} ${file2} && \
-#             ls -lht ${file1} ${file2}
-#         fi
-#     else
-#         log "Syncing and sorting failed! Check the intersection query name list ${outprefix}.intersect.txt"
-#         parallel -j2 \
-#         seqtk seq ${outprefix}.{}.sorted.${out_suffix} '|' \
-#         mawk \'FNR%4==1 \{print substr\(\$1, 2\)\}\' '>' ${outprefix}.{}.sorted.qname.lst ::: \
-#         1 2 && \
-#         diff ${outprefix}.1.sorted.qname.lst ${outprefix}.2.sorted.qname.lst && \
-#         return 1;
-#     fi
-# }
-
-
-# function check_fastq_pair_consistency () {
-#     local fastq1=${1}
-#     local fastq2=${2}
-
-#     if [[ ! -f ${fastq1} ]] || [[ ! -f ${fastq2} ]]; then
-#         return 1
-#     fi
-
-#     local sum1=$(seqtk seq ${fastq1} | mawk 'FNR%4==1 {print substr($1, 2);}' | sha256sum)
-#     local sum2=$(seqtk seq ${fastq2} | mawk 'FNR%4==1 {print substr($1, 2);}' | sha256sum)
-
-#     if [[ ${sum1} == ${sum2} ]]; then
-#         log "${fastq1} and ${fastq2} have exact same query names"
-#         true
-#     else
-#         log "${fastq1} and ${fastq2} do not have exact same query names"
-#         false
-#     fi
-# }
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    $@
+fi

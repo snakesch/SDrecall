@@ -1,0 +1,55 @@
+import os
+
+import logging
+
+logger = logging.getLogger("SDrecall")
+
+def bam_to_fastq_biobambam(input_bam, region_bed, output_freads, output_rreads, threads=1, logger=logger):
+    """
+    Extract read pairs where at least one read overlaps the region using biobambam2.
+    
+    Parameters:
+        input_bam: Input BAM file
+        region_bed: BED file with regions of interest
+        output_freads: Output R1 FASTQ file
+        output_rreads: Output R2 FASTQ file
+        threads: Number of threads to use (biobambam2 doesn't support threading in the same way)
+        logger: Logger object
+    
+    Returns:
+        Tuple containing paths to output R1 and R2 FASTQ files
+    """
+    # Ensure output directories exist
+    os.makedirs(os.path.dirname(output_freads), exist_ok=True)
+    os.makedirs(os.path.dirname(output_rreads), exist_ok=True)
+    
+    # Convert BED file to ranges format expected by bamtofastq
+    # This is necessary as biobambam2 doesn't accept BED files directly
+    ranges_str = ""
+    with open(region_bed, 'r') as bed:
+        for line in bed:
+            if line.strip() and not line.startswith('#'):
+                cols = line.strip().split('\t')
+                if len(cols) >= 3:
+                    chrom, start, end = cols[0], int(cols[1])+1, int(cols[2])+1  # Convert 0-based BED to 1-based
+                    ranges_str += f"{chrom}:{start}-{end} "
+        
+    # Using biobambam2 bamtofastq with ranges
+    tmp_prefix = f"tmp_bb_{os.getpid()}"
+    cmd = f"""bamtofastq \
+                filename={input_bam} \
+                ranges="{ranges_str}" \
+                F={output_freads} \
+                F2={output_rreads} \
+                collate=1 \
+                T={tmp_prefix}"""
+    
+    executeCmd(cmd, logger=logger)
+    
+    # Verify output files were created with content
+    if os.path.exists(output_freads) and os.path.exists(output_rreads) and \
+       os.path.getsize(output_freads) > 0 and os.path.getsize(output_rreads) > 0:
+        return output_freads, output_rreads
+    else:
+        logger.error(f"Failed to extract reads for region {region_bed} from BAM {input_bam}")
+        return None, None

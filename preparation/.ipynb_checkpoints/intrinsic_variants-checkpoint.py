@@ -49,7 +49,7 @@ def getIntrinsicVcf(pc_bed,
     # Retrieved counterpart sequences are mapped against masked genomes using minimap2
     if not os.path.exists(bam_path) or not is_file_up_to_date(bam_path, [pc_masked, shell_utils, os.path.abspath(__file__)]):
         pc_masked_index = pc_masked.replace(".fasta", ".mmi")
-        cmd = f"source {shell_utils}; independent_minimap2_masked \
+        cmd = f"source {shell_utils} && independent_minimap2_masked \
                 -f {raw_fq_path} \
                 -a {pc_masked} \
                 -o {bam_path} \

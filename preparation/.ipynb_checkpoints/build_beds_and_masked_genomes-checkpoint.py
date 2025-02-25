@@ -75,7 +75,7 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
     
     ## Create total_intrinsic_alignments.bam
     intrinsic_bam_header = total_intrinsic_bam.replace(".bam", ".bam.header")
-    cmd = f"source {shell_utils}; modify_bam_sq_lines {intrinsic_bams[0]} {ref_genome} {intrinsic_bam_header}"
+    cmd = f"source {shell_utils} && modify_bam_sq_lines {intrinsic_bams[0]} {ref_genome} {intrinsic_bam_header}"
     executeCmd(cmd, logger=logger)
 
     intrinsic_bam_list = total_intrinsic_bam.replace(".bam", ".bams.list.txt")

@@ -10,7 +10,7 @@ import subprocess
 from pybedtools import BedTool
 
 from src.utils import executeCmd, construct_folder_struc, sortBed_and_merge, combine_vcfs, merge_bed_files, update_plain_file_on_md5
-from src.const import *
+from src.const import shell_utils
 from src.log import error_handling_decorator
 from preparation.homoseq_region import HOMOSEQ_REGION
 from preparation.genome import Genome
@@ -75,7 +75,7 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
     
     ## Create total_intrinsic_alignments.bam
     intrinsic_bam_header = total_intrinsic_bam.replace(".bam", ".bam.header")
-    cmd = f"source {shell_utils}; modify_bam_sq_lines {intrinsic_bams[0]} {ref_genome} {intrinsic_bam_header}"
+    cmd = f"source {shell_utils} && modify_bam_sq_lines {intrinsic_bams[0]} {ref_genome} {intrinsic_bam_header}"
     executeCmd(cmd, logger=logger)
 
     intrinsic_bam_list = total_intrinsic_bam.replace(".bam", ".bams.list.txt")
