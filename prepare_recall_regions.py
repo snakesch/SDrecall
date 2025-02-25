@@ -14,7 +14,7 @@ from preparation import *
 from src.log import logger, configure_logger
 from src.suppress_warning import *
 from src.utils import is_file_up_to_date, filter_bed_by_interval_size
-
+from src.insert_size import get_insert_size_distribution
 
 def preparation( ref_genome: str,
                  work_dir: str, 
@@ -34,8 +34,7 @@ def preparation( ref_genome: str,
     genome_file = rg.fai_index
 
     # Step 0: Calculate the distribution of fragment sizes
-    # avg_frag_size, std_frag_size = get_bam_frag_size(input_bam)
-    avg_frag_size, std_frag_size = 570.4, 150.7
+    _, avg_frag_size,std_frag_size = get_insert_size_distribution(input_bam)
     logger.info(f"BAM {input_bam} has an average fragment size of {avg_frag_size}bp (std: {std_frag_size}bp)")
     
     ## Define names of intermediate files. Intermediate / final outputs will be written to work_dir.
@@ -147,12 +146,12 @@ def preparation( ref_genome: str,
     # Step 5. Pool all SD nodes and the corresponding paralogous regions from the SD + PO graph
     final_graph_path = graph_path.replace(".graphml", ".trim.annoPC.graphml")
     sd_paralog_pairs, connected_qnode_components = extract_SD_paralog_pairs_from_graph( query_nodes, 
-                                                                                graph, 
-                                                                                graph_path = final_graph_path, 
-                                                                                reference_fasta = ref_genome,
-                                                                                avg_frag_size = avg_frag_size, 
-                                                                                std_frag_size = std_frag_size, 
-                                                                                threads=threads )
+                                                                                        graph, 
+                                                                                        graph_path = final_graph_path, 
+                                                                                        reference_fasta = ref_genome,
+                                                                                        avg_frag_size = avg_frag_size, 
+                                                                                        std_frag_size = std_frag_size, 
+                                                                                        threads=threads )
     logger.info("{} SD-paralog pairs pooled from SD + PO graph".format(len(sd_paralog_pairs)))
     
     # Step 6: Collapse qnodes by identifying qnodes that can be put in the same masked genome
@@ -174,12 +173,12 @@ def preparation( ref_genome: str,
     
     # Step 7: Create beds and masked genomes
     build_beds_and_masked_genomes(grouped_qnode_cnodes = grouped_qnode_cnodes,
-                                    sd_paralog_pairs = sd_paralog_pairs,
-                                    output_folder = work_dir,
-                                    ref_genome = ref_genome,
-                                    nthreads = threads,
-                                    avg_frag_size = avg_frag_size,
-                                    std_frag_size = std_frag_size)
+                                  sd_paralog_pairs = sd_paralog_pairs,
+                                  output_folder = work_dir,
+                                  ref_genome = ref_genome,
+                                  nthreads = threads,
+                                  avg_frag_size = avg_frag_size,
+                                  std_frag_size = std_frag_size)
 
 def main():
     parser = argparse.ArgumentParser(description='Deploy PCs for SDrecall.')

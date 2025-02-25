@@ -9,20 +9,19 @@ from pybedtools import BedTool
 
 from src.utils import executeCmd, construct_folder_struc, sortBed_and_merge, combine_vcfs, merge_bed_files, update_plain_file_on_md5
 from src.const import shell_utils
-from src.log import error_handling_decorator
+from src.log import error_handling_decorator, logger
 from preparation.homoseq_region import HOMOSEQ_REGION
 from preparation.genome import Genome
 from preparation.intrinsic_variants import getIntrinsicVcf
 
-logger = logging.getLogger("SDrecall")
 
 def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
-                                        sd_paralog_pairs: dict,
-                                        output_folder,
-                                        ref_genome,
-                                        nthreads = 12,
-                                        avg_frag_size = 400,
-                                        std_frag_size = 140):
+                                  sd_paralog_pairs: dict,
+                                  output_folder,
+                                  ref_genome,
+                                  nthreads = 12,
+                                  avg_frag_size = 400,
+                                  std_frag_size = 140):
     # Label SD-paralog pairs. Name disconnected qnodes as PC0, connected qnodes as PC1, PC2, ...
     from itertools import repeat
     import re
