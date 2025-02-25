@@ -286,26 +286,53 @@ def main_function(bam,
 
 
 if __name__ == "__main__":
-    parser = ap.ArgumentParser()
-    parser.add_argument("-f", "--function", type=str, help="The function name", required=True)
-    parser.add_argument("-a", "--arguments", type=str, help="The function's input arguments, delimited by semi-colon ;", required=False, default=None)
-    parser.add_argument("-k", "--key_arguments", type=str, help="Keyword arguments for the function, delimited by semi-colon ;", required=False, default=None)
+    parser = ap.ArgumentParser(description='Process and analyze BAM files to identify and filter misaligned reads.')
+    
+    # Required arguments
+    parser.add_argument("-b", "--bam", type=str, required=True,
+                      help="Path to the input BAM file")
+    parser.add_argument("-i", "--intrinsic_bam", type=str, required=True,
+                      help="Path to the intrinsic BAM file (aligns reference sequence of one SD to other SD)")
+    parser.add_argument("-v", "--raw_vcf", type=str, required=True,
+                      help="Path to the raw VCF file containing variants detected in raw pooled alignments")
+    
+    # Optional arguments
+    parser.add_argument("-o", "--output_bam", type=str,
+                      help="Path for output filtered BAM file. If not specified, will use input.clean.bam")
+    parser.add_argument("-f", "--filter_out_bam", type=str,
+                      help="Path for BAM file containing filtered-out reads. If not specified, will use output.noise.bam")
+    parser.add_argument("-r", "--bam_region_bed", type=str,
+                      help="Path to BED file defining covered regions. If not specified, will generate from input BAM")
+    parser.add_argument("-m", "--max_varno", type=float, default=5,
+                      help="Maximum variant number allowed (default: 5)")
+    parser.add_argument("-q", "--mapq_cutoff", type=int, default=20,
+                      help="Mapping quality cutoff (default: 20)")
+    parser.add_argument("-Q", "--basequal_median_cutoff", type=int, default=15,
+                      help="Base quality median cutoff (default: 15)")
+    parser.add_argument("-e", "--edge_weight_cutoff", type=float, default=0.201,
+                      help="Edge weight cutoff for BK clique searches (default: 0.201)")
 
     args = parser.parse_args()
-    try:
-        fargs = [ convert_input_value(a) for a in args.arguments.split(";") ] if type(args.arguments) == str else []
-        fkwargs = { t.split("=")[0]: convert_input_value(t.split("=")[1]) for t in args.key_arguments.split(";") } if type(args.key_arguments) == str else {}
-        logger.info("Running function: {}, input args are {}, input kwargs are {}".format(args.function, fargs, fkwargs))
-    except Exception as e:
-        logger.error("Input argument does not meet the expected format, encounter Parsing error {}, Let's check the input:\n-f {}, -a {}, -k {}".format(
-            e,
-            args.function,
-            args.arguments,
-            args.key_arguments
-        ))
-        raise e
 
-    globals()[args.function](*fargs, **fkwargs)
+    # Configure logging
+    logger.info("Starting BAM processing with parameters:")
+    for arg, value in vars(args).items():
+        logger.info(f"{arg}: {value}")
+
+    # Call main function with parsed arguments
+    main_function(
+        bam=args.bam,
+        output_bam=args.output_bam,
+        filter_out_bam=args.filter_out_bam,
+        intrinsic_bam=args.intrinsic_bam,
+        raw_vcf=args.raw_vcf,
+        bam_region_bed=args.bam_region_bed,
+        max_varno=args.max_varno,
+        mapq_cutoff=args.mapq_cutoff,
+        basequal_median_cutoff=args.basequal_median_cutoff,
+        edge_weight_cutoff=args.edge_weight_cutoff,
+        logger=logger
+    )
 
 
 
