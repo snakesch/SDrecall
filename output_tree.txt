@@ -1,0 +1,61 @@
+[01;94m.[0m
+(0tqq (B[    0]  [01;94mPC0_related_homo_regions[0m/
+(0x   tqq (B[    0]  [01;94mPC0[0m/
+(0x   x   tqq (B[ 1.1K]  PC0.bed
+(0x   x   tqq (B[  404]  PC0.masked.contigsize.genome
+(0x   x   tqq (B[ 1.1M]  PC0.masked.fasta
+(0x   x   tqq (B[  652]  PC0.masked.fasta.fai
+(0x   x   tqq (B[ 3.6M]  PC0.masked.mmi
+(0x   x   tqq (B[ 999K]  PC0.raw.bam
+(0x   x   tqq (B[ 392K]  PC0.raw.bam.bai
+(0x   x   tqq (B[ 9.3M]  PC0.raw.sam
+(0x   x   tqq (B[ 1.8K]  PC0.raw.tmp.vcf.gz.tbi
+(0x   x   tqq (B[  59K]  [01;31mPC0.raw.vcf.gz[0m
+(0x   x   mqq (B[ 1.8K]  PC0.raw.vcf.gz.tbi
+(0x   tqq (B[    0]  [01;94mPC0_all[0m/
+(0x   x   tqq (B[  15K]  PC0_related_homo_regions.bed
+(0x   x   mqq (B[ 8.9M]  PC0_related_homo_regions.raw.fastq
+(0x   mqq (B[    0]  [01;94mPC0_counterparts[0m/
+(0x       mqq (B[ 2.2K]  PC0_counterparts_regions.bed
+(0tqq (B[    0]  [01;94mPC1_related_homo_regions[0m/
+(0x   tqq (B[    0]  [01;94mPC1[0m/
+(0x   x   tqq (B[  204]  PC1.bed
+(0x   x   tqq (B[  140]  PC1.masked.contigsize.genome
+(0x   x   tqq (B[ 863K]  PC1.masked.fasta
+(0x   x   tqq (B[  221]  PC1.masked.fasta.fai
+(0x   x   tqq (B[ 2.7M]  PC1.masked.mmi
+(0x   x   tqq (B[ 380K]  PC1.raw.bam
+(0x   x   tqq (B[ 229K]  PC1.raw.bam.bai
+(0x   x   tqq (B[ 3.4M]  PC1.raw.sam
+(0x   x   tqq (B[  920]  PC1.raw.tmp.vcf.gz.tbi
+(0x   x   tqq (B[ 6.1K]  [01;31mPC1.raw.vcf.gz[0m
+(0x   x   mqq (B[  924]  PC1.raw.vcf.gz.tbi
+(0x   tqq (B[    0]  [01;94mPC1_all[0m/
+(0x   x   tqq (B[  917]  PC1_related_homo_regions.bed
+(0x   x   mqq (B[ 3.4M]  PC1_related_homo_regions.raw.fastq
+(0x   mqq (B[    0]  [01;94mPC1_counterparts[0m/
+(0x       mqq (B[  500]  PC1_counterparts_regions.bed
+(0tqq (B[  60K]  [01;31mall_pc_region_intrinsic_variants.vcf.gz[0m
+(0tqq (B[ 1.8K]  all_pc_region_intrinsic_variants.vcf.gz.tbi
+(0tqq (B[  16K]  all_PC_related_homo_regions.bed
+(0tqq (B[ 4.9K]  filtered_SD_binary_map.tsv
+(0tqq (B[ 599K]  HG002.SD.deduped.infercov.minMQ_0.bed
+(0tqq (B[ 718K]  [01;31mHG002.SD.deduped.infercov.minMQ_0.tsv.gz[0m
+(0tqq (B[ 5.2K]  HG002.SD.deduped.infercov.minMQ_0.tsv.gz.tbi
+(0tqq (B[ 599K]  HG002.SD.deduped.infercov.minMQ_0.XA.bed
+(0tqq (B[ 718K]  [01;31mHG002.SD.deduped.infercov.minMQ_0.XA.tsv.gz[0m
+(0tqq (B[ 5.2K]  HG002.SD.deduped.infercov.minMQ_0.XA.tsv.gz.tbi
+(0tqq (B[ 599K]  HG002.SD.deduped.infercov.minMQ_0.XS.bed
+(0tqq (B[ 718K]  [01;31mHG002.SD.deduped.infercov.minMQ_0.XS.tsv.gz[0m
+(0tqq (B[ 5.2K]  HG002.SD.deduped.infercov.minMQ_0.XS.tsv.gz.tbi
+(0tqq (B[ 485K]  HG002.SD.deduped.infercov.minMQ_41.bed
+(0tqq (B[ 563K]  [01;31mHG002.SD.deduped.infercov.minMQ_41.tsv.gz[0m
+(0tqq (B[ 4.8K]  HG002.SD.deduped.infercov.minMQ_41.tsv.gz.tbi
+(0tqq (B[  69K]  HG002.SD.deduped-multiplexed_homologous_sequences.trim.annoPC.graphml
+(0tqq (B[ 3.0K]  HG002.SD.deduped.target.multialign.bed
+(0tqq (B[ 1.3M]  total_intrinsic_alignments.bam
+(0tqq (B[ 394K]  total_intrinsic_alignments.bam.bai
+(0tqq (B[ 2.9K]  total_intrinsic_alignments.bam.header
+(0mqq (B[  193]  total_intrinsic_alignments.bams.list.txt
+
+8 directories, 50 files
