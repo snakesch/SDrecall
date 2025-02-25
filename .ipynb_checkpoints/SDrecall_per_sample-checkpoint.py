@@ -39,7 +39,7 @@ import numba
 from numba import set_num_threads, get_num_threads
 
 from annotate_bam_tag_to_vcf import main_annotate as annotate_HP_tag_to_vcf
-from gt_read_clustering_filter import main_function as gt_read_clustering_filter
+from misalignment_elimination import main_function as gt_read_clustering_filter
 from identify_misaligned_reads_SDrecall import main_process as identify_misaligned_reads
 from python_utils import split_bed_by_size
 
