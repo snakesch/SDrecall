@@ -1,174 +1,131 @@
 import os
 import sys
-from glob import glob
-from itertools import repeat
-from multiprocessing import Pool
 import logging
-import uuid
-import subprocess
 
 from pybedtools import BedTool
+from pyfaidx import Fasta
+import pysam
 
-from src.utils import executeCmd, construct_folder_struc, sortBed_and_merge, combine_vcfs, merge_bed_files, update_plain_file_on_md5
+from src.utils import sortBed_and_merge, merge_bed_files
 from src.const import *
-from src.log import error_handling_decorator
+
 from preparation.homoseq_region import HOMOSEQ_REGION
-from preparation.genome import Genome
-from preparation.intrinsic_variants import getIntrinsicVcf
+from preparation.masked_genome import create_masked_genome, get_reference_seq
+from preparation.masked_realignment import create_minimap2_index, minimap2_align
+
+import concurrent.futures
 
 logger = logging.getLogger("SDrecall")
 
-def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
-                                        sd_paralog_pairs: dict,
-                                        output_folder,
-                                        ref_genome,
-                                        nthreads = 12,
-                                        avg_frag_size = 400,
-                                        std_frag_size = 140):
+def process_pc_region(pc_region, label, outd, ref_genome, avg_insert_size, std_insert_size, threads):
+        out_base = os.path.join(outd, label)
+        os.makedirs(out_base, exist_ok=True)
+        bed_out = os.path.join(out_base, label + ".bed")
+        masked_genome = os.path.join(out_base, label + ".masked.fasta")
+        output_bam = os.path.join(out_base, label + ".realigned.bam")
+
+        ## Prepare for masked realignment
+        create_pc_bed(pc_region, bed_out = bed_out, label = label)
+        create_masked_genome(ref_genome, bed_out, masked_genome, avg_insert_size, std_insert_size)
+
+        ## Realign using minimap2
+        index_file = masked_genome + ".mmi"
+        masked_contig_sizes = masked_genome + ".fai"
+
+        ### Prepare reference sequences for realignment
+        ref_sequences = os.path.join(out_base, label + ".masked.fastq")
+        get_reference_seq(bed_out, ref_sequences, masked_genome, padding = avg_insert_size + std_insert_size)
+
+        if not os.path.exists(index_file):  # Check if index already exists
+             create_minimap2_index(masked_genome, index_file, threads) # Use ref_genome directly
+        minimap2_align(ref_sequences, None, index_file, "asm20", label, output_bam, masked_contig_sizes, threads)
+        return bed_out, output_bam
+
+def get_region_and_realign(grouped_qnode_cnodes: list,
+                                 sd_paralog_pairs: dict,
+                                 outd,
+                                 ref_genome,
+                                 avg_insert_size = 400,
+                                 std_insert_size = 140,
+                                 threads = 1): 
     # Label SD-paralog pairs. Name disconnected qnodes as PC0, connected qnodes as PC1, PC2, ...
-    from itertools import repeat
-    import re
+    all_PC_regions = []
     
-    # We need to restructure the grouped_qnode_cnodes to pass the information of sd-paralog pairs to the establish_beds_per_PC_cluster function
-    new_results = []
-    
-    for result in grouped_qnode_cnodes:
-        new_result = {"PCs": {}, "SD_counterparts": {}}
-        for i in range(0, len(result["PCs"])):
-            fc_node = result["PCs"][i]
-            new_result['PCs'][i] = [fc_node]
-            new_result['SD_counterparts'][i] = sd_paralog_pairs[fc_node]
-        new_results.append(new_result)
+    for r in grouped_qnode_cnodes:
+        new_r = {"PCs": {}, "SD_counterparts": {}}
+        for i in range(0, len(r["PCs"])):
+            fc_node = r["PCs"][i]
+            new_r['PCs'][i] = [fc_node]
+            new_r['SD_counterparts'][i] = sd_paralog_pairs[fc_node]
+        all_PC_regions.append(new_r)
 
     # Load balancing
-    new_results = sorted(new_results, key = lambda x: sum(v[0][2] - v[0][1] for k,v in x["PCs"].items()) * sum(len(v) for k,v in x["SD_counterparts"].items()), reverse=True)
+    all_PC_regions = sorted(all_PC_regions, key = lambda x: sum(v[0][2] - v[0][1] for k,v in x["PCs"].items()) * sum(len(v) for k,v in x["SD_counterparts"].items()), reverse=True)
     labels = [ "PC" + str(n) for n in range(0, len(grouped_qnode_cnodes))]
 
-    pool = Pool(nthreads)
-    results = pool.imap_unordered(imap_establish, zip(new_results,
-                                                      repeat(output_folder),
-                                                      labels,
-                                                      repeat(ref_genome),
-                                                      repeat(avg_frag_size),
-                                                      repeat(std_frag_size),
-                                                      repeat(2),
-                                                      repeat(logger)))
-    i = 0
-    intrinsic_bams = []
-    for success, result, logs in results:
-        logger.debug(f"{i}th subprocess started")
-        if not success:
-            error_mes, tb_str = result
-            logger.error(f"An error occurred: {error_mes}\nTraceback: {tb_str}\n")
-        else:
-            intrinsic_bams.append(result)
-        logger.debug(logs)
-        logger.debug(f"{i}th subprocess completed")
-        i+=1
-    
-    pool.close()
-    if not all([t[0] for t in results]):
-        raise RuntimeError("Error occurred during the parallel execution of establish_beds_per_PC_cluster. Exit.")
+    # output BAMs generated here are intrinsic BAM files in the manuscript
+    output_bams = []
+    output_beds = []
 
-    ## total_intrinsic_alignments.bam is a merged alignment file for BILC model.
-    total_intrinsic_bam = os.path.join(output_folder, "total_intrinsic_alignments.bam")
-    
-    ## Create total_intrinsic_alignments.bam
-    intrinsic_bam_header = total_intrinsic_bam.replace(".bam", ".bam.header")
-    cmd = f"source {shell_utils}; modify_bam_sq_lines {intrinsic_bams[0]} {ref_genome} {intrinsic_bam_header}"
-    executeCmd(cmd, logger=logger)
+    with concurrent.futures.ProcessPoolExecutor(max_workers=threads) as executor:
+        futures = {executor.submit(process_pc_region, pc_region, label, outd, ref_genome,
+                                    avg_insert_size, std_insert_size, threads): (pc_region, label)
+                    for pc_region, label in zip(all_PC_regions, labels)}
 
-    intrinsic_bam_list = total_intrinsic_bam.replace(".bam", ".bams.list.txt")
-    with open(intrinsic_bam_list, "w") as f:
-        f.write("\n".join(intrinsic_bams))
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                bed_out, output_bam = future.result()
+                output_beds.append(bed_out)
+                output_bams.append(output_bam)
+            except Exception as e:
+                logger.error(f"Error processing a region: {e}")
 
-    cmd = f"samtools merge -@ {nthreads} -h {intrinsic_bam_header} -b {intrinsic_bam_list} -o - | \
-            samtools sort -O bam -o {total_intrinsic_bam} && \
-            samtools index {total_intrinsic_bam} && \
-            ls -lht {total_intrinsic_bam} || \
-            echo Failed to concatenate all the filtered realigned BAM files."
-    executeCmd(cmd)
-               
-    # Fourth, extract all PC*_related_homo_regions.bed file and concat them together.
-    beds = glob(os.path.join(output_folder, "*/*_all/", "*_related_homo_regions.bed"))
-    combined_bed = merge_bed_files(beds)
-    combined_bed.saveas(os.path.join(output_folder, "all_PC_related_homo_regions.bed"))
-    # combined_bed.saveas(os.path.join(output_folder, "all_PC_regions.bed"))
-    
-    # Fifth, extract all intrinsic vcfs and use bcftools to concat them together
-    intrinsic_vcfs = []
-    for root, dirs, files in os.walk(output_folder):
-        for file in files:
-            if re.search(r'PC[0-9]+\.raw\.vcf\.gz$', file):
-                intrinsic_vcfs.append(os.path.join(root, file))
-    
-    final_intrinsic_vcf = os.path.join(output_folder, "all_pc_region_intrinsic_variants.vcf.gz")
-    combine_vcfs(*intrinsic_vcfs, output=final_intrinsic_vcf)
+    ## Merge all PC BED files
+    all_PC_regions_out = os.path.join(outd, "all_PC.bed")
+    merge_bed_files(output_beds).saveas(all_PC_regions_out)
+
+    ## Reheader using the first BAM and merge all output BAMs with the new header
+    merged_bam_out = os.path.join(outd, "total_intrinsic.bam")
+    header = create_bam_header_from_fasta(output_bams[0], ref_genome)
+    merge_bam_files(output_bams, merged_bam_out, header)
 
     return
 
-def imap_establish(tup_args):
-    return establish_beds_per_PC_cluster(*tup_args)
-
-@error_handling_decorator
-def establish_beds_per_PC_cluster(cluster_dict={"PCs":{},
-                                                "SD_counterparts":{}},
-                                  base_folder = "",
-                                  label = "PC0",
-                                  ref_genome = "",
-                                  avg_frag_size = 400,
-                                  std_frag_size = 140,
-                                  threads = 2,
-                                  logger = logger):
-
+def create_bam_header_from_fasta(input_bam: str, ref_fasta: str) -> pysam.AlignmentHeader:
     """
-    input cluster dict now looks like this:
-    {
-        "PCs": {0: [], 1: [], 2: []}, 
-        "SD_counterparts": {0: [], 1: [], 2: []}
-    }
+    Creates a new BAM header based on an input BAM file's header, replacing
+    the @SQ lines with information derived from a reference FASTA file.
+
+    Args:
+        input_bam: Path to the input BAM file.
+        ref_fasta: Path to the reference FASTA file.
+
+    Returns:
+        A pysam.AlignmentHeader object with updated @SQ lines.
     """
 
-    ## Initialize file structure
-    paths = construct_folder_struc(base_folder=base_folder, label=label, logger=logger)
+    fasta = Fasta(ref_fasta)
 
-    # First convert the disconnected nodes to beds, each node is a 3-tuple (chr, start, end)   
-    with open(paths["PC_bed"], "w") as f:
-        for idx, records in cluster_dict["PCs"].items():
-            for record in records:
-                if len(record) >= 3:
-                    # Invoke __iter__ method instead of __getitem__
-                    f.write("\t".join([str(value) for value in record][:3] + [".", ".", record[3]]) + "\n")
-                elif len(record) == 2:
-                    f.write("\t".join([str(value) for value in record[0]][:3] + [".", ".", record[0][3]]) + "\n")
-    sortBed_and_merge(paths["PC_bed"])
-    
-    # executeCmd(f"cp -f {tmp_pc_bed} {raw_pc_bed}")
-    # sortBed_and_merge(tmp_pc_bed, logger=logger)
-    # update_plain_file_on_md5(paths["PC_bed"], tmp_pc_bed, logger=logger)
-            
-    ## Create the counterparts region bed file
-    with open(paths["Counterparts_bed"], "w") as f:
-        for idx, records in cluster_dict["SD_counterparts"].items():
-            fc_node = cluster_dict["PCs"][idx][0]
-            for record in records:
-                assert isinstance(record, HOMOSEQ_REGION), "The record in the SD_counterparts list is not a HOMOSEQ_REGION object: {}".format(record)
-                fc_node_rela_start, fc_node_rela_end = record.qnode_relative_region(fc_node)     
-                ## Invoke __iter__ method instead of __getitem__
-                f.write("\t".join([str(value) for value in record][:3] + [str(fc_node_rela_start), str(fc_node_rela_end), record[3]]) + "\n")
-    # executeCmd(f"cp -f {tmp_counterparts_bed} {raw_counterparts_bed}")
+    with pysam.AlignmentFile(input_bam, "rb") as bamfile:
+        header_dict = bamfile.header.to_dict()
 
-    ## Remove PC regions from counterpart BEDs and force strandedness
-    BedTool(paths["Counterparts_bed"]).subtract(BedTool(paths["PC_bed"]), s=True).saveas(paths["Counterparts_bed"])
-    sortBed_and_merge(paths["Counterparts_bed"])
-    # update_plain_file_on_md5(paths["Counterparts_bed"], tmp_counterparts_bed, logger=logger)
+    header_dict["SQ"] = []
+
+    sq_lines = []
+    for name in fasta.keys():
+        length = len(fasta[name])
+        sq_lines.append({"SN": name, "LN": length})
+    header_dict["SQ"] = sq_lines # type: ignore
+
+    new_header = pysam.AlignmentHeader.from_dict(header_dict)  # type: ignore
+    return new_header
+
+def create_pc_bed(cluster_dict, bed_out = "", label = "PC0") -> None:
     
-    # TODO: The indexing below is problematic since the indices are before bed merging
-    ## Create the total region bed file by combining PC BED and counterpart BED
-    ## Invoke __iter__ method instead of __getitem__
-    with open(paths["All_region_bed"], "w") as f:
+    # Tabulate query nodes and counterpart nodes in a BED for each PC region
+    with open(bed_out, "w") as f:
         for idx, records in cluster_dict["PCs"].items():
-            for record in records:
+            for record in records: ## use __iter__ here
                 if len(record) == 2:
                     f.write("\t".join([str(value) for value in record[0]][:3] + [".", ".", record[0][3], f"FC:{label}_{idx}"]) + "\n")
                 elif len(record) >= 3:
@@ -183,23 +140,21 @@ def establish_beds_per_PC_cluster(cluster_dict={"PCs":{},
                 # The rela_start and rela_end are based on the corresponding PC region
                 f.write("\t".join([str(value) for value in record][:3] + [str(fc_node_rela_start), str(fc_node_rela_end), record[3], f"NFC:{label}_{idx}"]) + "\n")
     
-    sortBed_and_merge(paths["All_region_bed"])
-    # executeCmd(f"cp -f {tmp_total_bed} {raw_total_bed}")
-    # sortBed_and_merge(tmp_total_bed, logger = logger)
-    # update_plain_file_on_md5(paths["All_region_bed"], tmp_total_bed, logger=logger)
-    
-    contig_sizes = ref_genome.replace(".fasta", ".fasta.fai")
-    
-    # Prepare masked genomes
-    masked_genome_path = os.path.join( os.path.dirname(paths["PC_bed"]), label + ".masked.fasta")
-    masked_genome = Genome(ref_genome).mask(paths["PC_bed"], avg_frag_size = avg_frag_size, std_frag_size=std_frag_size, genome=contig_sizes, logger=logger, path=masked_genome_path)
-    
-    # Call intrinsic variants
-    bam_path = getIntrinsicVcf( pc_bed = paths["PC_bed"], 
-                                all_homo_regions_bed = paths["All_region_bed"], 
-                                pc_masked = masked_genome,
-                                ref_genome = ref_genome,
-                                avg_frag_size = avg_frag_size,
-                                std_frag_size = std_frag_size,
-                                threads = threads)
-    return bam_path
+    sortBed_and_merge(bed_out)
+
+def merge_bam_files(bam_files: list[str], output_bam_path, header: pysam.AlignmentHeader) -> None:
+
+    from tempfile import NamedTemporaryFile
+
+    temp_merged_bam = NamedTemporaryFile(suffix=".bam", delete=False)
+    temp_merged_bam_path = temp_merged_bam.name
+    temp_merged_bam.close()  # Close it; pysam will open it again
+
+    with pysam.AlignmentFile(temp_merged_bam_path, "wb", header=header) as outfile:
+        for bam_file in bam_files:
+            with pysam.AlignmentFile(bam_file, "rb") as infile:
+                for read in infile:
+                    outfile.write(read)
+    pysam.sort("-n", "-o", output_bam_path, temp_merged_bam_path)
+    pysam.index(output_bam_path)
+    return

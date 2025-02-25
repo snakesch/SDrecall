@@ -4,7 +4,7 @@ import multiprocessing as mp
 import pandas as pd
 from pybedtools import BedTool
 
-from inferred_depths import calculate_inferred_coverage
+from .inferred_depths import calculate_inferred_coverage
 
 logger = logging.getLogger("SDrecall")
 
