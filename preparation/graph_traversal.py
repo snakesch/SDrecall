@@ -96,7 +96,7 @@ def compare_homologous_sequences(
         Tuple of (is_similar: bool, similarity_score: float)
     """
     # Get relative coordinates for comparison
-    qnode_rela_start, qnode_rela_end = cnode.qnode_relative_region(ori_qnode.data, logger=logger)
+    qnode_rela_start, qnode_rela_end = cnode.qnode_relative_region(ori_qnode.data)
     qnode_region = f"{ori_qnode[0]}:{ori_qnode[1] + qnode_rela_start}-{ori_qnode[1] + qnode_rela_end}"
     qnode_strand = ori_qnode[3]
     logger.info(f"The query node {ori_qnode} has relative coordinates {qnode_rela_start} and {qnode_rela_end} and the region is {qnode_region} at strand {qnode_strand}")

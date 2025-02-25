@@ -36,14 +36,14 @@ def enumerate_PCs(work_dir):
                 fc_regions.append(interval)
         
         # Sort FC regions by their tag (last field). 
-        fc_regions.sort(key=lambda interval: interval[-1])
+        # fc_regions.sort(key=lambda interval: interval[-1])
 
         pc_units.append(tuple(range(len(fc_regions))))
-    print(pc_names, pc_units)
+
     return pc_names, pc_units
 
 def prepare_masked_align_region_per_PC(
-    pc_tag: str,
+    pc_name: str,
     pc_subids: Tuple[str, ...],
     sd_map_dir: str,
     target_region_bed: str,
@@ -51,13 +51,14 @@ def prepare_masked_align_region_per_PC(
     logger: logging.Logger = logger,
 ) -> Tuple[str, ...]:
 
-    whole_region_raw_bed = os.path.join(
-        sd_map_dir, f"{pc_tag}_related_homo_regions", f"{pc_tag}_related_homo_regions.raw.bed"
-    )
-    logger.info(f"The raw bed file for this {pc_tag} is {whole_region_raw_bed}")
+    # Infer the BED path given a PC name
+    whole_region_raw_bed = f"{work_dir}/{pc_name}_related_homo_regions/{pc_name}_all/{pc_name}_related_homo_regions.bed"
+
+    if not os.path.isfile(whole_region_raw_bed):
+        raise FileNotFoundError(f"Homologous region BED file not found for {pc_name}")
 
     # Efficiently filter the raw BED file using pybedtools *directly*
-    fc_bed = pb.BedTool(whole_region_raw_bed).filter(lambda interval: interval[6].startswith("FC")).saveas()
+    fc_bed = pb.BedTool(whole_region_raw_bed).filter(lambda interval: interval[-1].startswith("FC")).saveas()
 
     target_regions = pb.BedTool(target_region_bed)
     ref_genome_fai = ref_genome + ".fai"
@@ -188,15 +189,11 @@ def extract_and_pad_segments(
     return_bed_size = return_bed.total_coverage()
     return return_bed, return_bed_size
 
-prepared_arguments_df = enumerate_PCs(work_dir)
-uniq_pc_names = prepared_arguments_df.loc[:, 0].drop_duplicates().tolist()
+pc_names, pc_units = enumerate_PCs(work_dir)
 
-print(uniq_pc_names)
-pc_subids_tup_list = [tuple(prepared_arguments_df.loc[prepared_arguments_df[0] == pc, 1].drop_duplicates().tolist()) for pc in uniq_pc_names]
-print(pc_subids_tup_list)
 # pool = ctx.Pool(threads, initializer=pool_init)
-# prepared_beds = pool.imap_unordered(imap_prepare_masked_align_region_per_PC, zip(uniq_pc_names,
-#                                                                                 pc_subids_tup_list,
+# prepared_beds = pool.imap_unordered(imap_prepare_masked_align_region_per_PC, zip(pc_names,
+#                                                                                 pc_units,
 #                                                                                 repeat(all_PC_folder),
 #                                                                                 repeat(target_region),
 #                                                                                 repeat(ref_fasta)))

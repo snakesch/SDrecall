@@ -103,7 +103,10 @@ def sortBed_and_merge(bed_file, output=None):
     bed = BedTool(bed_file)
     num_cols = bed.field_count()
     c_arg = ','.join(str(i) for i in range(4, num_cols + 1))  # '4,5,6,...'
-    o_arg = ','.join('first' for _ in range(4, num_cols + 1))  # 'first,first,first,...'
+    if num_cols <= 6:
+        o_arg = ','.join('first' for _ in range(4, num_cols + 1))  # 'first,first,first,...'
+    elif num_cols == 7:
+        o_arg = 'distinct,distinct,distinct,distinct'
    
     merged_bed = bed.sort().merge(s=True, c=c_arg, o=o_arg)
     
@@ -117,7 +120,7 @@ def sortBed_and_merge(bed_file, output=None):
     return None
     
 def merge_bed_files(bed_files: List[str]) -> BedTool:
-    """Merges and sorts multiple BED files using pybedtools. Returns BedTool."""
+    """Merges multiple BED files using pybedtools. Returns BedTool."""
     bed_files = list(dict.fromkeys(bed_files))  # Remove duplicates
     if not bed_files:
         return BedTool("", from_string=True)  # Return empty BedTool
@@ -126,7 +129,7 @@ def merge_bed_files(bed_files: List[str]) -> BedTool:
     merged_bedtool = bedtools_list[0]
     for bt in bedtools_list[1:]:
         merged_bedtool = merged_bedtool.cat(bt, postmerge=False)
-    return merged_bedtool.sort().merge()
+    return merged_bedtool.sort()
 
 def filter_bed_by_interval_size(bed_obj, interval_size_cutoff):
     return bed_obj.filter(lambda x: len(x) > interval_size_cutoff).sort()

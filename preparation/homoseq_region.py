@@ -53,7 +53,7 @@ class HOMOSEQ_REGION:
     def fix_coord(self):
         return tuple([self.chrom, self.start + self.ups_rela_start, self.start + self.ups_rela_end, self.strand])
     
-    def qnode_relative_region(self, qnode_tuple, logger=logger):
+    def qnode_relative_region(self, qnode_tuple):
         # The qnode tuple should be a 4-item tuple containint (chrom, start, end, strand)
         # We also need to utilize the record info in the traverse route.
         total_route = list(self.traverse_route)
@@ -102,3 +102,97 @@ class HOMOSEQ_REGION:
             current_node = upstream_qnode
 
         return qnode_rela_start, qnode_rela_end
+
+# - Possible optimization - #   
+# import logging
+# import numpy as np
+
+# logger = logging.getLogger("SDrecall")
+
+# class HOMOSEQ_REGION:
+#     def __init__(self, vertex, graph):
+#         chrom, start, end, strand = graph.vertex_properties["node_index"][vertex]
+#         self.chrom = chrom
+#         self.start = start
+#         self.end = end
+#         self.strand = strand
+#         self.size = end - start
+#         self.ups_rela_start = 0
+#         self.ups_rela_end = self.size
+#         self.down_rela_start = 0  # Currently unused, consider removing
+#         self.down_rela_end = 0    # Currently unused, consider removing
+#         self.rela_start = 0  # Simplified: Initial overlap is with itself
+#         self.rela_end = self.size # Simplified: Initial overlap is with itself
+#         self.data = (chrom, start, end, strand)
+#         self.vertex = int(vertex)
+#         self.traverse_route = []  # [(HOMOSEQ_REGION, edge_type), ...]
+
+#     def __hash__(self):
+#         return hash(self.data)
+
+#     def __repr__(self):
+#         return f"{self.chrom}, {self.start}, {self.end}, {self.strand}, {self.size}"
+
+#     def __eq__(self, other):
+#         return self.data == other.data
+
+#     def __iter__(self):
+#         yield from (self.chrom, self.start + self.ups_rela_start, self.start + self.ups_rela_end, self.strand)
+
+#     def __getitem__(self, index):
+#         return self.data[index]
+
+#     def __len__(self):
+#         return len(self.data)
+
+#     def fix_coord(self):
+#         return (self.chrom, self.start + self.ups_rela_start, self.start + self.ups_rela_end, self.strand)
+
+#     def qnode_relative_region(self, qnode_tuple, logger=logger):
+#         """Calculates relative coordinates to a query node (qnode).
+
+#         Args:
+#             qnode_tuple: (chrom, start, end, strand) of the query node.
+#             logger: Logger object.
+
+#         Returns:
+#             (qnode_rela_start, qnode_rela_end) or (np.nan, np.nan) on error.
+#         """
+
+#         # Find qnode in traverse_route.
+#         qnode_index = -1
+#         for i, (node, _) in enumerate(self.traverse_route):
+#             if node.data == qnode_tuple:
+#                 qnode_index = i
+#                 break
+#         if qnode_index == -1:
+#             logger.error(f"Qnode {qnode_tuple} not in traverse route of {self.data}: {self.traverse_route}")
+#             return np.nan, np.nan
+
+#         # Iterate backwards from the qnode.
+#         current_node = self
+#         qnode_rela_start, qnode_rela_end = self.rela_start, self.rela_end
+
+#         for upstream_node, edge_type in reversed(self.traverse_route[qnode_index:]):
+#             if edge_type == "segmental_duplication":
+#                 if upstream_node.strand == current_node.strand:
+#                     qnode_rela_start = max(0, qnode_rela_start)
+#                     qnode_rela_end = min(qnode_rela_end, upstream_node.size)
+#                 else:
+#                     qsize = qnode_rela_end - qnode_rela_start
+#                     qnode_rela_end = min(current_node.size - qnode_rela_start, upstream_node.size)
+#                     qnode_rela_start = max(0, qnode_rela_end - qsize)
+#             else: #Adjacent
+#                 qnode_abs_start = qnode_rela_start + current_node.start
+#                 qnode_abs_end = qnode_rela_end + current_node.start
+#                 qnode_rela_start = max(0, qnode_abs_start - upstream_node.start)
+#                 qnode_rela_end = min(qnode_rela_start + (qnode_abs_end - qnode_abs_start), upstream_node.size)
+
+#             if qnode_rela_end <= qnode_rela_start:
+#                 logger.warning(f"Invalid relative coords: start={qnode_rela_start}, end={qnode_rela_end}. "
+#                                f"Current: {current_node}, Upstream: {upstream_node}, Edge: {edge_type}")
+#                 return np.nan, np.nan
+
+#             current_node = upstream_node
+
+#         return qnode_rela_start, qnode_rela_end
