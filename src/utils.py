@@ -60,40 +60,6 @@ def update_plain_file_on_md5(old_file, new_file, logger=logger):
         executeCmd(f"ls -lht {old_file}", logger=logger)
         return True
 
-# - Construct file tree for homologous region BEDs - #
-
-def construct_folder_struc(base_folder,
-                           label="",
-                           logger = logger):
-    
-    if label == "":
-        raise ValueError("Cannot initialize file tree with empty label.")
-    
-    parent_folder_name = label+ "_related_homo_regions"
-    parent_folder_full_path = os.path.join(base_folder, parent_folder_name)
-
-    os.makedirs(parent_folder_full_path, exist_ok=True)
-
-    os.makedirs(os.path.join(parent_folder_full_path, label + "_all"), exist_ok=True)
-    total_bed_name = label + "_related_homo_regions.bed"
-    total_bed_path = os.path.join(parent_folder_full_path, label + "_all", total_bed_name)
-
-    os.makedirs(os.path.join(parent_folder_full_path, label + "_counterparts"), exist_ok=True)
-    counterparts_bed_name = label + "_counterparts_regions.bed"
-    counterparts_bed_path = os.path.join(parent_folder_full_path, label + "_counterparts", counterparts_bed_name)
-
-    RG_folder_name = label
-    RG_folder_full_path = os.path.join(parent_folder_full_path, RG_folder_name)
-
-    os.makedirs(RG_folder_full_path, exist_ok=True)
-
-    RG_bed_name = label + ".bed"
-    RG_bed_path = os.path.join(RG_folder_full_path, RG_bed_name)
-
-    return {"base_folder_path": parent_folder_full_path,
-            "RG_bed": RG_bed_path,
-            "All_region_bed": total_bed_path,
-            "Counterparts_bed": counterparts_bed_path}
 
 # - BED file manipulation using pybedtools - #
 

@@ -1,33 +1,29 @@
 import os
 import sys
-from glob import glob
 from itertools import repeat
+import re
 from multiprocessing import Pool
 
 from pybedtools import BedTool
 
-from src.utils import executeCmd, construct_folder_struc, sortBed_and_merge, combine_vcfs, merge_bed_files
-from src.const import *
+from src.utils import executeCmd, sortBed_and_merge, combine_vcfs, merge_bed_files
+from src.const import shell_utils, SDrecallPaths
 from src.log import error_handling_decorator, logger
 from preparation.homoseq_region import HOMOSEQ_REGION
 from preparation.genome import Genome
-from preparation.intrinsic_variants import getIntrinsicVcf
+from preparation.intrinsic_alignment import getIntrinsicBam
 
 
 def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
                                   sd_paralog_pairs: dict,
-                                  output_folder,
+                                  sdrecall_paths: SDrecallPaths,
                                   ref_genome,
-                                  nthreads = 12,
-                                  avg_frag_size = 400,
-                                  std_frag_size = 140):
+                                  nthreads=12,
+                                  avg_frag_size=400,
+                                  std_frag_size=140):
     # Label SD-paralog pairs. Name disconnected qnodes as RG0, connected qnodes as PC1, PC2, ...
-    from itertools import repeat
-    import re
-    
     # We need to restructure the grouped_qnode_cnodes to pass the information of sd-paralog pairs to the establish_beds_per_RG_cluster function
     new_results = []
-    
     for result in grouped_qnode_cnodes:
         new_result = {"SD_qnodes": {}, "SD_counterparts": {}}
         for i in range(0, len(result["SD_qnodes"])):
@@ -38,17 +34,35 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
 
     # Load balancing
     new_results = sorted(new_results, key = lambda x: sum(v[0][2] - v[0][1] for k,v in x["SD_qnodes"].items()) * sum(len(v) for k,v in x["SD_counterparts"].items()), reverse=True)
-    labels = [ "PC" + str(n) for n in range(0, len(grouped_qnode_cnodes))]
+    labels = [ "RG" + str(n) for n in range(0, len(grouped_qnode_cnodes))]
+
+    # Register all realign groups
+    for label in labels:
+        sdrecall_paths.register_realign_group(label)
+
+    # Create arguments for parallel processing
+    worker_args = []
+    for i, (result, label) in enumerate(zip(new_results, labels)):
+        # For each worker, we create a tuple of all needed arguments
+        worker_args.append((
+            result,
+            label,
+            (
+                ("Query_bed", sdrecall_paths.rg_query_bed_path(label)),
+                ("Counterparts_bed", sdrecall_paths.rg_counterparts_bed_path(label)),
+                ("All_region_bed", sdrecall_paths.all_homo_regions_bed_path(label)),
+                ("Masked_genome", sdrecall_paths.masked_genome_path(label)), 
+                ("Intrinsic_bam", sdrecall_paths.intrinsic_bam_path(label)),
+                ("Ref_genome", ref_genome)
+            ),
+            avg_frag_size,
+            std_frag_size,
+            2  # threads per worker
+        ))
     
+    # Run in parallel
     pool = Pool(nthreads)
-    results = pool.imap_unordered(imap_establish, zip(new_results,
-                                                      repeat(output_folder),
-                                                      labels,
-                                                      repeat(ref_genome),
-                                                      repeat(avg_frag_size),
-                                                      repeat(std_frag_size),
-                                                      repeat(2),
-                                                      repeat(logger)))
+    results = pool.imap_unordered(imap_establish, worker_args)
     i = 0
     intrinsic_bams = []
     for success, result, logs in results:
@@ -67,7 +81,8 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
         raise RuntimeError("Error occurred during the parallel execution of establish_beds_per_RG_cluster. Exit.")
 
     ## total_intrinsic_alignments.bam is a merged alignment file for BILC model.
-    total_intrinsic_bam = os.path.join(output_folder, "total_intrinsic_alignments.bam")
+    intrinsic_bams = [sdrecall_paths.intrinsic_sam_path(label) for label in labels]
+    total_intrinsic_bam = sdrecall_paths.total_intrinsic_bam_path()
     
     ## Create total_intrinsic_alignments.bam
     intrinsic_bam_header = total_intrinsic_bam.replace(".bam", ".bam.header")
@@ -86,19 +101,19 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
     executeCmd(cmd)
                
     # Fourth, extract all PC*_related_homo_regions.bed file and concat them together.
-    beds = glob(os.path.join(output_folder, "*/*_all/", "*_related_homo_regions.bed"))
+    beds = glob(os.path.join(sdrecall_paths.output_folder, "*/*_all/", "*_related_homo_regions.bed"))
     combined_bed = merge_bed_files(beds)
-    combined_bed.saveas(os.path.join(output_folder, "all_RG_related_homo_regions.bed"))
+    combined_bed.saveas(os.path.join(sdrecall_paths.output_folder, "all_RG_related_homo_regions.bed"))
     # combined_bed.saveas(os.path.join(output_folder, "all_RG_regions.bed"))
     
     # Fifth, extract all intrinsic vcfs and use bcftools to concat them together
     intrinsic_vcfs = []
-    for root, dirs, files in os.walk(output_folder):
+    for root, dirs, files in os.walk(sdrecall_paths.output_folder):
         for file in files:
             if re.search(r'PC[0-9]+\.raw\.vcf\.gz$', file):
                 intrinsic_vcfs.append(os.path.join(root, file))
     
-    final_intrinsic_vcf = os.path.join(output_folder, "all_rg_region_intrinsic_variants.vcf.gz")
+    final_intrinsic_vcf = os.path.join(sdrecall_paths.output_folder, "all_rg_region_intrinsic_variants.vcf.gz")
     combine_vcfs(*intrinsic_vcfs, output=final_intrinsic_vcf)
 
     return
@@ -109,9 +124,8 @@ def imap_establish(tup_args):
 @error_handling_decorator
 def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
                                                 "SD_counterparts":{}},
-                                  base_folder = "",
                                   label = "RG0",
-                                  ref_genome = "",
+                                  path_tups = (),
                                   avg_frag_size = 400,
                                   std_frag_size = 140,
                                   threads = 2,
@@ -126,18 +140,10 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
     """
 
     ## Initialize file structure
-    paths = construct_folder_struc(base_folder=base_folder, label=label, logger=logger)
-
-    # First convert the disconnected nodes to beds, each node is a 3-tuple (chr, start, end)
-    # tmp_id = str(uuid.uuid4())
-    # tmp_rg_bed = paths["RG_bed"].replace(".bed", "." + tmp_id + ".bed")
-    # raw_rg_bed = paths["RG_bed"].replace(".bed", ".raw.bed")
-    # tmp_counterparts_bed = paths["Counterparts_bed"].replace(".bed", "." + tmp_id + ".bed")
-    # raw_counterparts_bed = paths["Counterparts_bed"].replace(".bed", ".raw.bed")
-    # tmp_total_bed = paths["All_region_bed"].replace(".bed", "." + tmp_id + ".bed")
-    # raw_total_bed = paths["All_region_bed"].replace(".bed", ".raw.bed")
+    paths = {k:v for k,v in path_tups}
     
-    with open(paths["RG_bed"], "w") as f:
+    # Create the query region bed file
+    with open(paths["Query_bed"], "w") as f:
         for idx, records in cluster_dict["SD_qnodes"].items():
             for record in records:
                 if len(record) >= 3:
@@ -145,11 +151,7 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
                     f.write("\t".join([str(value) for value in record][:3] + [".", ".", record[3]]) + "\n")
                 elif len(record) == 2:
                     f.write("\t".join([str(value) for value in record[0]][:3] + [".", ".", record[0][3]]) + "\n")
-    sortBed_and_merge(paths["RG_bed"])
-    
-    # executeCmd(f"cp -f {tmp_rg_bed} {raw_rg_bed}")
-    # sortBed_and_merge(tmp_rg_bed, logger=logger)
-    # update_plain_file_on_md5(paths["RG_bed"], tmp_rg_bed, logger=logger)
+    sortBed_and_merge(paths["Query_bed"])
             
     ## Create the counterparts region bed file
     with open(paths["Counterparts_bed"], "w") as f:
@@ -163,7 +165,7 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
     # executeCmd(f"cp -f {tmp_counterparts_bed} {raw_counterparts_bed}")
 
     ## Remove PC regions from counterpart BEDs and force strandedness
-    BedTool(paths["Counterparts_bed"]).subtract(BedTool(paths["RG_bed"]), s=True).saveas(paths["Counterparts_bed"])
+    BedTool(paths["Counterparts_bed"]).subtract(BedTool(paths["Query_bed"]), s=True).saveas(paths["Counterparts_bed"])
     sortBed_and_merge(paths["Counterparts_bed"], logger=logger)
     # update_plain_file_on_md5(paths["Counterparts_bed"], tmp_counterparts_bed, logger=logger)
     
@@ -186,23 +188,18 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
                 # The rela_start and rela_end are based on the corresponding PC region
                 f.write("\t".join([str(value) for value in record][:3] + [str(fc_node_rela_start), str(fc_node_rela_end), record[3], f"NFC:{label}_{idx}"]) + "\n")
     
-    sortBed_and_merge(paths["All_region_bed"])
-    # executeCmd(f"cp -f {tmp_total_bed} {raw_total_bed}")
-    # sortBed_and_merge(tmp_total_bed, logger = logger)
-    # update_plain_file_on_md5(paths["All_region_bed"], tmp_total_bed, logger=logger)
-    
+    sortBed_and_merge(paths["All_region_bed"])    
     contig_sizes = ref_genome.replace(".fasta", ".fasta.fai")
     
     # Prepare masked genomes
-    masked_genome_path = os.path.join( os.path.dirname(paths["RG_bed"]), label + ".masked.fasta")
-    masked_genome = Genome(ref_genome).mask(paths["RG_bed"], avg_frag_size = avg_frag_size, std_frag_size=std_frag_size, genome=contig_sizes, logger=logger, path=masked_genome_path)
+    masked_genome = Genome(ref_genome).mask(paths["Query_bed"], avg_frag_size = avg_frag_size, std_frag_size=std_frag_size, genome=contig_sizes, logger=logger, path=masked_genome_path)
     
     # Call intrinsic variants
-    bam_path = getIntrinsicVcf( rg_bed = paths["RG_bed"], 
+    bam_path = getIntrinsicBam( rg_bed = paths["Query_bed"], 
                                 all_homo_regions_bed = paths["All_region_bed"], 
                                 rg_masked = masked_genome,
                                 ref_genome = ref_genome,
                                 avg_frag_size = avg_frag_size,
                                 std_frag_size = std_frag_size,
-                                threads = threads)
+                                threads = threads )
     return bam_path

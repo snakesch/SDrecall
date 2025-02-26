@@ -188,8 +188,7 @@ def preparation(paths: SDrecallPaths,
                                   sd_paralog_pairs = sd_paralog_pairs,
                                   output_folder = outdir,
                                   ref_genome = ref_genome,
-                                  intrinsic_bams = paths.all_intrinsic_bam_paths(),
-                                  total_intrinsic_bam = paths.total_intrinsic_bam_path(),
+                                  sdrecall_paths = paths,
                                   nthreads = threads)
 
 def main():

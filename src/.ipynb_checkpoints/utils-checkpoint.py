@@ -80,20 +80,20 @@ def construct_folder_struc(base_folder,
 
     os.makedirs(os.path.join(parent_folder_full_path, label + "_counterparts"), exist_ok=True)
     counterparts_bed_name = label + "_counterparts_regions.bed"
-    counterparts_bed_path = os.path.join(parent_folder_full_path, label + "_counterparts", counterparts_bed_name)
+    rg_counterparts_bed_path = os.path.join(parent_folder_full_path, label + "_counterparts", counterparts_bed_name)
 
     RG_folder_name = label
     RG_folder_full_path = os.path.join(parent_folder_full_path, RG_folder_name)
 
     os.makedirs(RG_folder_full_path, exist_ok=True)
 
-    RG_bed_name = label + ".bed"
-    RG_bed_path = os.path.join(RG_folder_full_path, RG_bed_name)
+    Query_bed_name = label + ".bed"
+    Query_bed_path = os.path.join(RG_folder_full_path, Query_bed_name)
 
     return {"base_folder_path": parent_folder_full_path,
-            "RG_bed": RG_bed_path,
+            "Query_bed": Query_bed_path,
             "All_region_bed": total_bed_path,
-            "Counterparts_bed": counterparts_bed_path}
+            "Counterparts_bed": rg_counterparts_bed_path}
 
 # - BED file manipulation using pybedtools - #
 

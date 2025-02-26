@@ -276,12 +276,12 @@ class SDrecallPaths:
         os.makedirs(rg_dir, exist_ok=True)
         return rg_dir
     
-    def rg_bed_path(self, rg_label_or_index) -> str:
+    def rg_query_bed_path(self, rg_label_or_index) -> str:
         """Path for RG bed file"""
         rg_label = self._normalize_rg_label(rg_label_or_index)
         return os.path.join(self.rg_dir(rg_label), f"{rg_label}.bed")
     
-    def counterparts_bed_path(self, rg_label_or_index) -> str:
+    def rg_counterparts_bed_path(self, rg_label_or_index) -> str:
         """Path for counterparts bed file"""
         rg_label = self._normalize_rg_label(rg_label_or_index)
         return os.path.join(self.rg_dir(rg_label), f"{rg_label}_counterparts.bed")
@@ -316,7 +316,6 @@ class SDrecallPaths:
         rg_label = self._normalize_rg_label(rg_label_or_index)
         return os.path.join(self.rg_dir(rg_label), f"{rg_label}.masked.mmi")
     
-
     def total_intrinsic_bam_path(self) -> str:
         """Path for total intrinsic alignment BAM"""
         return os.path.join(self.dirs["root"], f"total_intrinsic_alignments.bam")
@@ -327,9 +326,9 @@ class SDrecallPaths:
         return os.path.join(self.rg_dir(rg_label), f"{rg_label}.intrinsic.bam")
     
     # Methods to get files across all realign groups
-    def all_rg_bed_paths(self) -> List[str]:
+    def all_rg_query_bed_paths(self) -> List[str]:
         """Get paths to all RG bed files"""
-        return [self.rg_bed_path(rg) for rg in self.realign_groups]
+        return [self.rg_query_bed_path(rg) for rg in self.realign_groups]
     
     def all_masked_genome_paths(self) -> List[str]:
         """Get paths to all masked genome files"""
@@ -339,9 +338,9 @@ class SDrecallPaths:
         """Get paths to all intrinsic alignment SAM files"""
         return [self.intrinsic_bam_path(rg) for rg in self.realign_groups]
     
-    def all_counterparts_bed_paths(self) -> List[str]:
+    def all_rg_counterparts_bed_paths(self) -> List[str]:
         """Get paths to all counterparts bed files"""
-        return [self.counterparts_bed_path(rg) for rg in self.realign_groups]
+        return [self.rg_counterparts_bed_path(rg) for rg in self.realign_groups]
     
     def all_homo_regions_bed_paths(self) -> List[str]:
         """Get paths to all homologous regions bed files"""

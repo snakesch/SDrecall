@@ -11,7 +11,7 @@ from src.const import *
 from src.log import error_handling_decorator, logger
 from preparation.homoseq_region import HOMOSEQ_REGION
 from preparation.genome import Genome
-from preparation.intrinsic_variants import getIntrinsicVcf
+from preparation.intrinsic_variants import getIntrinsicBam
 
 
 def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
@@ -130,14 +130,14 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
 
     # First convert the disconnected nodes to beds, each node is a 3-tuple (chr, start, end)
     # tmp_id = str(uuid.uuid4())
-    # tmp_rg_bed = paths["RG_bed"].replace(".bed", "." + tmp_id + ".bed")
-    # raw_rg_bed = paths["RG_bed"].replace(".bed", ".raw.bed")
+    # tmp_rg_bed = paths["Query_bed"].replace(".bed", "." + tmp_id + ".bed")
+    # raw_rg_bed = paths["Query_bed"].replace(".bed", ".raw.bed")
     # tmp_counterparts_bed = paths["Counterparts_bed"].replace(".bed", "." + tmp_id + ".bed")
     # raw_counterparts_bed = paths["Counterparts_bed"].replace(".bed", ".raw.bed")
     # tmp_total_bed = paths["All_region_bed"].replace(".bed", "." + tmp_id + ".bed")
     # raw_total_bed = paths["All_region_bed"].replace(".bed", ".raw.bed")
     
-    with open(paths["RG_bed"], "w") as f:
+    with open(paths["Query_bed"], "w") as f:
         for idx, records in cluster_dict["SD_qnodes"].items():
             for record in records:
                 if len(record) >= 3:
@@ -145,11 +145,11 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
                     f.write("\t".join([str(value) for value in record][:3] + [".", ".", record[3]]) + "\n")
                 elif len(record) == 2:
                     f.write("\t".join([str(value) for value in record[0]][:3] + [".", ".", record[0][3]]) + "\n")
-    sortBed_and_merge(paths["RG_bed"])
+    sortBed_and_merge(paths["Query_bed"])
     
     # executeCmd(f"cp -f {tmp_rg_bed} {raw_rg_bed}")
     # sortBed_and_merge(tmp_rg_bed, logger=logger)
-    # update_plain_file_on_md5(paths["RG_bed"], tmp_rg_bed, logger=logger)
+    # update_plain_file_on_md5(paths["Query_bed"], tmp_rg_bed, logger=logger)
             
     ## Create the counterparts region bed file
     with open(paths["Counterparts_bed"], "w") as f:
@@ -163,7 +163,7 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
     # executeCmd(f"cp -f {tmp_counterparts_bed} {raw_counterparts_bed}")
 
     ## Remove PC regions from counterpart BEDs and force strandedness
-    BedTool(paths["Counterparts_bed"]).subtract(BedTool(paths["RG_bed"]), s=True).saveas(paths["Counterparts_bed"])
+    BedTool(paths["Counterparts_bed"]).subtract(BedTool(paths["Query_bed"]), s=True).saveas(paths["Counterparts_bed"])
     sortBed_and_merge(paths["Counterparts_bed"], logger=logger)
     # update_plain_file_on_md5(paths["Counterparts_bed"], tmp_counterparts_bed, logger=logger)
     
@@ -194,11 +194,11 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
     contig_sizes = ref_genome.replace(".fasta", ".fasta.fai")
     
     # Prepare masked genomes
-    masked_genome_path = os.path.join( os.path.dirname(paths["RG_bed"]), label + ".masked.fasta")
-    masked_genome = Genome(ref_genome).mask(paths["RG_bed"], avg_frag_size = avg_frag_size, std_frag_size=std_frag_size, genome=contig_sizes, logger=logger, path=masked_genome_path)
+    masked_genome_path = os.path.join( os.path.dirname(paths["Query_bed"]), label + ".masked.fasta")
+    masked_genome = Genome(ref_genome).mask(paths["Query_bed"], avg_frag_size = avg_frag_size, std_frag_size=std_frag_size, genome=contig_sizes, logger=logger, path=masked_genome_path)
     
     # Call intrinsic variants
-    bam_path = getIntrinsicVcf( rg_bed = paths["RG_bed"], 
+    bam_path = getIntrinsicBam( rg_bed = paths["Query_bed"], 
                                 all_homo_regions_bed = paths["All_region_bed"], 
                                 rg_masked = masked_genome,
                                 ref_genome = ref_genome,

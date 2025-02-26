@@ -7,7 +7,7 @@ from src.const import *
 
 logger = logging.getLogger("SDrecall")
 
-def getIntrinsicVcf(rg_bed, 
+def getIntrinsicBam(rg_bed, 
                     all_homo_regions_bed, 
                     rg_masked,
                     ref_genome, 
