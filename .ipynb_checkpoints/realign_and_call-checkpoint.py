@@ -48,11 +48,11 @@ def select_reads_by_qnames(input_bam: str,
 
 
 
-def process_masked_bam( pc_tag,
-                        pc_fc_beds,
-                        pc_nfc_beds,
+def process_masked_bam( rg_tag,
+                        rg_fc_beds,
+                        rg_nfc_beds,
                         original_bam,
-                        pc_bed,
+                        rg_bed,
                         sample_ID,
                         total_freads,
                         total_rreads,
@@ -66,42 +66,42 @@ def process_masked_bam( pc_tag,
     
     # First merge the FC and NFC regions and masked genomes
     mq_cutoff = int(mq_cutoff)
-    pc_dir = os.path.dirname(pc_bed)
-    pc_fc_beds = list(dict.fromkeys(pc_fc_beds))
-    pc_nfc_beds = list(dict.fromkeys(pc_nfc_beds))
-    genome_name = os.path.basename(ref_genome).replace(".fasta", f".sub.{pc_tag}.masked.fasta")
-    masked_genome = os.path.join(pc_dir, genome_name)
-    pc_fc_bed = pc_bed.replace(".bed", ".targeted.bed")
-    pc_nfc_bed = pc_bed.replace(".bed", ".counterparts_regions.targeted.bed")
-    cmd = f"cat {' '.join(pc_fc_beds)} | bedtools sort -i - | bedtools merge -i - > {pc_fc_bed}"
+    rg_dir = os.path.dirname(rg_bed)
+    rg_fc_beds = list(dict.fromkeys(rg_fc_beds))
+    rg_nfc_beds = list(dict.fromkeys(rg_nfc_beds))
+    genome_name = os.path.basename(ref_genome).replace(".fasta", f".sub.{rg_tag}.masked.fasta")
+    masked_genome = os.path.join(rg_dir, genome_name)
+    rg_fc_bed = rg_bed.replace(".bed", ".targeted.bed")
+    rg_nfc_bed = rg_bed.replace(".bed", ".counterparts_regions.targeted.bed")
+    cmd = f"cat {' '.join(rg_fc_beds)} | bedtools sort -i - | bedtools merge -i - > {rg_fc_bed}"
     executeCmd(cmd, logger=logger)
-    cmd = f"cat {' '.join(pc_nfc_beds)} | bedtools sort -i - | bedtools merge -i - > {pc_nfc_bed}"
+    cmd = f"cat {' '.join(rg_nfc_beds)} | bedtools sort -i - | bedtools merge -i - > {rg_nfc_bed}"
     executeCmd(cmd, logger=logger)
 
     # Now select the reads from the total fastq files
-    per_sample_pc_dir = os.path.join(os.path.dirname(original_bam), f"{sample_ID}_ref_SD_recall")
-    os.makedirs(per_sample_pc_dir, exist_ok = True)
+    per_sample_rg_dir = os.path.join(os.path.dirname(original_bam), f"{sample_ID}_ref_SD_recall")
+    os.makedirs(per_sample_rg_dir, exist_ok = True)
 
-    sd_freads = os.path.join(per_sample_pc_dir, os.path.basename(total_freads.replace(".fastq", f".{pc_tag}_sdrecall.fastq")))
-    sd_rreads = os.path.join(per_sample_pc_dir, os.path.basename(total_rreads.replace(".fastq", f".{pc_tag}_sdrecall.fastq")))
+    sd_freads = os.path.join(per_sample_rg_dir, os.path.basename(total_freads.replace(".fastq", f".{rg_tag}_sdrecall.fastq")))
+    sd_rreads = os.path.join(per_sample_rg_dir, os.path.basename(total_rreads.replace(".fastq", f".{rg_tag}_sdrecall.fastq")))
 
     assert sd_freads != total_freads, f"The output fastq file {sd_freads} should not be the same as the input fastq file {total_freads}"
     assert sd_rreads != total_rreads, f"The output fastq file {sd_rreads} should not be the same as the input fastq file {total_rreads}"
 
-    masked_bam = os.path.join(per_sample_pc_dir, os.path.basename(original_bam.replace(".bam", f".only_{pc_tag}.bam")))
+    masked_bam = os.path.join(per_sample_rg_dir, os.path.basename(original_bam.replace(".bam", f".only_{rg_tag}.bam")))
     raw_masked_bam = masked_bam.replace(".bam", ".raw.bam")
     raw_masked_vcf = masked_bam.replace(".bam", ".raw.vcf.gz")
 
     # Extract the qnames
-    pc_qname_lst = bam_reads_selection_by_region(original_bam, 
-                                                 pc_fc_bed, 
+    rg_qname_lst = bam_reads_selection_by_region(original_bam, 
+                                                 rg_fc_bed, 
                                                  output_qnames = "Yes",
                                                  threads=threads,
                                                  multi_aligned=False,
                                                  logger=logger )
 
     counterpart_qname_lst = bam_reads_selection_by_region(original_bam, 
-                                                          pc_nfc_bed, 
+                                                          rg_nfc_bed, 
                                                           output_qnames = "Yes",
                                                           threads=threads,
                                                           multi_aligned=True,
@@ -111,8 +111,8 @@ def process_masked_bam( pc_tag,
     ## TODO: 1. Sort the input BAM, 2. Select aligned reads by query names, 3. minimap2
     qname_lst_f = prepare_tmp_file().name
     qname_lst_r = prepare_tmp_file().name
-    cmdf = f"cat {pc_qname_lst} {counterpart_qname_lst} | sort - | uniq > {qname_lst_f}"
-    cmdr = f"cat {pc_qname_lst} {counterpart_qname_lst} | sort - | uniq > {qname_lst_r}"
+    cmdf = f"cat {rg_qname_lst} {counterpart_qname_lst} | sort - | uniq > {qname_lst_f}"
+    cmdr = f"cat {rg_qname_lst} {counterpart_qname_lst} | sort - | uniq > {qname_lst_r}"
     executeCmd(cmdf, logger=logger)
     executeCmd(cmdr, logger=logger)
 
@@ -131,16 +131,16 @@ def process_masked_bam( pc_tag,
             -g {ref_genome} \
             -o {raw_masked_bam} \
             -t {threads} \
-            -i {pc_tag} \
+            -i {rg_tag} \
             -c {max_varno} && ls -lh {raw_masked_bam}"
     try:
         executeCmd(cmd, logger=logger)
     except RuntimeError:
-        return f"{pc_tag},{pc_bed},NaN,NaN"
+        return f"{rg_tag},{rg_bed},NaN,NaN"
     else:
         # Now perform the variants calling
         # First determine the names of the output VCFs
-        logger.info(f"Now we have prepared the masked BAM file {raw_masked_bam} for sample {sample_ID} for {pc_bed}, we need to generate the VCF file.")
+        logger.info(f"Now we have prepared the masked BAM file {raw_masked_bam} for sample {sample_ID} for {rg_bed}, we need to generate the VCF file.")
 
         sub_running_log = raw_masked_vcf.replace(".vcf.gz", ".log")
         cmd = f"bash {bash_utils_hub} call_polyploidy_per_PC \
@@ -148,7 +148,7 @@ def process_masked_bam( pc_tag,
                 -m {ref_genome} \
                 -c {threads} \
                 -o {raw_masked_vcf} \
-                -p {pc_tag} \
+                -p {rg_tag} \
                 -b {raw_masked_bam} > {sub_running_log} 2>&1"
             # We need to allow this function to be failed sometimes
         try:
@@ -159,13 +159,13 @@ def process_masked_bam( pc_tag,
             try:
                 executeCmd(cmd, logger=logger)
             except RuntimeError:
-                return f"{pc_tag},{pc_bed},{raw_masked_bam},NaN"
+                return f"{rg_tag},{rg_bed},{raw_masked_bam},NaN"
             else:
                 logger.warning(f"Though the process reported error. The VCF file {raw_masked_vcf} is still valid and updated")
-                return f"{pc_tag},{pc_bed},{raw_masked_bam},{raw_masked_vcf}"
+                return f"{rg_tag},{rg_bed},{raw_masked_bam},{raw_masked_vcf}"
         else:
-            logger.info(f"Succesfully generate the vcf file {raw_masked_vcf} for region ${pc_bed}")
-            return f"{pc_tag},{pc_bed},{raw_masked_bam},{raw_masked_vcf}"
+            logger.info(f"Succesfully generate the vcf file {raw_masked_vcf} for region ${rg_bed}")
+            return f"{rg_tag},{rg_bed},{raw_masked_bam},{raw_masked_vcf}"
 
 def imap_process_masked_bam(tup_args):
     return process_masked_bam(*tup_args)

@@ -154,13 +154,7 @@ class SDrecallPaths:
         """Set up the standard directory structure"""
         dirs = {
             "root": self.work_dir,
-            "recall_results": os.path.join(self.work_dir, "recall_results"),
-            "logs": os.path.join(self.work_dir, "logs"),
-            "intermediate": os.path.join(self.work_dir, "intermediate"),
-            "pc_clusters": os.path.join(self.work_dir, "pc_clusters"),
-            "masked_genomes": os.path.join(self.work_dir, "masked_genomes"),
-            "realignments": os.path.join(self.work_dir, "realignments"),
-            "intrinsic_variants": os.path.join(self.work_dir, "intrinsic_variants")
+            "recall_results": os.path.join(self.work_dir, "recall_results")
         }
         
         # Create directories if they don't exist
@@ -198,62 +192,62 @@ class SDrecallPaths:
         """Get path for target overlapping query SD BED"""
         return os.path.join(self.dirs["intermediate"], f"{self.basename}target_overlapping_query_SD.bed")
     
-    def get_pc_dir(self, pc_label: str) -> str:
+    def get_rg_dir(self, rg_label: str) -> str:
         """Get directory for a specific PC cluster"""
-        pc_dir = os.path.join(self.dirs["pc_clusters"], pc_label)
-        os.makedirs(pc_dir, exist_ok=True)
-        return pc_dir
+        rg_dir = os.path.join(self.dirs["rg_clusters"], rg_label)
+        os.makedirs(rg_dir, exist_ok=True)
+        return rg_dir
     
-    def get_pc_counterparts_dir(self, pc_label: str) -> str:
+    def get_rg_counterparts_dir(self, rg_label: str) -> str:
         """Get directory for PC counterparts"""
-        counterparts_dir = os.path.join(self.get_pc_dir(pc_label), f"{pc_label}_counterparts")
+        counterparts_dir = os.path.join(self.get_rg_dir(rg_label), f"{rg_label}_counterparts")
         os.makedirs(counterparts_dir, exist_ok=True)
         return counterparts_dir
     
-    def get_pc_all_dir(self, pc_label: str) -> str:
+    def get_rg_all_dir(self, rg_label: str) -> str:
         """Get directory for all PC-related regions"""
-        all_dir = os.path.join(self.get_pc_dir(pc_label), f"{pc_label}_all")
+        all_dir = os.path.join(self.get_rg_dir(rg_label), f"{rg_label}_all")
         os.makedirs(all_dir, exist_ok=True)
         return all_dir
     
-    def get_pc_main_dir(self, pc_label: str) -> str:
+    def get_rg_main_dir(self, rg_label: str) -> str:
         """Get main directory for PC"""
-        main_dir = os.path.join(self.get_pc_dir(pc_label), pc_label)
+        main_dir = os.path.join(self.get_rg_dir(rg_label), rg_label)
         os.makedirs(main_dir, exist_ok=True)
         return main_dir
     
-    def get_pc_bed_path(self, pc_label: str) -> str:
+    def get_rg_bed_path(self, rg_label: str) -> str:
         """Get path for PC bed file"""
-        return os.path.join(self.get_pc_main_dir(pc_label), f"{pc_label}.bed")
+        return os.path.join(self.get_rg_main_dir(rg_label), f"{rg_label}.bed")
     
-    def get_counterparts_bed_path(self, pc_label: str) -> str:
+    def get_counterparts_bed_path(self, rg_label: str) -> str:
         """Get path for counterparts bed file"""
-        return os.path.join(self.get_pc_counterparts_dir(pc_label), f"{pc_label}_counterparts_regions.bed")
+        return os.path.join(self.get_rg_counterparts_dir(rg_label), f"{rg_label}_counterparts_regions.bed")
     
-    def get_all_homo_regions_bed_path(self, pc_label: str) -> str:
+    def get_all_homo_regions_bed_path(self, rg_label: str) -> str:
         """Get path for all homologous regions bed file"""
-        return os.path.join(self.get_pc_all_dir(pc_label), f"{pc_label}_related_homo_regions.bed")
+        return os.path.join(self.get_rg_all_dir(rg_label), f"{rg_label}_related_homo_regions.bed")
     
-    def get_all_homo_regions_fastq_path(self, pc_label: str) -> str:
+    def get_all_homo_regions_fastq_path(self, rg_label: str) -> str:
         """Get path for all homologous regions fastq file"""
-        return os.path.join(self.get_pc_all_dir(pc_label), f"{pc_label}_related_homo_regions.raw.fastq")
+        return os.path.join(self.get_rg_all_dir(rg_label), f"{rg_label}_related_homo_regions.raw.fastq")
     
-    def get_masked_genome_path(self, pc_label: str) -> str:
+    def get_masked_genome_path(self, rg_label: str) -> str:
         """Get path for masked genome"""
-        return os.path.join(self.get_pc_main_dir(pc_label), f"{pc_label}.masked.fasta")
+        return os.path.join(self.get_rg_main_dir(rg_label), f"{rg_label}.masked.fasta")
     
-    def get_masked_genome_fai_path(self, pc_label: str) -> str:
+    def get_masked_genome_fai_path(self, rg_label: str) -> str:
         """Get path for masked genome FAI index"""
-        return f"{self.get_masked_genome_path(pc_label)}.fai"
+        return f"{self.get_masked_genome_path(rg_label)}.fai"
     
-    def get_masked_genome_contigsize_path(self, pc_label: str) -> str:
+    def get_masked_genome_contigsize_path(self, rg_label: str) -> str:
         """Get path for masked genome contig size file"""
-        return os.path.join(self.get_pc_main_dir(pc_label), f"{pc_label}.masked.contigsize.genome")
+        return os.path.join(self.get_rg_main_dir(rg_label), f"{rg_label}.masked.contigsize.genome")
     
-    def get_minimap_index_path(self, pc_label: str) -> str:
+    def get_minimap_index_path(self, rg_label: str) -> str:
         """Get path for minimap2 index"""
-        return os.path.join(self.get_pc_main_dir(pc_label), f"{pc_label}.masked.mmi")
+        return os.path.join(self.get_rg_main_dir(rg_label), f"{rg_label}.masked.mmi")
     
-    def get_intrinsic_sam_path(self, pc_label: str) -> str:
+    def get_intrinsic_sam_path(self, rg_label: str) -> str:
         """Get path for intrinsic alignment SAM"""
-        return os.path.join(self.get_pc_main_dir(pc_label), f"{pc_label}.raw.sam")
+        return os.path.join(self.get_rg_main_dir(rg_label), f"{rg_label}.raw.sam")

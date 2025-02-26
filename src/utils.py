@@ -82,16 +82,16 @@ def construct_folder_struc(base_folder,
     counterparts_bed_name = label + "_counterparts_regions.bed"
     counterparts_bed_path = os.path.join(parent_folder_full_path, label + "_counterparts", counterparts_bed_name)
 
-    PC_folder_name = label
-    PC_folder_full_path = os.path.join(parent_folder_full_path, PC_folder_name)
+    RG_folder_name = label
+    RG_folder_full_path = os.path.join(parent_folder_full_path, RG_folder_name)
 
-    os.makedirs(PC_folder_full_path, exist_ok=True)
+    os.makedirs(RG_folder_full_path, exist_ok=True)
 
-    PC_bed_name = label + ".bed"
-    PC_bed_path = os.path.join(PC_folder_full_path, PC_bed_name)
+    RG_bed_name = label + ".bed"
+    RG_bed_path = os.path.join(RG_folder_full_path, RG_bed_name)
 
     return {"base_folder_path": parent_folder_full_path,
-            "PC_bed": PC_bed_path,
+            "RG_bed": RG_bed_path,
             "All_region_bed": total_bed_path,
             "Counterparts_bed": counterparts_bed_path}
 

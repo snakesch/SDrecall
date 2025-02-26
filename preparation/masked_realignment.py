@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 import os
 
-def modify_and_sort_genome_coordinates(mid_align_path, ref_contig_sizes_path, output_bam_path, pc_index="PC1"):
+def modify_and_sort_genome_coordinates(mid_align_path, ref_contig_sizes_path, output_bam_path, rg_index="PC1"):
     """
     Modifies masked genome coordinates in a SAM file, sorts by coordinates,
     and outputs a sorted and indexed BAM file.
@@ -13,7 +13,7 @@ def modify_and_sort_genome_coordinates(mid_align_path, ref_contig_sizes_path, ou
         mid_align_path (str): Path to the input SAM file.
         ref_contig_sizes_path (str): Path to the FAI index file.
         output_bam_path (str): Path to the output BAM file.
-        pc_index (str, optional): Prefix for read names. Defaults to "PC1".
+        rg_index (str, optional): Prefix for read names. Defaults to "PC1".
 
     Returns:
         bool: True if successful, False otherwise.
@@ -53,7 +53,7 @@ def modify_and_sort_genome_coordinates(mid_align_path, ref_contig_sizes_path, ou
 
             with pysam.AlignmentFile(output_bam_path, "wb", header=pysam.AlignmentHeader.from_dict(header)) as outbam:
                 for read in samfile:
-                    qname = f"{read.query_name}:{pc_index}"
+                    qname = f"{read.query_name}:{rg_index}"
 
                     rname = read.reference_name
                     rnext = read.next_reference_name
@@ -135,7 +135,7 @@ def create_minimap2_index(fasta_path, index_path, threads=1):
         print(f"An unexpected error occurred creating the index: {e}")
         return False
 
-def minimap2_align(forward_reads, reverse_reads, minimap2_index, mode, pc_label, output_bam_path, ref_contig_sizes_path, threads=1):
+def minimap2_align(forward_reads, reverse_reads, minimap2_index, mode, rg_label, output_bam_path, ref_contig_sizes_path, threads=1):
     """
     Aligns reads using minimap2, processes output.
 
@@ -144,7 +144,7 @@ def minimap2_align(forward_reads, reverse_reads, minimap2_index, mode, pc_label,
         reverse_reads (str): Reverse reads FASTQ (or None).
         minimap2_index (str): Minimap2 index.
         mode (str): Minimap2 preset mode.
-        pc_label (str): Label for read group and prefix.
+        rg_label (str): Label for read group and prefix.
         output_bam_path (str): Output sorted and indexed BAM.
         ref_contig_sizes_path (str): Path to FAI index
         threads (int): Number of threads. Default 1.
@@ -164,7 +164,7 @@ def minimap2_align(forward_reads, reverse_reads, minimap2_index, mode, pc_label,
                 "--MD",
                 "-F", "1000",
                 "-t", str(threads),
-                "-R", f"@RG\\tID:{pc_label}\\tLB:SureSelectXT\\tPL:ILLUMINA\\tPU:1064\\tSM:{pc_label}",
+                "-R", f"@RG\\tID:{rg_label}\\tLB:SureSelectXT\\tPL:ILLUMINA\\tPU:1064\\tSM:{rg_label}",
                 minimap2_index
             ]
             command.append(forward_reads)
@@ -175,7 +175,7 @@ def minimap2_align(forward_reads, reverse_reads, minimap2_index, mode, pc_label,
             subprocess.run(command, stdout=temp_sam_file, check=True)
 
         # Modify, sort, and index
-        if not modify_and_sort_genome_coordinates(temp_align, ref_contig_sizes_path, output_bam_path, pc_label):
+        if not modify_and_sort_genome_coordinates(temp_align, ref_contig_sizes_path, output_bam_path, rg_label):
             print("Error: Failed to modify and sort coordinates.")
             os.remove(temp_align) # Clean up even on failure
             return False

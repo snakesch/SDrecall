@@ -1,7 +1,7 @@
 .
-├── all_pc_region_intrinsic_variants.vcf.gz
-├── all_pc_region_intrinsic_variants.vcf.gz.tbi
-├── all_PC_related_homo_regions.bed
+├── all_rg_region_intrinsic_variants.vcf.gz
+├── all_rg_region_intrinsic_variants.vcf.gz.tbi
+├── all_RG_related_homo_regions.bed
 ├── filtered_SD_binary_map.tsv
 ├── HG002.SD.deduped.infercov.minMQ_0.bed
 ├── HG002.SD.deduped.infercov.minMQ_0.tsv.gz

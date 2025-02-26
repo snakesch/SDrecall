@@ -26,9 +26,9 @@ def enumerate_PCs(work_dir):
     beds = sorted(beds, key = lambda f: pb.BedTool(f).total_coverage(), reverse=True)
 
     # Extract FC regions from the total bed
-    pc_names, pc_units = [], []
+    rg_names, rg_units = [], []
     for bed_path in beds:
-        pc_names.append(os.path.basename(bed_path).split("_")[0])
+        rg_names.append(os.path.basename(bed_path).split("_")[0])
 
         fc_regions = []
         for interval in pb.BedTool(bed_path):
@@ -38,13 +38,13 @@ def enumerate_PCs(work_dir):
         # Sort FC regions by their tag (last field). 
         # fc_regions.sort(key=lambda interval: interval[-1])
 
-        pc_units.append(tuple(range(len(fc_regions))))
+        rg_units.append(tuple(range(len(fc_regions))))
 
-    return pc_names, pc_units
+    return rg_names, rg_units
 
 def prepare_masked_align_region_per_PC(
-    pc_name: str,
-    pc_subids: Tuple[str, ...],
+    rg_name: str,
+    rg_subids: Tuple[str, ...],
     sd_map_dir: str,
     target_region_bed: str,
     ref_genome: str = "/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta",
@@ -52,10 +52,10 @@ def prepare_masked_align_region_per_PC(
 ) -> Tuple[str, ...]:
 
     # Infer the BED path given a PC name
-    whole_region_raw_bed = f"{work_dir}/{pc_name}_related_homo_regions/{pc_name}_all/{pc_name}_related_homo_regions.bed"
+    whole_region_raw_bed = f"{work_dir}/{rg_name}_related_homo_regions/{rg_name}_all/{rg_name}_related_homo_regions.bed"
 
     if not os.path.isfile(whole_region_raw_bed):
-        raise FileNotFoundError(f"Homologous region BED file not found for {pc_name}")
+        raise FileNotFoundError(f"Homologous region BED file not found for {rg_name}")
 
     # Efficiently filter the raw BED file using pybedtools *directly*
     fc_bed = pb.BedTool(whole_region_raw_bed).filter(lambda interval: interval[-1].startswith("FC")).saveas()
@@ -74,18 +74,18 @@ def prepare_masked_align_region_per_PC(
     target_fc_size = target_fc_bed.total_coverage()
 
     records = []
-    for subgroup_id in pc_subids:
+    for subgroup_id in rg_subids:
         logger.info(
-            f"Start to fetch the masked align region for NFC regions for PC {pc_tag} subgroup {subgroup_id}"
+            f"Start to fetch the masked align region for NFC regions for PC {rg_tag} subgroup {subgroup_id}"
         )
 
         # Filter for NFC and FC regions directly using pybedtools.
         nfc_bed = pb.BedTool(whole_region_raw_bed).filter(
-            lambda interval: interval[6] == f"NFC:{pc_tag}_{subgroup_id}"
+            lambda interval: interval[6] == f"NFC:{rg_tag}_{subgroup_id}"
         ).saveas()
 
         fc_region_bed = pb.BedTool(whole_region_raw_bed).filter(
-            lambda x: x.name == f"FC:{pc_tag}_{subgroup_id}"
+            lambda x: x.name == f"FC:{rg_tag}_{subgroup_id}"
         ).saveas()
 
 
@@ -99,10 +99,10 @@ def prepare_masked_align_region_per_PC(
         )
 
         record = (
-            f"{pc_tag},{subgroup_id},{target_fc_bed.fn},{targeted_nfc_regions_bed.fn},"
+            f"{rg_tag},{subgroup_id},{target_fc_bed.fn},{targeted_nfc_regions_bed.fn},"
             f"{target_fc_size},{target_nfc_regions_bed_size}"
         )
-        logger.info(f"The returned record for {pc_tag} subgroup {subgroup_id} is {record}")
+        logger.info(f"The returned record for {rg_tag} subgroup {subgroup_id} is {record}")
         records.append(record)
 
     return tuple(records)
@@ -189,11 +189,11 @@ def extract_and_pad_segments(
     return_bed_size = return_bed.total_coverage()
     return return_bed, return_bed_size
 
-pc_names, pc_units = enumerate_PCs(work_dir)
+rg_names, rg_units = enumerate_PCs(work_dir)
 
 # pool = ctx.Pool(threads, initializer=pool_init)
-# prepared_beds = pool.imap_unordered(imap_prepare_masked_align_region_per_PC, zip(pc_names,
-#                                                                                 pc_units,
-#                                                                                 repeat(all_PC_folder),
+# prepared_beds = pool.imap_unordered(imap_prepare_masked_align_region_per_PC, zip(rg_names,
+#                                                                                 rg_units,
+#                                                                                 repeat(all_RG_folder),
 #                                                                                 repeat(target_region),
 #                                                                                 repeat(ref_fasta)))

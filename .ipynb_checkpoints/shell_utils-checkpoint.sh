@@ -367,10 +367,10 @@ function generate_sq_lines () {
 function modify_masked_genome_coords () {
     local mid_align=${1}
     local ref_contig_sizes=${2}
-    local pc_index=${3}
+    local rg_index=${3}
 
-    if [[ -z ${pc_index} ]]; then
-        local pc_index="PC1"
+    if [[ -z ${rg_index} ]]; then
+        local rg_index="PC1"
     fi
 
     if [[ -z ${ref_contig_sizes} ]]; then
@@ -395,9 +395,9 @@ function modify_masked_genome_coords () {
                                    if (i ~ /_/) { printf "@SQ\tSN:%s\tLN:%s\tAH:*\n", i, size_arr[i]; } \
                                    else { printf "@SQ\tSN:%s\tLN:%s\n", i, size_arr[i]; }}} \
            NR > FNR && $0 !~ /^@SQ/ && $0 ~ /^@/{print;}' ${ref_contig_sizes} - | \
-    mawk -v pc_tag="${pc_index}" 'BEGIN{FS=OFS="\t";} \
+    mawk -v rg_tag="${rg_index}" 'BEGIN{FS=OFS="\t";} \
                                    $0 ~ /^@/ {print;} \
-                                   $0 !~ /^@/ {printf "%s:%s", $1, pc_tag; \
+                                   $0 !~ /^@/ {printf "%s:%s", $1, rg_tag; \
                                                for (i=2;i<NF;i++) printf "\t%s", $i;
                                                printf "\t%s\n", $NF;}' - | uniq -
 }
@@ -418,7 +418,7 @@ function independent_minimap2_masked () {
             t) local threads=$OPTARG ;;
             z) local ref_contig_sizes=$OPTARG ;;
             m) local mode=$OPTARG ;;
-            i) local pc_index=$OPTARG ;;
+            i) local rg_index=$OPTARG ;;
             c) local nm_cutoff=$OPTARG ;;
             *) echo "No argument passed. Pls at least specify -r (ref fasta path) or -b (bed_file path)." ;;
         esac
@@ -455,7 +455,7 @@ function independent_minimap2_masked () {
     ${masked_genome/.fasta/.mmi} ${forward_reads} ${reverse_reads}" && \
     minimap2 -ax ${mode} --eqx --MD -F 1000 -t ${threads} -R "@RG\tID:${samp_ID}\tLB:SureSelectXT\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}" \
     ${masked_genome/.fasta/.mmi} ${forward_reads} ${reverse_reads} > ${mid_align} && \
-    modify_masked_genome_coords ${mid_align} ${ref_contig_sizes} ${pc_index} | \
+    modify_masked_genome_coords ${mid_align} ${ref_contig_sizes} ${rg_index} | \
     samtools view -S -b - | samtools sort -O bam -o ${output_align} && \
     samtools index ${output_align}
 
@@ -478,7 +478,7 @@ function bcftools_call_per_PC {
             b) local masked_bam=$OPTARG ;;
             o) local output_vcf=$OPTARG ;;
             c) local cpu_threads=$OPTARG ;;
-            p) local pc_tag=$OPTARG ;;
+            p) local rg_tag=$OPTARG ;;
             *) echo "No argument passed. Pls at least specify -s (priority component bed files) or -t (whole region bed path), -a (input align file), -m (masked genomes paths)." ;;
         esac
     done
@@ -504,7 +504,7 @@ function bcftools_call_per_PC {
     mawk 'BEGIN{FS=OFS="\t";} {printf "%s\t%s\t%s\t%s\t%s", $1, $2, $3, toupper($4), toupper($5); \
                             for(i=6;i<=NF;i++) {printf "\t%s", $i; } \
                             printf "\n"; }' - | \
-    bcftools filter --threads ${cpu_threads} -e 'GT != "mis"' -s "${pc_tag}" - | \
+    bcftools filter --threads ${cpu_threads} -e 'GT != "mis"' -s "${rg_tag}" - | \
     bcftools sort -Oz -o ${output_vcf} && \
     tabix -f -p vcf ${output_vcf} && \
     display_table ${output_vcf}

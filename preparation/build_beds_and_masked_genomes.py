@@ -24,7 +24,7 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
                                   avg_frag_size = 400,
                                   std_frag_size = 140):
     # Label SD-paralog pairs. Name disconnected qnodes as PC0, connected qnodes as PC1, PC2, ...
-    all_PC_regions = []
+    all_RG_regions = []
     
     for r in grouped_qnode_cnodes:
         new_r = {"PCs": {}, "SD_counterparts": {}}
@@ -32,10 +32,10 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
             fc_node = r["PCs"][i]
             new_r['PCs'][i] = [fc_node]
             new_r['SD_counterparts'][i] = sd_paralog_pairs[fc_node]
-        all_PC_regions.append(new_r)
+        all_RG_regions.append(new_r)
 
     # Load balancing
-    all_PC_regions = sorted(all_PC_regions, key = lambda x: sum(v[0][2] - v[0][1] for k,v in x["PCs"].items()) * sum(len(v) for k,v in x["SD_counterparts"].items()), reverse=True)
+    all_RG_regions = sorted(all_RG_regions, key = lambda x: sum(v[0][2] - v[0][1] for k,v in x["PCs"].items()) * sum(len(v) for k,v in x["SD_counterparts"].items()), reverse=True)
     labels = [ "PC" + str(n) for n in range(0, len(grouped_qnode_cnodes))]
 
     # output BAMs generated here are intrinsic BAM files in the manuscript
@@ -64,8 +64,8 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
     # Fourth, extract all PC*_related_homo_regions.bed file and concat them together.
     beds = glob(os.path.join(output_folder, "*/*_all/", "*_related_homo_regions.bed"))
     combined_bed = merge_bed_files(beds)
-    combined_bed.saveas(os.path.join(output_folder, "all_PC_related_homo_regions.bed"))
-    # combined_bed.saveas(os.path.join(output_folder, "all_PC_regions.bed"))
+    combined_bed.saveas(os.path.join(output_folder, "all_RG_related_homo_regions.bed"))
+    # combined_bed.saveas(os.path.join(output_folder, "all_RG_regions.bed"))
     
     # Fifth, extract all intrinsic vcfs and use bcftools to concat them together
     intrinsic_vcfs = []
@@ -74,7 +74,7 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
             if re.search(r'PC[0-9]+\.raw\.vcf\.gz$', file):
                 intrinsic_vcfs.append(os.path.join(root, file))
     
-    final_intrinsic_vcf = os.path.join(output_folder, "all_pc_region_intrinsic_variants.vcf.gz")
+    final_intrinsic_vcf = os.path.join(output_folder, "all_rg_region_intrinsic_variants.vcf.gz")
     combine_vcfs(*intrinsic_vcfs, output=final_intrinsic_vcf)
 
     for future in concurrent.futures.as_completed(futures):
@@ -86,8 +86,8 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
             logger.error(f"Error processing a region: {e}")
 
     ## Merge all PC BED files
-    all_PC_regions_out = os.path.join(outd, "all_PC.bed")
-    merge_bed_files(output_beds).saveas(all_PC_regions_out)
+    all_RG_regions_out = os.path.join(outd, "all_PC.bed")
+    merge_bed_files(output_beds).saveas(all_RG_regions_out)
 
     ## Reheader using the first BAM and merge all output BAMs with the new header
     merged_bam_out = os.path.join(outd, "total_intrinsic.bam")
@@ -125,7 +125,7 @@ def create_bam_header_from_fasta(input_bam: str, ref_fasta: str) -> pysam.Alignm
     new_header = pysam.AlignmentHeader.from_dict(header_dict)  # type: ignore
     return new_header
 
-def create_pc_bed(cluster_dict, bed_out = "", label = "PC0") -> None:
+def create_rg_bed(cluster_dict, bed_out = "", label = "PC0") -> None:
     
     # Tabulate query nodes and counterpart nodes in a BED for each PC region
     with open(bed_out, "w") as f:
@@ -150,13 +150,13 @@ def create_pc_bed(cluster_dict, bed_out = "", label = "PC0") -> None:
     contig_sizes = ref_genome.replace(".fasta", ".fasta.fai")
     
     # Prepare masked genomes
-    masked_genome_path = os.path.join( os.path.dirname(paths["PC_bed"]), label + ".masked.fasta")
-    masked_genome = Genome(ref_genome).mask(paths["PC_bed"], avg_frag_size = avg_frag_size, std_frag_size=std_frag_size, genome=contig_sizes, logger=logger, path=masked_genome_path)
+    masked_genome_path = os.path.join( os.path.dirname(paths["RG_bed"]), label + ".masked.fasta")
+    masked_genome = Genome(ref_genome).mask(paths["RG_bed"], avg_frag_size = avg_frag_size, std_frag_size=std_frag_size, genome=contig_sizes, logger=logger, path=masked_genome_path)
     
     # Call intrinsic variants
-    bam_path = getIntrinsicVcf( pc_bed = paths["PC_bed"], 
+    bam_path = getIntrinsicVcf( rg_bed = paths["RG_bed"], 
                                 all_homo_regions_bed = paths["All_region_bed"], 
-                                pc_masked = masked_genome,
+                                rg_masked = masked_genome,
                                 ref_genome = ref_genome,
                                 avg_frag_size = avg_frag_size,
                                 std_frag_size = std_frag_size,

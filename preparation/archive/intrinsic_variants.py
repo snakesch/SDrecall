@@ -7,9 +7,9 @@ from src.const import *
 
 logger = logging.getLogger("SDrecall")
 
-def getIntrinsicVcf(pc_bed, 
+def getIntrinsicVcf(rg_bed, 
                     all_homo_regions_bed, 
-                    pc_masked,
+                    rg_masked,
                     ref_genome, 
                     avg_frag_size = 400,
                     std_frag_size = 120,
@@ -22,9 +22,9 @@ def getIntrinsicVcf(pc_bed,
     file containing the identified variants.
 
     Parameters:
-    - pc_bed (str): Path to the BED file of the PC region.
+    - rg_bed (str): Path to the BED file of the PC region.
     - all_homo_regions_bed (str): Path to the BED file of all homologous regions (SD counterparts) related to the PC region.
-    - pc_masked (str): Path to the masked genome in FASTA format.
+    - rg_masked (str): Path to the masked genome in FASTA format.
     - ref_genome (str): Path to the reference genome used for mapping.
     - avg_frag_size (int): Average fragment size of NGS reads. (400)
     - std_frag_size (int): Standard deviation of fragment size of NGS reads. (120)
@@ -36,26 +36,26 @@ def getIntrinsicVcf(pc_bed,
     
 
     fastq_dir = os.path.dirname(all_homo_regions_bed)
-    vcf_dir = os.path.dirname(pc_bed)
+    vcf_dir = os.path.dirname(rg_bed)
     raw_fq_path = os.path.join(fastq_dir, os.path.basename(all_homo_regions_bed)[:-3] + "raw.fastq")
-    bam_path = os.path.join(vcf_dir, os.path.basename(pc_bed)[:-3] + "raw.bam")
+    bam_path = os.path.join(vcf_dir, os.path.basename(rg_bed)[:-3] + "raw.bam")
     vcf_path = bam_path.replace(".bam", ".vcf.gz")
-    pc_label = os.path.basename(pc_bed.replace(".bed",""))
+    rg_label = os.path.basename(rg_bed.replace(".bed",""))
         
     # Reference sequences of SD counterparts are extracted from reference genome
     raw_fq_path = getRawseq(all_homo_regions_bed, raw_fq_path, ref_genome, padding = avg_frag_size + std_frag_size)
-    logger.info(f"Reference sequences for calling intrinsic variants from {pc_bed} are written to: {raw_fq_path}")
+    logger.info(f"Reference sequences for calling intrinsic variants from {rg_bed} are written to: {raw_fq_path}")
     
     # Retrieved counterpart sequences are mapped against masked genomes using minimap2
-    if not os.path.exists(bam_path) or not is_file_up_to_date(bam_path, [pc_masked, shell_utils, os.path.abspath(__file__)]):
-        pc_masked_index = pc_masked.replace(".fasta", ".mmi")
+    if not os.path.exists(bam_path) or not is_file_up_to_date(bam_path, [rg_masked, shell_utils, os.path.abspath(__file__)]):
+        rg_masked_index = rg_masked.replace(".fasta", ".mmi")
         cmd = f"source {shell_utils} && independent_minimap2_masked \
                 -f {raw_fq_path} \
-                -a {pc_masked} \
+                -a {rg_masked} \
                 -o {bam_path} \
                 -s all_PC \
                 -t {threads} \
-                -i {pc_label} \
+                -i {rg_label} \
                 -m asm20 \
                 -g {ref_genome}"
         executeCmd(cmd, logger=logger)
