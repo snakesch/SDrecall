@@ -119,16 +119,16 @@ def calculate_inferred_coverage(bam_file,
     return depth_df
 
 
-def pick_region_by_depth(input_bam: str,
-                output_bed: str,
-                MQ_threshold=41,
-                high_quality_depth=10, 
-                minimum_depth=3,
-                target_region=None,
-                multialign_frac = 0.7,
-                threads=10,
-                genome_file="",
-                logger=logger):
+def pick_multialigned_regions(input_bam: str,
+                              output_bed: str,
+                              MQ_threshold=41,
+                              high_quality_depth=10, 
+                              minimum_depth=3,
+                              target_region=None,
+                              multialign_frac = 0.7,
+                              threads=10,
+                              genome_file="",
+                              logger=logger):
     '''
     Consolidate read depths computed with 4 different settings and derive a set of recall regions
     '''

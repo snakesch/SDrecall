@@ -120,7 +120,7 @@ def calculate_inferred_coverage(bam_file,
     logger.debug("Inferred coverage of {} bases:\n{}".format(depth_df.shape[0], depth_df.head(5).to_string(index=False)))
     return depth_df
 
-def pick_region_by_depth(input_bam: str,
+def pick_multialigned_regions(input_bam: str,
                 output_bed: str,
                 MQ_threshold=41,
                 high_quality_depth=10, 

@@ -43,7 +43,7 @@ def preparation(ref_genome: str,
     
     # Step 1 : Pick the multi_aligned regions within the target regions
     if not os.path.exists(multi_align_bed) or not is_file_up_to_date(multi_align_bed, [input_bam, target_bed]):
-        multi_align_bed = pick_region_by_depth(input_bam, 
+        multi_align_bed = pick_multialigned_regions(input_bam, 
                                         multi_align_bed, 
                                         MQ_threshold=41, 
                                         high_quality_depth=10, 
@@ -161,7 +161,7 @@ def preparation(ref_genome: str,
     # final_graph = graph.copy()
     # for i, result in enumerate(grouped_qnode_cnodes):
     #     tag = "PC" + str(i)
-    #     for node in result["PCs"]:
+    #     for node in result["SD_qnodes"]:
     #         if not isinstance(node, tuple):
     #             raise TypeError(f"Expected {node} (type: {type(node)}) to be tuple.")
     #         final_graph.nodes[node]["FC"] = ",".join([e for e in list(dict.fromkeys(final_graph.nodes[node].get("FC", "").split(",") + [tag])) if len(e) > 0])
@@ -181,7 +181,7 @@ def preparation(ref_genome: str,
                                     std_frag_size = std_frag_size)
 
 def main():
-    parser = argparse.ArgumentParser(description='Deploy PCs for SDrecall.')
+    parser = argparse.ArgumentParser(description='Deploy SD_qnodes for SDrecall.')
 
     parser.add_argument('-r', '--ref_genome', required=True, help='Path to the reference genome.')
     parser.add_argument('-d', '--work_dir', required=True, help='Base directory for output files.')

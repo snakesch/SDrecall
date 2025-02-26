@@ -281,7 +281,7 @@ def query_connected_nodes(sd_paralog_pairs,
     for group in unique_qnodes:
         sd_counterparts = [cnode for qnode in group for cnode in sd_paralog_pairs[qnode]]
         assert isinstance(sd_counterparts[0], HOMOSEQ_REGION)
-        grouped_result = { "PCs": group, "SD_counterparts": sd_counterparts }
+        grouped_result = { "SD_qnodes": group, "SD_counterparts": sd_counterparts }
         if len(group) == 0:
             logger.warning(f"Empty group in the unique_qnodes: {unique_qnodes}")
         elif len(sd_counterparts) == 0:

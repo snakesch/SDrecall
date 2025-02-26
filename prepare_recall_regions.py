@@ -40,8 +40,8 @@ def preparation(paths: SDrecallPaths,
     target_bed = paths.target_bed
     
     # Use path methods for all file access
-    multi_align_bed = paths.get_multi_align_bed_path()
-    graph_path = paths.get_multiplex_graph_path()
+    multi_align_bed = paths.multi_align_bed_path()
+    graph_path = paths.multiplex_graph_path()
     
     # Make sure output directory exists
     outdir = paths.work_dir
@@ -50,45 +50,33 @@ def preparation(paths: SDrecallPaths,
     # Step 0: Calculate the distribution of fragment sizes
     _, avg_frag_size,std_frag_size = get_insert_size_distribution(input_bam)
     logger.info(f"BAM {input_bam} has an average fragment size of {avg_frag_size}bp (std: {std_frag_size}bp)")
-    
-    ## Define names of intermediate files. Intermediate / final outputs will be written to work_dir.
-    basename = os.path.basename(input_bam).replace(".bam", "")
 
-    # Step 0: Calculate the insert size distribution
-    avg_insert_size, _, std_insert_size = get_insert_size_distribution(input_bam)
-    logger.info(f"BAM {input_bam} has average fragment size {avg_insert_size:.1f}bp (std: {std_insert_size:.1f}bp)")
     
     # Step 1 : Pick the multi_aligned regions within the target regions
     if not os.path.exists(multi_align_bed) or not is_file_up_to_date(multi_align_bed, [input_bam, target_bed]):
-        multi_align_bed = pick_region_by_depth(input_bam, 
-                                        multi_align_bed, 
-                                        MQ_threshold=mq_threshold, 
-                                        high_quality_depth=high_quality_depth, 
-                                        minimum_depth=minimum_depth, 
-                                        multialign_frac=multialign_frac,
-                                        target_region=target_bed, 
-                                        genome_file=paths.ref_genome)
+        multi_align_bed = pick_multialigned_regions(input_bam, 
+                                                    multi_align_bed, 
+                                                    MQ_threshold=mq_threshold, 
+                                                    high_quality_depth=high_quality_depth, 
+                                                    minimum_depth=minimum_depth, 
+                                                    multialign_frac=multialign_frac,
+                                                    target_region=target_bed, 
+                                                    genome_file=ref_genome )
 
     multi_align_bed_obj = pb.BedTool(multi_align_bed).sort()
     logger.info("The multialign bed extracted from {} is {} and it covers {} bp.".format(input_bam,
-                                                                                      multi_align_bed,
-                                                                                      multi_align_bed_obj.total_coverage()))
+                                                                                         multi_align_bed,
+                                                                                         multi_align_bed_obj.total_coverage()))
     
-    # Step 2: Compare paired SD regions with the reference SD map to identify SD regions associated with mapping ambiguity
-    ref_bed_obj = pb.BedTool(paths.reference_sd_map)
-    logger.info("Total coverage of reference SD map: {}bp".format(ref_bed_obj.sort().total_coverage()))
 
-    logger.info("The multialign BED is {} and it covers {} bp.".format(multi_align_bed_fp, multi_align_bed.total_coverage()))
-
-    # - Development code below - #
     # Step 2. Load reference SD map; trim the SD coordinates and filter by size
-    # total_bin_sd_df = combine_and_filter_sd_map(multi_align_bed, reference_sd_map, avg_insert_size, outdir, threads)
+    # The reference SD map is already expanded, either interval of a pair of SDs are present in the first 3 columns once.
     ref_bed_obj = pb.BedTool(paths.reference_sd_map).sort()
     logger.info("Total coverage of reference SD map: {}bp".format(ref_bed_obj.total_coverage()))
 
     ## Filter out SD regions smaller than average insert size.
-    big_ref_bed_obj = ref_bed_obj.filter(lambda x: len(x) > avg_insert_size).saveas() ## .saveas makes the BedTool object persistent in memory
-    logger.info(f"After excluding paired reference SDs with fragment size < {avg_insert_size:.1f}bp, the reference SD map covers {big_ref_bed_obj.total_coverage()}bp. ")
+    big_ref_bed_obj = ref_bed_obj.filter(lambda x: len(x) > avg_frag_size).saveas() ## .saveas makes the BedTool object persistent in memory
+    logger.info(f"After excluding paired reference SDs with fragment size < {avg_frag_size:.1f}bp, the reference SD map covers {big_ref_bed_obj.total_coverage()}bp. ")
 
     # Step 3: Compare multialigned BED regions to the reference SD map to identify SD regions with mapping ambiguity
     total_bin_sd_bed = big_ref_bed_obj.intersect(multi_align_bed, wo=True)
@@ -105,14 +93,14 @@ def preparation(paths: SDrecallPaths,
                                                                                     "chr_bam1", "start_bam1", "end_bam1", "mismatch_rate", "overlap_len"]].drop_duplicates().dropna()
     logger.debug("Raw SD map contains {} regions. (saved to {})".format(total_bin_sd_df.shape[0], os.path.join(outdir + "raw_SD_binary_map.tsv")))
     
+    # Convert the both negative strand SDs to both positive strand SDs
     both_neg_strand = (total_bin_sd_df.loc[:, "strand1"] == "-") & (total_bin_sd_df.loc[:, "strand2"] == "-")
     reverse_strand_dict = {"-": "+", "+": "-"}
     total_bin_sd_df.loc[both_neg_strand, "strand1"] = total_bin_sd_df.loc[both_neg_strand, "strand1"].map(reverse_strand_dict)
     total_bin_sd_df.loc[both_neg_strand, "strand2"] = total_bin_sd_df.loc[both_neg_strand, "strand2"].map(reverse_strand_dict)
                                                            
-    ## One XA region (represented as *_bam1) can overlap multiple SDs, keep only the minimal set of SDs with sufficient overlap
+    ## One multi-align interval (represented as *_bam1) can overlap multiple SDs, keep only the minimal set of SDs with sufficient overlap
     by_bam_region = [ g for _, g in total_bin_sd_df.groupby(["chr_bam1", "start_bam1", "end_bam1"], as_index=False) ]
-
     with Pool(threads) as pool:
         results = pool.imap_unordered(filter_umbrella_pairs, by_bam_region)
         total_bin_sd_df = pd.concat(results, axis=0, ignore_index=True).loc[:, ["chr_1", "start_1", "end_1", "strand1",
@@ -130,7 +118,7 @@ def preparation(paths: SDrecallPaths,
     logger.debug(f"Final SD map has shape {total_bin_sd_df.shape} and looks like: \n{total_bin_sd_df.head(5).to_string(index=False)}")
     
     # Step 4: Create a multiplex graph with SD and PO edges
-    if os.path.exists(graph_path) and is_file_up_to_date(graph_path, [input_bam]):
+    if os.path.exists(graph_path) and is_file_up_to_date(graph_path, [input_bam, target_bed]):
         graph = read_graphml(graph_path)
     else:
         graph = create_multiplex_graph( total_bin_sd_df, graph_path, threads = threads)
@@ -143,9 +131,9 @@ def preparation(paths: SDrecallPaths,
     
     ## Extract SD + PO BED regions with depth issues caused by mapping ambiguity
     intersect_df = graph_bed.intersect(multi_align_bed.merge(), wo=True).to_dataframe(disable_auto_names=True, names=["chrA", "startA", "endA", "strandA", 
-                                                                                                                            "chrB", "startB", "endB", "strandB",
-                                                                                                                            "mismatch_rate",
-                                                                                                                            "chr_target", "start_target", "end_target", "overlap_len"])
+                                                                                                                      "chrB", "startB", "endB", "strandB",
+                                                                                                                      "mismatch_rate",
+                                                                                                                      "chr_target", "start_target", "end_target", "overlap_len"])
     ## Sanity check
     intersect_df = intersect_df.loc[(intersect_df["endA"] > intersect_df["startA"]) & \
                                     (intersect_df["end_target"] > intersect_df["start_target"]) & \
@@ -163,12 +151,12 @@ def preparation(paths: SDrecallPaths,
     query_nodes = intersect_df.loc[:, ["chrA", "startA", "endA", "strandA"]].drop_duplicates().rename(columns={"chrA":"chr", "startA":"start", "endA":"end", "strandA":"strand"})
     if logger.level == logging.DEBUG:
         final_query_bed = pb.BedTool.from_dataframe(query_nodes)
-        final_query_bed.intersect(multi_align_bed, wo=True).saveas(os.path.join(outdir, basename + "target_overlapping_query_SD.bed")) # renamed from coding_query_nodes.bed
-        logger.debug("Target-overlapping SD regions saved to: {}".format(os.path.join(outdir, basename + "target_overlapping_query_SD.bed")))
+        final_query_bed.intersect(multi_align_bed, wo=True).saveas(paths.target_overlapping_query_sd_bed_path()) # renamed from coding_query_nodes.bed
+        logger.debug("Target-overlapping SD regions saved to: {}".format(paths.target_overlapping_query_sd_bed_path()))
     logger.info("Identified {} distinct target-overlapping SDs from graph".format(query_nodes.shape[0]))
 
     # Step 5. Pool all SD nodes and the corresponding paralogous regions from the SD + PO graph
-    final_graph_path = graph_path.replace(".graphml", ".trim.annoPC.graphml")
+    final_graph_path = paths.annotated_graph_path()
     sd_paralog_pairs, connected_qnode_components = extract_SD_paralog_pairs_from_graph( query_nodes, 
                                                                                         graph, 
                                                                                         graph_path = final_graph_path, 
@@ -185,7 +173,7 @@ def preparation(paths: SDrecallPaths,
     # final_graph = graph.copy()
     # for i, result in enumerate(grouped_qnode_cnodes):
     #     tag = "PC" + str(i)
-    #     for node in result["PCs"]:
+    #     for node in result["SD_qnodes"]:
     #         if not isinstance(node, tuple):
     #             raise TypeError(f"Expected {node} (type: {type(node)}) to be tuple.")
     #         final_graph.nodes[node]["FC"] = ",".join([e for e in list(dict.fromkeys(final_graph.nodes[node].get("FC", "").split(",") + [tag])) if len(e) > 0])
@@ -200,12 +188,12 @@ def preparation(paths: SDrecallPaths,
                                   sd_paralog_pairs = sd_paralog_pairs,
                                   output_folder = outdir,
                                   ref_genome = ref_genome,
-                                  nthreads = threads,
-                                  avg_frag_size = avg_frag_size,
-                                  std_frag_size = std_frag_size)
+                                  intrinsic_bams = paths.all_intrinsic_bam_paths(),
+                                  total_intrinsic_bam = paths.total_intrinsic_bam_path(),
+                                  nthreads = threads)
 
 def main():
-    parser = argparse.ArgumentParser(description='Deploy PCs for SDrecall.')
+    parser = argparse.ArgumentParser(description='Deploy SD_qnodes for SDrecall.')
 
     parser.add_argument('-r', '--ref_genome', required=True, help='Path to the reference genome. Currently only accept hg19 and hg38')
     parser.add_argument('-o', '--outdir', required=True, help='Base directory for output files.')

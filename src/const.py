@@ -1,7 +1,7 @@
 import os
-import uuid
 import re
-from typing import Dict, List, Optional, Tuple
+import shutil
+from typing import Dict, List, Set
 
 shell_utils = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'shell_utils.sh')
 
@@ -31,7 +31,8 @@ class SDrecallPaths:
                   output_dir: str,
                   target_bed: str = "",
                   sample_id: str = None, 
-                  target_tag: str = None):
+                  target_tag: str = None,
+                  clean_dirs: bool = True):
         """
         Initialize the singleton instance with the provided parameters.
         
@@ -43,6 +44,7 @@ class SDrecallPaths:
             target_bed: Optional path to target BED file
             sample_id: Optional sample identifier (extracted from BAM if not provided)
             target_tag: Optional target region tag (extracted from target_bed if not provided)
+            clean_dirs: Whether to clean existing content in work directories
         
         Returns:
             The initialized SDrecallPaths instance
@@ -54,7 +56,8 @@ class SDrecallPaths:
             output_dir=output_dir,
             target_bed=target_bed,
             sample_id=sample_id,
-            target_tag=target_tag
+            target_tag=target_tag,
+            clean_dirs=clean_dirs
         )
         return cls._instance
     
@@ -65,7 +68,8 @@ class SDrecallPaths:
                 output_dir: str,
                 target_bed: str = "",
                 sample_id: str = None, 
-                target_tag: str = None):
+                target_tag: str = None,
+                clean_dirs: bool = True):
         """
         Initialize the path manager with key inputs.
         
@@ -77,6 +81,7 @@ class SDrecallPaths:
             target_bed: Optional path to target BED file
             sample_id: Optional sample identifier (extracted from BAM if not provided)
             target_tag: Optional target region tag (extracted from target_bed if not provided)
+            clean_dirs: Whether to clean existing content in work directories
         """
         # Store input file paths
         self.ref_genome = os.path.abspath(ref_genome)
@@ -101,16 +106,18 @@ class SDrecallPaths:
         
         # Generate base directory name under output_dir
         base_name = "_".join(dir_parts)
+        self.basename = base_name
         self.work_dir = os.path.join(self.output_dir, base_name)
         
         # Make sure the work_dir exists
         os.makedirs(self.work_dir, exist_ok=True)
         
-        # Create standard directory structure
-        self.dirs = self._initialize_directories()
+        # Track realign groups
+        self.realign_groups = set()
         
-        # Store the basename for file naming
-        self.basename = os.path.basename(self.input_bam).replace(".bam", "")
+        # Create standard directory structure
+        self.dirs = self._initialize_directories(clean_dirs)
+        
     
     def _extract_assembly_version(self, reference_sd_map: str, ref_genome: str) -> str:
         """Extract assembly version from reference SD map path and reference genome"""
@@ -144,110 +151,198 @@ class SDrecallPaths:
     def _extract_target_tag(self, target_bed: str) -> str:
         """Extract target tag from target BED filename"""
         if not target_bed:
-            return "whole_genome"
+            return "exome"
+        if "default_target" in target_bed:
+            return "exome"
             
         bed_name = os.path.basename(target_bed)
         # Get first part of filename delimited by dot
         return bed_name.split('.')[0]
     
-    def _initialize_directories(self) -> Dict[str, str]:
-        """Set up the standard directory structure"""
+    def _clean_directory(self, directory: str) -> None:
+        """Remove all content from a directory"""
+        if os.path.exists(directory):
+            for item in os.listdir(directory):
+                item_path = os.path.join(directory, item)
+                if os.path.isfile(item_path):
+                    os.unlink(item_path)
+                elif os.path.isdir(item_path):
+                    shutil.rmtree(item_path)
+    
+    def _initialize_directories(self, clean_dirs: bool = True) -> Dict[str, str]:
+        """
+        Set up the standard directory structure
+        
+        Args:
+            clean_dirs: Whether to clean existing directory contents
+        """
         dirs = {
             "root": self.work_dir,
-            "recall_results": os.path.join(self.work_dir, "recall_results")
+            "recall_results": os.path.join(self.work_dir, "recall_results"),
+            "realign_groups": os.path.join(self.work_dir, "realign_groups")
         }
         
-        # Create directories if they don't exist
-        for dir_path in dirs.values():
+        # Create directories if they don't exist and clean if requested
+        for dir_name, dir_path in dirs.items():
             os.makedirs(dir_path, exist_ok=True)
+            if clean_dirs and dir_name != "root":  # Don't clean root dir
+                self._clean_directory(dir_path)
             
         return dirs
     
+    def register_realign_group(self, rg_label_or_index) -> None:
+        """
+        Register a realign group to track it
+        
+        Args:
+            rg_label_or_index: Either an RG label ("RG0") or an index (0)
+        """
+        rg_label = self._normalize_rg_label(rg_label_or_index)
+        self.realign_groups.add(rg_label)
+        
+        # Ensure the RG directory exists
+        rg_dir = self.rg_dir(rg_label)
+        os.makedirs(rg_dir, exist_ok=True)
+    
+    def _normalize_rg_label(self, rg_label_or_index) -> str:
+        """
+        Convert various inputs to a standardized RG label format.
+        
+        Args:
+            rg_label_or_index: Either an RG label ("RG0") or an index (0)
+            
+        Returns:
+            Standardized RG label in the format "RG{index}"
+            
+        Raises:
+            ValueError: If the input can't be converted to a valid RG label
+        """
+        # If it's an integer, format as "RG{index}"
+        if isinstance(rg_label_or_index, int):
+            return f"RG{rg_label_or_index}"
+        
+        # If it's a string
+        if isinstance(rg_label_or_index, str):
+            # If it's a numeric string, treat as index
+            if rg_label_or_index.isdigit():
+                return f"RG{rg_label_or_index}"
+            
+            # If it already matches the RG pattern, use directly
+            if re.match(r'^RG\d+$', rg_label_or_index):
+                return rg_label_or_index
+        
+        # Invalid input
+        raise ValueError(f"Invalid RG label or index: {rg_label_or_index}. "
+                         f"Must be an integer, numeric string, or string matching 'RG<digits>' pattern.")
+    
+    def get_all_realign_groups(self) -> Set[str]:
+        """Get all registered realign groups"""
+        return self.realign_groups
+    
     # File path getter methods
-    def get_multi_align_bed_path(self) -> str:
-        """Get path for multi-aligned regions BED file"""
-        return os.path.join(self.dirs["intermediate"], f"{self.basename}.{self.target_tag}.multialign.bed")
+    def multi_align_bed_path(self) -> str:
+        """Path for multi-aligned regions BED file"""
+        return os.path.join(self.dirs["root"], f"{self.basename}.{self.target_tag}.multialign.bed")
     
-    def get_raw_sd_binary_map_path(self) -> str:
-        """Get path for raw SD binary map"""
-        return os.path.join(self.dirs["intermediate"], "raw_SD_binary_map.tsv")
+    def raw_sd_binary_map_path(self) -> str:
+        """Path for raw SD binary map"""
+        return os.path.join(self.dirs["root"], "raw_SD_binary_map.tsv")
     
-    def get_filtered_sd_binary_map_path(self) -> str:
-        """Get path for filtered SD binary map"""
-        return os.path.join(self.dirs["intermediate"], "filtered_SD_binary_map.tsv")
+    def filtered_sd_binary_map_path(self) -> str:
+        """Path for filtered SD binary map"""
+        return os.path.join(self.dirs["root"], "filtered_SD_binary_map.tsv")
     
-    def get_multiplex_graph_path(self) -> str:
+    def multiplex_graph_path(self) -> str:
         """Get path for multiplex graph"""
-        return os.path.join(self.dirs["intermediate"], f"{self.basename}-multiplexed_homologous_sequences.graphml")
+        return os.path.join(self.dirs["root"], f"{self.basename}-multiplexed_SDs.graphml")
     
-    def get_annotated_graph_path(self) -> str:
+    def annotated_graph_path(self) -> str:
         """Get path for annotated graph"""
-        return self.get_multiplex_graph_path().replace(".graphml", ".trim.annoPC.graphml")
+        return self.multiplex_graph_path().replace(".graphml", ".trim.annoPC.graphml")
     
-    def get_directed_graph_path(self, chrom: str) -> str:
+    def directed_graph_path(self, chrom: str) -> str:
         """Get path for directed graph for a specific chromosome"""
-        return self.get_multiplex_graph_path().replace(".graphml", f".directed.overlap.{chrom}.graphml")
+        return self.multiplex_graph_path().replace(".graphml", f".directed.overlap.{chrom}.graphml")
     
-    def get_target_overlapping_query_sd_bed_path(self) -> str:
+    def target_overlapping_query_sd_bed_path(self) -> str:
         """Get path for target overlapping query SD BED"""
-        return os.path.join(self.dirs["intermediate"], f"{self.basename}target_overlapping_query_SD.bed")
+        return os.path.join(self.dirs["root"], f"{self.basename}target_overlapping_query_SD.bed")
     
-    def get_rg_dir(self, rg_label: str) -> str:
-        """Get directory for a specific PC cluster"""
-        rg_dir = os.path.join(self.dirs["rg_clusters"], rg_label)
+    # RG (Realign Group) related paths and directories
+    def rg_dir(self, rg_label_or_index) -> str:
+        """Get directory for a specific RG"""
+        rg_label = self._normalize_rg_label(rg_label_or_index)
+        rg_dir = os.path.join(self.dirs["realign_groups"], rg_label)
         os.makedirs(rg_dir, exist_ok=True)
         return rg_dir
     
-    def get_rg_counterparts_dir(self, rg_label: str) -> str:
-        """Get directory for PC counterparts"""
-        counterparts_dir = os.path.join(self.get_rg_dir(rg_label), f"{rg_label}_counterparts")
-        os.makedirs(counterparts_dir, exist_ok=True)
-        return counterparts_dir
+    def rg_bed_path(self, rg_label_or_index) -> str:
+        """Path for RG bed file"""
+        rg_label = self._normalize_rg_label(rg_label_or_index)
+        return os.path.join(self.rg_dir(rg_label), f"{rg_label}.bed")
     
-    def get_rg_all_dir(self, rg_label: str) -> str:
-        """Get directory for all PC-related regions"""
-        all_dir = os.path.join(self.get_rg_dir(rg_label), f"{rg_label}_all")
-        os.makedirs(all_dir, exist_ok=True)
-        return all_dir
+    def counterparts_bed_path(self, rg_label_or_index) -> str:
+        """Path for counterparts bed file"""
+        rg_label = self._normalize_rg_label(rg_label_or_index)
+        return os.path.join(self.rg_dir(rg_label), f"{rg_label}_counterparts.bed")
     
-    def get_rg_main_dir(self, rg_label: str) -> str:
-        """Get main directory for PC"""
-        main_dir = os.path.join(self.get_rg_dir(rg_label), rg_label)
-        os.makedirs(main_dir, exist_ok=True)
-        return main_dir
+    def all_homo_regions_bed_path(self, rg_label_or_index) -> str:
+        """Path for all homologous regions bed file"""
+        rg_label = self._normalize_rg_label(rg_label_or_index)
+        return os.path.join(self.rg_dir(rg_label), f"{rg_label}_related_homo_regions.bed")
     
-    def get_rg_bed_path(self, rg_label: str) -> str:
-        """Get path for PC bed file"""
-        return os.path.join(self.get_rg_main_dir(rg_label), f"{rg_label}.bed")
-    
-    def get_counterparts_bed_path(self, rg_label: str) -> str:
-        """Get path for counterparts bed file"""
-        return os.path.join(self.get_rg_counterparts_dir(rg_label), f"{rg_label}_counterparts_regions.bed")
-    
-    def get_all_homo_regions_bed_path(self, rg_label: str) -> str:
-        """Get path for all homologous regions bed file"""
-        return os.path.join(self.get_rg_all_dir(rg_label), f"{rg_label}_related_homo_regions.bed")
-    
-    def get_all_homo_regions_fastq_path(self, rg_label: str) -> str:
+    def all_homo_regions_fastq_path(self, rg_label_or_index) -> str:
         """Get path for all homologous regions fastq file"""
-        return os.path.join(self.get_rg_all_dir(rg_label), f"{rg_label}_related_homo_regions.raw.fastq")
+        rg_label = self._normalize_rg_label(rg_label_or_index)
+        return os.path.join(self.rg_dir(rg_label), f"{rg_label}_related_homo_regions.raw.fastq")
     
-    def get_masked_genome_path(self, rg_label: str) -> str:
+    def masked_genome_path(self, rg_label_or_index) -> str:
         """Get path for masked genome"""
-        return os.path.join(self.get_rg_main_dir(rg_label), f"{rg_label}.masked.fasta")
+        rg_label = self._normalize_rg_label(rg_label_or_index)
+        return os.path.join(self.rg_dir(rg_label), f"{rg_label}.masked.fasta")
     
-    def get_masked_genome_fai_path(self, rg_label: str) -> str:
+    def masked_genome_fai_path(self, rg_label_or_index) -> str:
         """Get path for masked genome FAI index"""
-        return f"{self.get_masked_genome_path(rg_label)}.fai"
+        rg_label = self._normalize_rg_label(rg_label_or_index)
+        return f"{self.masked_genome_path(rg_label)}.fai"
     
-    def get_masked_genome_contigsize_path(self, rg_label: str) -> str:
+    def masked_genome_contigsize_path(self, rg_label_or_index) -> str:
         """Get path for masked genome contig size file"""
-        return os.path.join(self.get_rg_main_dir(rg_label), f"{rg_label}.masked.contigsize.genome")
+        rg_label = self._normalize_rg_label(rg_label_or_index)
+        return os.path.join(self.rg_dir(rg_label), f"{rg_label}.masked.contigsize.genome")
     
-    def get_minimap_index_path(self, rg_label: str) -> str:
-        """Get path for minimap2 index"""
-        return os.path.join(self.get_rg_main_dir(rg_label), f"{rg_label}.masked.mmi")
+    def minimap_index_path(self, rg_label_or_index) -> str:
+        """Path for minimap2 index"""
+        rg_label = self._normalize_rg_label(rg_label_or_index)
+        return os.path.join(self.rg_dir(rg_label), f"{rg_label}.masked.mmi")
     
-    def get_intrinsic_sam_path(self, rg_label: str) -> str:
-        """Get path for intrinsic alignment SAM"""
-        return os.path.join(self.get_rg_main_dir(rg_label), f"{rg_label}.raw.sam")
+
+    def total_intrinsic_bam_path(self) -> str:
+        """Path for total intrinsic alignment BAM"""
+        return os.path.join(self.dirs["root"], f"total_intrinsic_alignments.bam")
+    
+    def intrinsic_bam_path(self, rg_label_or_index) -> str:
+        """Path for intrinsic alignment SAM"""
+        rg_label = self._normalize_rg_label(rg_label_or_index)
+        return os.path.join(self.rg_dir(rg_label), f"{rg_label}.intrinsic.bam")
+    
+    # Methods to get files across all realign groups
+    def all_rg_bed_paths(self) -> List[str]:
+        """Get paths to all RG bed files"""
+        return [self.rg_bed_path(rg) for rg in self.realign_groups]
+    
+    def all_masked_genome_paths(self) -> List[str]:
+        """Get paths to all masked genome files"""
+        return [self.masked_genome_path(rg) for rg in self.realign_groups]
+    
+    def all_intrinsic_bam_paths(self) -> List[str]:
+        """Get paths to all intrinsic alignment SAM files"""
+        return [self.intrinsic_bam_path(rg) for rg in self.realign_groups]
+    
+    def all_counterparts_bed_paths(self) -> List[str]:
+        """Get paths to all counterparts bed files"""
+        return [self.counterparts_bed_path(rg) for rg in self.realign_groups]
+    
+    def all_homo_regions_bed_paths(self) -> List[str]:
+        """Get paths to all homologous regions bed files"""
+        return [self.all_homo_regions_bed_path(rg) for rg in self.realign_groups]

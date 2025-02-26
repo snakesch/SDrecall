@@ -21,7 +21,7 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
                                         nthreads = 12,
                                         avg_frag_size = 400,
                                         std_frag_size = 140):
-    # Label SD-paralog pairs. Name disconnected qnodes as PC0, connected qnodes as PC1, PC2, ...
+    # Label SD-paralog pairs. Name disconnected qnodes as RG0, connected qnodes as PC1, PC2, ...
     from itertools import repeat
     import re
     
@@ -29,15 +29,15 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
     new_results = []
     
     for result in grouped_qnode_cnodes:
-        new_result = {"PCs": {}, "SD_counterparts": {}}
-        for i in range(0, len(result["PCs"])):
-            fc_node = result["PCs"][i]
-            new_result['PCs'][i] = [fc_node]
+        new_result = {"SD_qnodes": {}, "SD_counterparts": {}}
+        for i in range(0, len(result["SD_qnodes"])):
+            fc_node = result["SD_qnodes"][i]
+            new_result['SD_qnodes'][i] = [fc_node]
             new_result['SD_counterparts'][i] = sd_paralog_pairs[fc_node]
         new_results.append(new_result)
 
     # Load balancing
-    new_results = sorted(new_results, key = lambda x: sum(v[0][2] - v[0][1] for k,v in x["PCs"].items()) * sum(len(v) for k,v in x["SD_counterparts"].items()), reverse=True)
+    new_results = sorted(new_results, key = lambda x: sum(v[0][2] - v[0][1] for k,v in x["SD_qnodes"].items()) * sum(len(v) for k,v in x["SD_counterparts"].items()), reverse=True)
     labels = [ "PC" + str(n) for n in range(0, len(grouped_qnode_cnodes))]
     
     pool = Pool(nthreads)
@@ -107,10 +107,10 @@ def imap_establish(tup_args):
     return establish_beds_per_RG_cluster(*tup_args)
 
 @error_handling_decorator
-def establish_beds_per_RG_cluster(cluster_dict={"PCs":{},
+def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
                                                 "SD_counterparts":{}},
                                   base_folder = "",
-                                  label = "PC0",
+                                  label = "RG0",
                                   ref_genome = "",
                                   avg_frag_size = 400,
                                   std_frag_size = 140,
@@ -120,7 +120,7 @@ def establish_beds_per_RG_cluster(cluster_dict={"PCs":{},
     """
     input cluster dict now looks like this:
     {
-        "PCs": {0: [], 1: [], 2: []}, 
+        "SD_qnodes": {0: [], 1: [], 2: []}, 
         "SD_counterparts": {0: [], 1: [], 2: []}
     }
     """
@@ -138,7 +138,7 @@ def establish_beds_per_RG_cluster(cluster_dict={"PCs":{},
     # raw_total_bed = paths["All_region_bed"].replace(".bed", ".raw.bed")
     
     with open(paths["RG_bed"], "w") as f:
-        for idx, records in cluster_dict["PCs"].items():
+        for idx, records in cluster_dict["SD_qnodes"].items():
             for record in records:
                 if len(record) >= 3:
                     # Invoke __iter__ method instead of __getitem__
@@ -154,7 +154,7 @@ def establish_beds_per_RG_cluster(cluster_dict={"PCs":{},
     ## Create the counterparts region bed file
     with open(paths["Counterparts_bed"], "w") as f:
         for idx, records in cluster_dict["SD_counterparts"].items():
-            fc_node = cluster_dict["PCs"][idx][0]
+            fc_node = cluster_dict["SD_qnodes"][idx][0]
             for record in records:
                 assert isinstance(record, HOMOSEQ_REGION), "The record in the SD_counterparts list is not a HOMOSEQ_REGION object: {}".format(record)
                 fc_node_rela_start, fc_node_rela_end = record.qnode_relative_region(fc_node)     
@@ -170,14 +170,14 @@ def establish_beds_per_RG_cluster(cluster_dict={"PCs":{},
     ## Create the total region bed file by combining PC BED and counterpart BED
     ## Invoke __iter__ method instead of __getitem__
     with open(paths["All_region_bed"], "w") as f:
-        for idx, records in cluster_dict["PCs"].items():
+        for idx, records in cluster_dict["SD_qnodes"].items():
             for record in records:
                 if len(record) == 2:
                     f.write("\t".join([str(value) for value in record[0]][:3] + [".", ".", record[0][3], f"FC:{label}_{idx}"]) + "\n")
                 elif len(record) >= 3:
                     f.write("\t".join([str(value) for value in record][:3] + [".", ".", record[3], f"FC:{label}_{idx}"]) + "\n")
         for idx, records in cluster_dict["SD_counterparts"].items():
-            fc_node = cluster_dict["PCs"][idx][0]
+            fc_node = cluster_dict["SD_qnodes"][idx][0]
             for record in records:
                 if not isinstance(record, HOMOSEQ_REGION):
                     logger.critical("Some elements of the SD_counterparts list are not HOMOSEQ_REGION objects: {}".format(record))

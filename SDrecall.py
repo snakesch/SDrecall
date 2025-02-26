@@ -18,11 +18,11 @@ reference = "/home/snakesch/work/SDrecall/test/ucsc.hg19.fasta"
 ## TODO: Get fragment size distribution from file
 avg_frag_size, std_frag_size = 570.4, 150.7
 
-def enumerate_PCs(work_dir):
+def enumerate_SD_qnodes(work_dir):
     # Prepare arguments for downstream imap_prepare_masked_align_region_per_PC
     beds = glob(f"{work_dir}/PC*_related_homo_regions/PC*_all/PC*_related_homo_regions.bed")
     
-    # - For load balancing: high coverage PCs top on the list - #
+    # - For load balancing: high coverage SD_qnodes top on the list - #
     beds = sorted(beds, key = lambda f: pb.BedTool(f).total_coverage(), reverse=True)
 
     # Extract FC regions from the total bed
@@ -189,7 +189,7 @@ def extract_and_pad_segments(
     return_bed_size = return_bed.total_coverage()
     return return_bed, return_bed_size
 
-rg_names, rg_units = enumerate_PCs(work_dir)
+rg_names, rg_units = enumerate_SD_qnodes(work_dir)
 
 # pool = ctx.Pool(threads, initializer=pool_init)
 # prepared_beds = pool.imap_unordered(imap_prepare_masked_align_region_per_PC, zip(rg_names,
