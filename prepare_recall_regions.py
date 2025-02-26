@@ -15,20 +15,36 @@ from src.log import logger, configure_logger
 from src.suppress_warning import *
 from src.utils import is_file_up_to_date, filter_bed_by_interval_size
 from src.insert_size import get_insert_size_distribution
+from src.const import SDrecallPaths
 
-def preparation( ref_genome: str,
-                 work_dir: str, 
-                 input_bam: str,
-                 reference_sd_map: str,
-                 target_bed = "",
-                 mq_threshold = 41,
-                 high_quality_depth = 10,
-                 minimum_depth = 3,
-                 multialign_frac = 0.5,
-                 threads = 10,
-                 target_tag = "target"):
-
+def preparation(paths: SDrecallPaths,
+                mq_threshold=41,
+                high_quality_depth=10,
+                minimum_depth=3,
+                multialign_frac=0.5,
+                threads=10):
+    """
+    Main preparation function for SDrecall
+    
+    Args:
+        paths: Initialized SDrecallPaths instance
+        mq_threshold: Mapping quality threshold
+        high_quality_depth: High quality depth cutoff
+        minimum_depth: Minimum depth cutoff
+        multialign_frac: Multi-align fraction cutoff
+        threads: Number of threads to use
+    """
+    # Access all paths through the paths object
+    ref_genome = paths.ref_genome
+    input_bam = paths.input_bam
+    target_bed = paths.target_bed
+    
+    # Use path methods for all file access
+    multi_align_bed = paths.get_multi_align_bed_path()
+    graph_path = paths.get_multiplex_graph_path()
+    
     # Make sure output directory exists
+    outdir = paths.work_dir
     os.makedirs(outdir, exist_ok=True)
 
     # Step 0: Calculate the distribution of fragment sizes
@@ -51,7 +67,7 @@ def preparation( ref_genome: str,
                                         minimum_depth=minimum_depth, 
                                         multialign_frac=multialign_frac,
                                         target_region=target_bed, 
-                                        genome_file=genome_file)
+                                        genome_file=paths.ref_genome)
 
     multi_align_bed_obj = pb.BedTool(multi_align_bed).sort()
     logger.info("The multialign bed extracted from {} is {} and it covers {} bp.".format(input_bam,
@@ -59,7 +75,7 @@ def preparation( ref_genome: str,
                                                                                       multi_align_bed_obj.total_coverage()))
     
     # Step 2: Compare paired SD regions with the reference SD map to identify SD regions associated with mapping ambiguity
-    ref_bed_obj = pb.BedTool(reference_sd_map)
+    ref_bed_obj = pb.BedTool(paths.reference_sd_map)
     logger.info("Total coverage of reference SD map: {}bp".format(ref_bed_obj.sort().total_coverage()))
 
     logger.info("The multialign BED is {} and it covers {} bp.".format(multi_align_bed_fp, multi_align_bed.total_coverage()))
@@ -67,7 +83,7 @@ def preparation( ref_genome: str,
     # - Development code below - #
     # Step 2. Load reference SD map; trim the SD coordinates and filter by size
     # total_bin_sd_df = combine_and_filter_sd_map(multi_align_bed, reference_sd_map, avg_insert_size, outdir, threads)
-    ref_bed_obj = pb.BedTool(reference_sd_map).sort()
+    ref_bed_obj = pb.BedTool(paths.reference_sd_map).sort()
     logger.info("Total coverage of reference SD map: {}bp".format(ref_bed_obj.total_coverage()))
 
     ## Filter out SD regions smaller than average insert size.
@@ -114,7 +130,6 @@ def preparation( ref_genome: str,
     logger.debug(f"Final SD map has shape {total_bin_sd_df.shape} and looks like: \n{total_bin_sd_df.head(5).to_string(index=False)}")
     
     # Step 4: Create a multiplex graph with SD and PO edges
-    graph_path = os.path.join(outdir, basename + "-multiplexed_homologous_sequences.graphml")
     if os.path.exists(graph_path) and is_file_up_to_date(graph_path, [input_bam]):
         graph = read_graphml(graph_path)
     else:
@@ -183,7 +198,7 @@ def preparation( ref_genome: str,
     # Step 7: Create beds and masked genomes
     build_beds_and_masked_genomes(grouped_qnode_cnodes = grouped_qnode_cnodes,
                                   sd_paralog_pairs = sd_paralog_pairs,
-                                  output_folder = work_dir,
+                                  output_folder = outdir,
                                   ref_genome = ref_genome,
                                   nthreads = threads,
                                   avg_frag_size = avg_frag_size,
@@ -192,35 +207,49 @@ def preparation( ref_genome: str,
 def main():
     parser = argparse.ArgumentParser(description='Deploy PCs for SDrecall.')
 
-    parser.add_argument('-r', '--ref_genome', required=True, help='Path to the reference genome.')
+    parser.add_argument('-r', '--ref_genome', required=True, help='Path to the reference genome. Currently only accept hg19 and hg38')
     parser.add_argument('-o', '--outdir', required=True, help='Base directory for output files.')
     parser.add_argument('-i', '--input_bam', required=True, help='Input BAM file.')
     parser.add_argument('-m', '--reference_sd_map', required=True, help='Reference SD map file.')
     parser.add_argument('-b', '--target_bed', default="", help='Optional target BED file.')
+    parser.add_argument('-s', '--sample_id', default=None, help='Sample ID (default: extracted from BAM filename)')
+    parser.add_argument('--target_tag', type=str, default=None, help='Optional target tag for filtering.')
     parser.add_argument('-t', '--threads', type=int, default=10, help='Number of threads to use.')
     parser.add_argument('--mq_cutoff', type=int, default=41, help='Mapping quality cutoff.')
     parser.add_argument('--high_quality_depth', type=int, default=10, help='High quality depth cutoff.')
     parser.add_argument('--minimum_depth', type=int, default=3, help='Minimum depth cutoff.')
     parser.add_argument('--multialign_frac', type=float, default=0.5, help='Multi-align fraction cutoff.')
-    parser.add_argument('--target_tag', type=str, default="target", help='Optional target tag for filtering.')
     parser.add_argument('-v', '--verbose', type=str, default="INFO", help='Level of verbosity (default = INFO).')
 
     args = parser.parse_args()
 
     configure_logger(log_level=args.verbose)
-
-    preparation(
+    
+    # Initialize the SDrecallPaths singleton instance
+    paths = SDrecallPaths.initialize(
         ref_genome=args.ref_genome,
-        outdir=args.outdir,
         input_bam=args.input_bam,
         reference_sd_map=args.reference_sd_map,
         target_bed=args.target_bed,
+        sample_id=args.sample_id,  # Use user-provided sample_id if available
+        target_tag=args.target_tag,  # Use user-provided target_tag if available 
+        base_dir=args.outdir
+    )
+    
+    # Log the derived values for confirmation
+    logger.info(f"Running with sample ID: {paths.sample_id}")
+    logger.info(f"Target tag: {paths.target_tag}")
+    logger.info(f"Assembly: {paths.assembly}")
+    logger.info(f"Working directory: {paths.work_dir}")
+
+    # Call preparation function with the initialized paths
+    preparation(
+        paths=paths,  # Pass the paths instance to the preparation function
         mq_threshold=args.mq_cutoff,
         high_quality_depth=args.high_quality_depth,
         minimum_depth=args.minimum_depth,
         multialign_frac=args.multialign_frac,
         threads=args.threads,
-        target_tag=args.target_tag,
     )
 
 if __name__ == "__main__":
