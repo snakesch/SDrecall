@@ -17,10 +17,9 @@ from preparation.intrinsic_alignment import getIntrinsicBam
 def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
                                   sd_paralog_pairs: dict,
                                   sdrecall_paths: SDrecallPaths,
-                                  ref_genome,
                                   nthreads=12,
                                   avg_frag_size=400,
-                                  std_frag_size=140):
+                                  std_frag_size=140):    
     # Label SD-paralog pairs. Name disconnected qnodes as RG0, connected qnodes as PC1, PC2, ...
     # We need to restructure the grouped_qnode_cnodes to pass the information of sd-paralog pairs to the establish_beds_per_RG_cluster function
     new_results = []
@@ -53,7 +52,7 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
                 ("All_region_bed", sdrecall_paths.all_homo_regions_bed_path(label)),
                 ("Masked_genome", sdrecall_paths.masked_genome_path(label)), 
                 ("Intrinsic_bam", sdrecall_paths.intrinsic_bam_path(label)),
-                ("Ref_genome", ref_genome)
+                ("Ref_genome", sdrecall_paths.ref_genome)
             ),
             avg_frag_size,
             std_frag_size,
@@ -81,12 +80,12 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
         raise RuntimeError("Error occurred during the parallel execution of establish_beds_per_RG_cluster. Exit.")
 
     ## total_intrinsic_alignments.bam is a merged alignment file for BILC model.
-    intrinsic_bams = [sdrecall_paths.intrinsic_sam_path(label) for label in labels]
+    intrinsic_bams = [ sdrecall_paths.intrinsic_bam_path(label) for label in labels ]
     total_intrinsic_bam = sdrecall_paths.total_intrinsic_bam_path()
     
     ## Create total_intrinsic_alignments.bam
     intrinsic_bam_header = total_intrinsic_bam.replace(".bam", ".bam.header")
-    cmd = f"source {shell_utils} && modify_bam_sq_lines {intrinsic_bams[0]} {ref_genome} {intrinsic_bam_header}"
+    cmd = f"source {shell_utils} && modify_bam_sq_lines {intrinsic_bams[0]} {sdrecall_paths.ref_genome} {intrinsic_bam_header}"
     executeCmd(cmd, logger=logger)
 
     intrinsic_bam_list = total_intrinsic_bam.replace(".bam", ".bams.list.txt")
@@ -101,22 +100,11 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
     executeCmd(cmd)
                
     # Fourth, extract all PC*_related_homo_regions.bed file and concat them together.
-    beds = glob(os.path.join(sdrecall_paths.output_folder, "*/*_all/", "*_related_homo_regions.bed"))
+    beds = sdrecall_paths.all_homo_regions_bed_paths()
     combined_bed = merge_bed_files(beds)
-    combined_bed.saveas(os.path.join(sdrecall_paths.output_folder, "all_RG_related_homo_regions.bed"))
-    # combined_bed.saveas(os.path.join(output_folder, "all_RG_regions.bed"))
-    
-    # Fifth, extract all intrinsic vcfs and use bcftools to concat them together
-    intrinsic_vcfs = []
-    for root, dirs, files in os.walk(sdrecall_paths.output_folder):
-        for file in files:
-            if re.search(r'PC[0-9]+\.raw\.vcf\.gz$', file):
-                intrinsic_vcfs.append(os.path.join(root, file))
-    
-    final_intrinsic_vcf = os.path.join(sdrecall_paths.output_folder, "all_rg_region_intrinsic_variants.vcf.gz")
-    combine_vcfs(*intrinsic_vcfs, output=final_intrinsic_vcf)
+    combined_bed.saveas(sdrecall_paths.all_homo_regions_bed_path())
 
-    return
+    return sdrecall_paths
 
 def imap_establish(tup_args):
     return establish_beds_per_RG_cluster(*tup_args)
@@ -162,12 +150,10 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
                 fc_node_rela_start, fc_node_rela_end = record.qnode_relative_region(fc_node)     
                 ## Invoke __iter__ method instead of __getitem__
                 f.write("\t".join([str(value) for value in record][:3] + [str(fc_node_rela_start), str(fc_node_rela_end), record[3]]) + "\n")
-    # executeCmd(f"cp -f {tmp_counterparts_bed} {raw_counterparts_bed}")
 
     ## Remove PC regions from counterpart BEDs and force strandedness
     BedTool(paths["Counterparts_bed"]).subtract(BedTool(paths["Query_bed"]), s=True).saveas(paths["Counterparts_bed"])
     sortBed_and_merge(paths["Counterparts_bed"], logger=logger)
-    # update_plain_file_on_md5(paths["Counterparts_bed"], tmp_counterparts_bed, logger=logger)
     
     ## Create the total region bed file by combining PC BED and counterpart BED
     ## Invoke __iter__ method instead of __getitem__
@@ -187,10 +173,13 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
                 fc_node_rela_start, fc_node_rela_end = record.qnode_relative_region(fc_node)
                 # The rela_start and rela_end are based on the corresponding PC region
                 f.write("\t".join([str(value) for value in record][:3] + [str(fc_node_rela_start), str(fc_node_rela_end), record[3], f"NFC:{label}_{idx}"]) + "\n")
-    
-    sortBed_and_merge(paths["All_region_bed"])    
+    sortBed_and_merge(paths["All_region_bed"])
+
+    # Now all the bed files are finalized for this RG cluster
+    # We can proceed to prepare the masked genome and intrinsic bam
+    ref_genome = paths["Ref_genome"]
+    masked_genome_path = paths["Masked_genome"]
     contig_sizes = ref_genome.replace(".fasta", ".fasta.fai")
-    
     # Prepare masked genomes
     masked_genome = Genome(ref_genome).mask(paths["Query_bed"], avg_frag_size = avg_frag_size, std_frag_size=std_frag_size, genome=contig_sizes, logger=logger, path=masked_genome_path)
     
@@ -199,6 +188,7 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
                                 all_homo_regions_bed = paths["All_region_bed"], 
                                 rg_masked = masked_genome,
                                 ref_genome = ref_genome,
+                                intrinsic_bam = paths["Intrinsic_bam"],
                                 avg_frag_size = avg_frag_size,
                                 std_frag_size = std_frag_size,
                                 threads = threads )

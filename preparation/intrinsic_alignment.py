@@ -3,7 +3,7 @@ import logging
 
 from preparation.seq import getRawseq
 from src.utils import executeCmd, is_file_up_to_date
-from src.const import *
+from src.const import shell_utils
 
 logger = logging.getLogger("SDrecall")
 
@@ -11,6 +11,8 @@ def getIntrinsicBam(rg_bed,
                     all_homo_regions_bed, 
                     rg_masked,
                     ref_genome, 
+                    intrinsic_bam,
+                    rg_label = None,
                     avg_frag_size = 400,
                     std_frag_size = 120,
                     threads = 2):
@@ -35,23 +37,20 @@ def getIntrinsicBam(rg_bed,
     '''
 
     fastq_dir = os.path.dirname(all_homo_regions_bed)
-    vcf_dir = os.path.dirname(rg_bed)
-    raw_fq_path = os.path.join(fastq_dir, os.path.basename(all_homo_regions_bed)[:-3] + "raw.fastq")
-    bam_path = os.path.join(vcf_dir, os.path.basename(rg_bed)[:-3] + "raw.bam")
-    vcf_path = bam_path.replace(".bam", ".vcf.gz")
-    rg_label = os.path.basename(rg_bed.replace(".bed",""))
+    intrinsic_fastq = intrinsic_bam.replace(".bam", ".fastq")
+    rg_label = rg_label or os.path.basename(rg_bed.replace(".bed",""))
         
     # Reference sequences of SD counterparts are extracted from reference genome
-    raw_fq_path = getRawseq(all_homo_regions_bed, raw_fq_path, ref_genome, padding = avg_frag_size + std_frag_size)
-    logger.info(f"Reference sequences for calling intrinsic variants from {rg_bed} are written to: {raw_fq_path}")
+    getRawseq(all_homo_regions_bed, intrinsic_fastq, ref_genome, padding = avg_frag_size + std_frag_size)
+    logger.info(f"Reference sequences for calling intrinsic variants from {rg_bed} are written to: {intrinsic_fastq}")
     
     # Retrieved counterpart sequences are mapped against masked genomes using minimap2
-    if not os.path.exists(bam_path) or not is_file_up_to_date(bam_path, [rg_masked, shell_utils, os.path.abspath(__file__)]):
-        rg_masked_index = rg_masked.replace(".fasta", ".mmi")
-        cmd = f"source {shell_utils} && independent_minimap2_masked \
-                -f {raw_fq_path} \
+    if not os.path.exists(intrinsic_bam) or not is_file_up_to_date(intrinsic_bam, [rg_masked, shell_utils, os.path.abspath(__file__)]):
+        cmd = f"bash {shell_utils} \
+                independent_minimap2_masked \
+                -f {intrinsic_fastq} \
                 -a {rg_masked} \
-                -o {bam_path} \
+                -o {intrinsic_bam} \
                 -s all_PC \
                 -t {threads} \
                 -i {rg_label} \
@@ -59,19 +58,4 @@ def getIntrinsicBam(rg_bed,
                 -g {ref_genome}"
         executeCmd(cmd, logger=logger)
 
-    ## Intrinsic variant calling
-    os.makedirs(vcf_dir, exist_ok=True)
-    tmp_vcf = vcf_path.replace(".vcf", ".tmp.vcf")
-
-    cmd = f"export OPENBLAS_NUM_THREADS={threads} && \
-            bcftools mpileup -a FORMAT/AD,FORMAT/DP -f {ref_genome} {bam_path} | " + \
-          f"bcftools call -mv -P 0 -Oz -o {tmp_vcf} && tabix -p vcf {tmp_vcf} "
-    executeCmd(cmd, logger=logger)
-    cmd = f"export OPENBLAS_NUM_THREADS={threads} && bcftools norm -m -both -f {ref_genome} --multi-overlaps 0 --keep-sum AD -a {tmp_vcf} | \
-            bcftools norm -d exact - | \
-            bcftools view -i 'ALT!=\"*\"' | \
-            bcftools sort -Oz -o {vcf_path} && tabix -f -p vcf {vcf_path} && rm {tmp_vcf}"
-    executeCmd(cmd, logger=logger)
-    
-    logger.info(f"Writing intrinsic VCF to {vcf_path}")
-    return bam_path
+    return intrinsic_bam

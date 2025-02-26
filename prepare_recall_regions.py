@@ -169,27 +169,33 @@ def preparation(paths: SDrecallPaths,
     # Step 6: Collapse qnodes by identifying qnodes that can be put in the same masked genome
     grouped_qnode_cnodes = query_connected_nodes(sd_paralog_pairs, connected_qnode_components)
 
-    # # (Debug code) Enumerate qnodes and cnodes in the graph. (FC -> qnode; NFC -> cnode)
-    # final_graph = graph.copy()
-    # for i, result in enumerate(grouped_qnode_cnodes):
-    #     tag = "PC" + str(i)
-    #     for node in result["SD_qnodes"]:
-    #         if not isinstance(node, tuple):
-    #             raise TypeError(f"Expected {node} (type: {type(node)}) to be tuple.")
-    #         final_graph.nodes[node]["FC"] = ",".join([e for e in list(dict.fromkeys(final_graph.nodes[node].get("FC", "").split(",") + [tag])) if len(e) > 0])
-    #     for node in result["SD_counterparts"]:
-    #         if not isinstance(node, HOMOSEQ_REGION):
-    #             raise TypeError(f"Expected {node} (type: {type(node)}) to be HOMOSEQ_REGION. ")
-    #         final_graph.nodes[node.data]["NFC"] = ",".join([e for e in list(dict.fromkeys(final_graph.nodes[node.data].get("NFC", "").split(",") + [tag])) if len(e) > 0])
-    # nx.write_graphml(final_graph, final_graph_path)
+    '''
+    (Debug code) Enumerate qnodes and cnodes in the graph. (FC -> qnode; NFC -> cnode)
+    This is trying to output a GRAPHML file with robust annotations for debugging purposes.
+    final_graph = graph.copy()
+    for i, result in enumerate(grouped_qnode_cnodes):
+        tag = "PC" + str(i)
+        for node in result["SD_qnodes"]:
+            if not isinstance(node, tuple):
+                raise TypeError(f"Expected {node} (type: {type(node)}) to be tuple.")
+            final_graph.nodes[node]["FC"] = ",".join([e for e in list(dict.fromkeys(final_graph.nodes[node].get("FC", "").split(",") + [tag])) if len(e) > 0])
+        for node in result["SD_counterparts"]:
+            if not isinstance(node, HOMOSEQ_REGION):
+                raise TypeError(f"Expected {node} (type: {type(node)}) to be HOMOSEQ_REGION. ")
+            final_graph.nodes[node.data]["NFC"] = ",".join([e for e in list(dict.fromkeys(final_graph.nodes[node.data].get("NFC", "").split(",") + [tag])) if len(e) > 0])
+    nx.write_graphml(final_graph, final_graph_path)
+    '''
     
     # Step 7: Create beds and masked genomes
-    build_beds_and_masked_genomes(grouped_qnode_cnodes = grouped_qnode_cnodes,
-                                  sd_paralog_pairs = sd_paralog_pairs,
-                                  output_folder = outdir,
-                                  ref_genome = ref_genome,
-                                  sdrecall_paths = paths,
-                                  nthreads = threads)
+    paths = build_beds_and_masked_genomes(grouped_qnode_cnodes = grouped_qnode_cnodes,
+                                          sd_paralog_pairs = sd_paralog_pairs,
+                                          sdrecall_paths = paths,
+                                          nthreads = threads,
+                                          avg_frag_size = avg_frag_size,
+                                          std_frag_size = std_frag_size)
+    logger.info(f"SDrecall has been prepared for {paths.sample_id}, targeting regions specified by {paths.target_bed}.")
+    return paths
+
 
 def main():
     parser = argparse.ArgumentParser(description='Deploy SD_qnodes for SDrecall.')

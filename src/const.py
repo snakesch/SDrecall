@@ -345,3 +345,7 @@ class SDrecallPaths:
     def all_homo_regions_bed_paths(self) -> List[str]:
         """Get paths to all homologous regions bed files"""
         return [self.all_homo_regions_bed_path(rg) for rg in self.realign_groups]
+    
+    def all_homo_regions_bed_path(self) -> str:
+        """Get path to all homologous regions bed file"""
+        return os.path.join(self.dirs["root"], "all_RG_related_homo_regions.bed")
