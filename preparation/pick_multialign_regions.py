@@ -1,22 +1,20 @@
-import logging
 import multiprocessing as mp
-
 import pandas as pd
 from pybedtools import BedTool
-
 from src.log import logger
-from inferred_depths import calculate_inferred_coverage
+from .inferred_depths import calculate_inferred_coverage
 
 
 def pick_multialigned_regions(input_bam, 
-                                MQ_threshold=41,
-                                high_quality_depth=10, 
-                                minimum_depth=3,
-                                target_region=None,
-                                target_tag = "FCRs",
-                                multialign_frac = 0.7,
-                                threads=4,
-                                genome_file=""):
+                              output_bed = None,
+                              MQ_threshold=41,
+                              high_quality_depth=10, 
+                              minimum_depth=3,
+                              multialign_frac = 0.5,
+                              target_region=None,
+                              target_tag = "FCRs",
+                              threads=4,
+                              genome_file=""):
     
     ## genome_file should be the FAI index of the reference genome
 
@@ -58,5 +56,9 @@ def pick_multialigned_regions(input_bam,
     if target_region:
         target_bed = BedTool(target_region)
         bed_obj = bed_obj.intersect(target_bed).sort().merge()
+    
+    if output_bed:
+        bed_obj.saveas(output_bed)
+        return output_bed
     
     return bed_obj

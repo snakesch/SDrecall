@@ -29,12 +29,13 @@ def executeCmd(cmd, logger = logger) -> None:
 
 def prepare_tmp_file(tmp_dir="/tmp", **kwargs):
     os.makedirs(tmp_dir, exist_ok=True)
-
     return tempfile.NamedTemporaryFile(dir = tmp_dir, delete = False, **kwargs)
+
 
 def is_file_up_to_date(file_to_check, list_of_dependency_files):
     file_to_check_time = os.path.getmtime(file_to_check)
     return all(file_to_check_time > os.path.getmtime(dep_file) for dep_file in list_of_dependency_files)
+
 
 def update_plain_file_on_md5(old_file, new_file, logger=logger):
     import hashlib
@@ -62,7 +63,6 @@ def update_plain_file_on_md5(old_file, new_file, logger=logger):
 
 
 # - BED file manipulation using pybedtools - #
-
 def sortBed_and_merge(bed_file, output=None):
     
     # Load your BED file

@@ -1,12 +1,9 @@
-import os
 import sys
-from itertools import repeat
-import re
 from multiprocessing import Pool
 
 from pybedtools import BedTool
 
-from src.utils import executeCmd, sortBed_and_merge, combine_vcfs, merge_bed_files
+from src.utils import executeCmd, sortBed_and_merge, merge_bed_files
 from src.const import shell_utils, SDrecallPaths
 from src.log import error_handling_decorator, logger
 from preparation.homoseq_region import HOMOSEQ_REGION
@@ -102,7 +99,7 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
     # Fourth, extract all PC*_related_homo_regions.bed file and concat them together.
     beds = sdrecall_paths.all_homo_regions_bed_paths()
     combined_bed = merge_bed_files(beds)
-    combined_bed.saveas(sdrecall_paths.all_homo_regions_bed_path())
+    combined_bed.saveas(sdrecall_paths.total_homo_regions_bed_path())
 
     return sdrecall_paths
 
@@ -153,7 +150,7 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
 
     ## Remove PC regions from counterpart BEDs and force strandedness
     BedTool(paths["Counterparts_bed"]).subtract(BedTool(paths["Query_bed"]), s=True).saveas(paths["Counterparts_bed"])
-    sortBed_and_merge(paths["Counterparts_bed"], logger=logger)
+    sortBed_and_merge(paths["Counterparts_bed"])
     
     ## Create the total region bed file by combining PC BED and counterpart BED
     ## Invoke __iter__ method instead of __getitem__

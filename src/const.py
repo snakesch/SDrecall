@@ -3,6 +3,8 @@ import re
 import shutil
 from typing import Dict, List, Set
 
+from src.insert_size import get_insert_size_distribution
+
 shell_utils = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'shell_utils.sh')
 
 class SDrecallPaths:
@@ -92,6 +94,7 @@ class SDrecallPaths:
         
         # Extract assembly version primarily from reference_sd_map path
         self.assembly = self._extract_assembly_version(reference_sd_map, ref_genome)
+        self.avg_frag_size, self.median_frag_size, self.frag_size_std = get_insert_size_distribution(self.input_bam)
         
         # Extract sample ID
         self.sample_id = sample_id or self._extract_sample_id(input_bam)
@@ -105,7 +108,7 @@ class SDrecallPaths:
             dir_parts.append(self.target_tag)
         
         # Generate base directory name under output_dir
-        base_name = "_".join(dir_parts)
+        base_name = "_".join(dir_parts) + "_SDrecall"
         self.basename = base_name
         self.work_dir = os.path.join(self.output_dir, base_name)
         
@@ -179,9 +182,14 @@ class SDrecallPaths:
         dirs = {
             "root": self.work_dir,
             "recall_results": os.path.join(self.work_dir, "recall_results"),
-            "realign_groups": os.path.join(self.work_dir, "realign_groups")
+            "realign_groups": os.path.join(self.work_dir, "realign_groups"),
+            "intermediates": os.path.join(self.work_dir, "intermediates")
         }
         
+        self.recall_results_dir = dirs["recall_results"]
+        self.realign_groups_dir = dirs["realign_groups"]
+        self.tmp_dir = dirs["intermediates"]
+
         # Create directories if they don't exist and clean if requested
         for dir_name, dir_path in dirs.items():
             os.makedirs(dir_path, exist_ok=True)
@@ -189,6 +197,22 @@ class SDrecallPaths:
                 self._clean_directory(dir_path)
             
         return dirs
+    
+
+    def realign_meta_table_path(self) -> str:
+        """Path for realign meta table"""
+        return os.path.join(self.work_dir, f"{self.sample_id}_realign_meta_table.tsv")
+    
+
+    def ref_genome_fai_path(self) -> str:
+        """Path for reference genome FAI index"""
+        if os.path.exists(f"{self.ref_genome}.fai") and os.path.getmtime(f"{self.ref_genome}.fai") > os.path.getmtime(self.ref_genome):
+            return f"{self.ref_genome}.fai"
+        else:
+            import subprocess
+            subprocess.run(f"samtools faidx {self.ref_genome}", shell=True)
+            return f"{self.ref_genome}.fai"
+        
     
     def register_realign_group(self, rg_label_or_index) -> None:
         """
@@ -203,6 +227,7 @@ class SDrecallPaths:
         # Ensure the RG directory exists
         rg_dir = self.rg_dir(rg_label)
         os.makedirs(rg_dir, exist_ok=True)
+
     
     def _normalize_rg_label(self, rg_label_or_index) -> str:
         """
@@ -254,7 +279,7 @@ class SDrecallPaths:
     
     def multiplex_graph_path(self) -> str:
         """Get path for multiplex graph"""
-        return os.path.join(self.dirs["root"], f"{self.basename}-multiplexed_SDs.graphml")
+        return os.path.join(self.dirs["root"], f"{self.basename}_multiplexed_SDs.graphml")
     
     def annotated_graph_path(self) -> str:
         """Get path for annotated graph"""
@@ -275,6 +300,17 @@ class SDrecallPaths:
         rg_dir = os.path.join(self.dirs["realign_groups"], rg_label)
         os.makedirs(rg_dir, exist_ok=True)
         return rg_dir
+
+    def rg_raw_masked_bam_path(self, rg_label_or_index) -> str:
+        """Path for RG raw masked bam file"""
+        rg_label = self._normalize_rg_label(rg_label_or_index)
+        return os.path.join(self.recall_results_dir, f"{self.sample_id}.sdrecall.only_{rg_label}.raw.bam")
+
+    def rg_realign_fastqs_path(self, rg_label_or_index) -> str:
+        """Path for RG realign fastqs file"""
+        rg_label = self._normalize_rg_label(rg_label_or_index)
+        return os.path.join(self.recall_results_dir, f"{self.sample_id}.sdrecall.only_{rg_label}.r1.fastq"), \
+               os.path.join(self.recall_results_dir, f"{self.sample_id}.sdrecall.only_{rg_label}.r2.fastq")
     
     def rg_query_bed_path(self, rg_label_or_index) -> str:
         """Path for RG bed file"""
@@ -346,6 +382,6 @@ class SDrecallPaths:
         """Get paths to all homologous regions bed files"""
         return [self.all_homo_regions_bed_path(rg) for rg in self.realign_groups]
     
-    def all_homo_regions_bed_path(self) -> str:
+    def total_homo_regions_bed_path(self) -> str:
         """Get path to all homologous regions bed file"""
         return os.path.join(self.dirs["root"], "all_RG_related_homo_regions.bed")

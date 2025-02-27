@@ -14,7 +14,7 @@ from preparation import *
 from src.log import logger, configure_logger
 from src.suppress_warning import *
 from src.utils import is_file_up_to_date, filter_bed_by_interval_size
-from src.insert_size import get_insert_size_distribution
+
 from src.const import SDrecallPaths
 
 def preparation(paths: SDrecallPaths,
@@ -48,7 +48,7 @@ def preparation(paths: SDrecallPaths,
     os.makedirs(outdir, exist_ok=True)
 
     # Step 0: Calculate the distribution of fragment sizes
-    _, avg_frag_size,std_frag_size = get_insert_size_distribution(input_bam)
+    avg_frag_size, std_frag_size = paths.median_frag_size, paths.frag_size_std
     logger.info(f"BAM {input_bam} has an average fragment size of {avg_frag_size}bp (std: {std_frag_size}bp)")
 
     
@@ -61,7 +61,8 @@ def preparation(paths: SDrecallPaths,
                                                     minimum_depth=minimum_depth, 
                                                     multialign_frac=multialign_frac,
                                                     target_region=target_bed, 
-                                                    genome_file=ref_genome )
+                                                    target_tag=paths.target_tag,
+                                                    genome_file=paths.ref_genome_fai_path() )
 
     multi_align_bed_obj = pb.BedTool(multi_align_bed).sort()
     logger.info("The multialign bed extracted from {} is {} and it covers {} bp.".format(input_bam,
@@ -91,7 +92,16 @@ def preparation(paths: SDrecallPaths,
                                                              "overlap_len"]).loc[:,["chr_1", "start_1", "end_1", "strand1",
                                                                                     "chr_2", "start_2", "end_2", "strand2",
                                                                                     "chr_bam1", "start_bam1", "end_bam1", "mismatch_rate", "overlap_len"]].drop_duplicates().dropna()
-    logger.debug("Raw SD map contains {} regions. (saved to {})".format(total_bin_sd_df.shape[0], os.path.join(outdir + "raw_SD_binary_map.tsv")))
+    # Filter out the SD pairs with either one of them on alternative contigs
+    # Need to prepare the regex for main contig names first
+    main_contigs_pattern = r'^(chr)?([0-9]+|[XYM]|MT)$'
+    # Filter to keep only SD pairs where both contigs are main chromosomes
+    main_contig_mask = (
+        total_bin_sd_df['chr_1'].str.match(main_contigs_pattern, case=False) & 
+        total_bin_sd_df['chr_2'].str.match(main_contigs_pattern, case=False)
+    )
+    total_bin_sd_df = total_bin_sd_df[main_contig_mask].reset_index(drop=True)
+    logger.info(f"After filtering out alternative contigs, {total_bin_sd_df.shape[0]} SD pairs remain")
     
     # Convert the both negative strand SDs to both positive strand SDs
     both_neg_strand = (total_bin_sd_df.loc[:, "strand1"] == "-") & (total_bin_sd_df.loc[:, "strand2"] == "-")
@@ -130,7 +140,7 @@ def preparation(paths: SDrecallPaths,
     graph_bed = filter_bed_by_interval_size(graph_bed, 140)
     
     ## Extract SD + PO BED regions with depth issues caused by mapping ambiguity
-    intersect_df = graph_bed.intersect(multi_align_bed.merge(), wo=True).to_dataframe(disable_auto_names=True, names=["chrA", "startA", "endA", "strandA", 
+    intersect_df = graph_bed.intersect(multi_align_bed_obj.merge(), wo=True).to_dataframe(disable_auto_names=True, names=["chrA", "startA", "endA", "strandA", 
                                                                                                                       "chrB", "startB", "endB", "strandB",
                                                                                                                       "mismatch_rate",
                                                                                                                       "chr_target", "start_target", "end_target", "overlap_len"])
@@ -226,7 +236,7 @@ def main():
         target_bed=args.target_bed,
         sample_id=args.sample_id,  # Use user-provided sample_id if available
         target_tag=args.target_tag,  # Use user-provided target_tag if available 
-        base_dir=args.outdir
+        output_dir=args.outdir
     )
     
     # Log the derived values for confirmation

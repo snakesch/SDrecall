@@ -403,8 +403,8 @@ function modify_masked_genome_coords () {
 
 
 function independent_minimap2_masked () {
-    local OPTIND f r s g o p t e z m i a c
-    while getopts f::r::s::g::o::t::e::z::m::i::a::c:: args
+    local OPTIND f r s g o p t z m i a
+    while getopts f::r::s::g::o::t::z::m::i::a:: args
     do
         case ${args} in
             f) local forward_reads=$OPTARG ;;
@@ -412,13 +412,11 @@ function independent_minimap2_masked () {
             g) local ref_genome=$OPTARG ;;
             a) local masked_genome=$OPTARG ;;
             s) local samp_ID=$OPTARG ;;
-            e) local expected_lines=$OPTARG ;;
             o) local output_align=$OPTARG ;;
             t) local threads=$OPTARG ;;
             z) local ref_contig_sizes=$OPTARG ;;
             m) local mode=$OPTARG ;;
             i) local rg_index=$OPTARG ;;
-            c) local nm_cutoff=$OPTARG ;;
             *) echo "No argument passed. Pls at least specify -r (ref fasta path) or -b (bed_file path)." ;;
         esac
     done
@@ -426,11 +424,9 @@ function independent_minimap2_masked () {
     if [[ -z ${ref_genome} ]]; then { echo >&2 "No reference genome provided. Exit. " && exit 1; } fi
     if [[ -z ${samp_ID} ]]; then local samp_ID=$(basename ${forward_reads} | awk '{gsub(/_[a-z]*1\.f[ast]*q[\.gz]*$/, "", $0); printf "%s", $0;}'); fi
     if [[ -z ${output_align} ]]; then local output_align=${samp_ID}.bam; fi
-    if [[ -z ${expected_lines} ]]; then local expected_lines=1; fi
     if [[ -z ${ref_contig_sizes} ]]; then local ref_contig_sizes="${ref_genome}.fai"; fi
     if [[ -z ${threads} ]]; then local threads=1; fi
     if [[ -z ${mode} ]]; then local mode="sr"; fi
-    if [[ -z ${nm_cutoff} ]]; then local nm_cutoff=5; fi
 
     if [[ ${forward_reads} =~ \.gz$ ]]; then
         # Since novoalign free version does not support the gz fastq input. we need to prepare plain version fastq
@@ -467,7 +463,7 @@ function independent_minimap2_masked () {
 }
 
 
-function bcftools_call_per_PC {
+function bcftools_call_per_RG {
     local OPTIND a m o c b p
     while getopts a:m:o::c::b::p:: args
     do
