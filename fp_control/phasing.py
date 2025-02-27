@@ -25,10 +25,10 @@ module (graph_build.py).
 Key features:
 - Utilizes graph-tool library for efficient graph operations
 - Implements a clique-based approach for identifying haplotype clusters
-- Perform twice BK algorithm to balance accuracy and sensitivity
+- Perform twice seek-and-expand heuristic algorithm to balance accuracy and sensitivity
 
 Main functions:
-- clique_iterator_per_component: Identifies cliques within a given component
+- find_cliques_in_components: Identifies cliques within a given component
 - find_components_inside_filtered_cliques: Removing zero weight edges and identifying components inside the cliques
 
 Dependencies:
@@ -49,18 +49,18 @@ def graph_vertex_iter(vertex_indices, graph):
 
 
 
-def clique_iterator_per_component(graph, weight_matrix, ew_cutoff = 0.101, logger = logger):
+def find_cliques_in_components(graph, weight_matrix, ew_cutoff = 0.101, logger = logger):
     '''
     This function is to find the largest cliques in each component of the graph
 
     - One critical consideration is that when extending cliques, if we allow two read pairs with low edge weight to be grouped into the same clique, there is a significant chance that this call is a false positive.
     - Low edge weight means the overlapping region between two read pairs does not contain sufficient variants to confidently determine the phase.
-    - The clique identification is performed by the BK algorithm. Which starts with a node and extend cliques as much as possible.
+    - The clique identification is performed by the an seed-and-expand heuristic algorithm. Which starts with a node and extend cliques as much as possible.
     - When applying an edge weight cutoff during the clique extension process, we make sure the cliques identified are all high confidence.
     - This ensures that phasing accuracy is high. But for read pairs containing less or no variants, they are no connected by edges with sufficiently high edge weight, leading to exclusion from any clique extensions.
     - This also means for haplotypes closer to the reference genome, their reads are less likely to be grouped into the clique, thus stay fragmented.
 
-    - To address this issue, we perform twice BK algorithm with two levels of edge weight cutoffs.
+    - To address this issue, we perform twice seek-and-expand heuristic algorithm with two levels of edge weight cutoffs.
     - In the first round, we apply an edge weight cutoff to ensure two read pairs share at least two SNVs or 1 indels.
     - In the second round, we apply an edge weight cutoff to ensure two read pairs share at least one SNV.
     - After the first round, during the second round, the remaining fragmented read pairs are then grouped into cliques, to increase the phasing sensitivity a little bit for read pairs carrying less variants.
@@ -188,10 +188,10 @@ def find_components_inside_filtered_cliques(final_cliques,
 
 def phasing_realigned_reads(phased_graph, weight_matrix, edge_weight_cutoff, logger = logger):
     logger.info(f"Now start finding haplotypes in the setup weight matrix, the numba parallel threads are set to {get_num_threads()}")
-    total_cliques = clique_iterator_per_component( phased_graph,
-                                                    weight_matrix,
-                                                    ew_cutoff = edge_weight_cutoff,
-                                                    logger = logger )
+    total_cliques = find_cliques_in_components(phased_graph,
+                                                  weight_matrix,
+                                                  ew_cutoff = edge_weight_cutoff,
+                                                  logger = logger )
 
     total_cliques = list(total_cliques)
 

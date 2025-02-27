@@ -1,329 +1,221 @@
 import os
-# Below two env variables are validated to control the number of threads used by numpy and numba, without them parallel run this script might cause CPU leakage
-# os.environ["OMP_NUM_THREADS"] = "24"
-# os.environ["NUMBA_NUM_THREADS"] = "24"
-# os.environ["OPENBLAS_NUM_THREADS"] = "20"
-# os.environ["VECLIB_MAXIMUM_THREADS"] = "20"
-# os.environ["NUMEXPR_NUM_THREADS"] = "20"
-# os.environ["MKL_NUM_THREADS"] = "20"
-# os.environ["TBB_NUM_THREADS"] = "24"
-
 import gc
-import warnings
-warnings.filterwarnings("ignore", category=UserWarning)
+import re
+import sys
+import numba
+
 import pandas as pd
-import pysam
-import argparse as ap
-# import numba
-# numba.config.THREADING_LAYER = 'omp'
-# numba.set_num_threads(4)
-# from numba import types, prange, get_num_threads
+import numpy as np
+import multiprocessing as mp
+ctx = mp.get_context("spawn")
+
 from io import StringIO
+from datetime import datetime
+from itertools import repeat
 
-
-from src.utils import executeCmd
-from src.log import configure_logger
+from src.utils import executeCmd, configure_parallelism, merge_bams
+from src.log import logger, log_command
 from src.const import shell_utils
-from fp_control.bam_ncls import migrate_bam_to_ncls, calculate_mean_read_length
-from fp_control.graph_build import build_phasing_graph
-from fp_control.identify_misaligned_haps import inspect_by_haplotypes
-from fp_control.phasing import phasing_realigned_reads
+from src.suppress_warning import *
+
+from realign_recall.slice_bam_by_cov import split_bam_by_cov
+from fp_control.realign_filter_per_cov import imap_filter_out
+from realign_recall.cal_edge_NM_values import calculate_NM_distribution_poisson
+
+def gt_filter_init(threads):
+    # Set thread count for all common numerical libraries
+    os.environ["NUMBA_NUM_THREADS"] = str(threads)
+    os.environ["OMP_NUM_THREADS"] = str(threads)
+    os.environ["TBB_NUM_THREADS"] = str(threads)
+    os.environ["MKL_NUM_THREADS"] = str(threads)  # Add Intel MKL
+    os.environ["OPENBLAS_NUM_THREADS"] = str(threads)  # Add OpenBLAS
+    os.environ["VECLIB_MAXIMUM_THREADS"] = str(threads)  # Add Apple's Accelerate
+    os.environ["NUMEXPR_NUM_THREADS"] = str(threads)  # Add numexpr
+
+    # Configure libraries directly when possible
+    numba.set_num_threads(threads)
+    numba.config.THREADING_LAYER = 'omp'
+    
+    # Set NumPy threading (if using recent NumPy versions)
+    try:
+        np.config.threading_layer = 'threaded'  # Use Python threads
+    except:
+        pass
+        
+    print(f"Init subprocess with {threads} threads for numerical libraries", file=sys.stderr)
 
 
-logger = configure_logger()
+def eliminate_misalignments(input_bam,
+                            output_bam,
+                            intrinsic_bam,
+                            ref_genome,
+                            avg_frag_size = 400,
+                            threads = 12,
+                            numba_threads = 4,
+                            conf_level = 0.01,
+                            stat_sample_size = 1000000,
+                            mapq_cutoff = 20,
+                            basequal_median_cutoff = 15,
+                            edge_weight_cutoff = 0.201,
+                            logger = logger):
 
+    self_path = os.path.abspath(__file__)
+    cmd = f"bash {shell_utils} quick_check_bam_validity {output_bam} && \
+            bash {shell_utils} quick_check_bam_validity {input_bam} && \
+            [[ {output_bam} -nt {input_bam} ]] && \
+            [[ {output_bam} -nt {self_path} ]]"
 
-def extract_var_pos(raw_vcf,
-                    bam_region_bed,
-                    logger = logger):
-    cmd = f"bcftools view -R {bam_region_bed} -Ou {raw_vcf} | \
-            bcftools sort -Ou - | \
-            bcftools query -f '%CHROM\\t%POS\\t%END\\n' -"
+    try:
+        executeCmd(cmd, logger=logger)
+    except RuntimeError:
+        logger.info(f"Start to post process the bam file {input_bam}")
+        splitted_bams, splitted_beds = split_bam_by_cov(input_bam, 
+                                                        delimiter_size=int(np.ceil(2*avg_frag_size)), 
+                                                        logger = logger, 
+                                                        threads = threads,
+                                                        ref_genome = ref_genome)
+        splitted_intrin_bams, _ = split_bam_by_cov( intrinsic_bam, 
+                                                    beds = splitted_beds, 
+                                                    logger = logger, 
+                                                    threads = threads,
+                                                    ref_genome = ref_genome )
+        
+        # There is a possiblity that the splitted_intrin_bams might be empty, so we need to check it
+        # Sort the list for load balancing
+        tup_bams = list(zip(splitted_bams, splitted_intrin_bams, splitted_beds))
+        assert len(splitted_intrin_bams) == len(splitted_bams), f"The splitted intrin BAMs number is not equal to splitted BAMs number"
+        tb_removed_indices = set()
+        for i in range(len(splitted_bams)):
+            if splitted_bams[i] == "NaN":
+                logger.warning(f"The BAM file {splitted_bams[i]} for {splitted_beds[i]} is not valid, so we need to remove it from the list")
+                tb_removed_indices.add(i)
+            elif splitted_intrin_bams[i] == "NaN":
+                logger.warning(f"The intrinsic BAM file {splitted_intrin_bams[i]} for {splitted_beds[i]} is not valid, so we need to remove it from the list")
+                tb_removed_indices.add(i)
 
-    # ATTENTION! RETURNED coordinates are 1-indexed!
-    var_pos_str = executeCmd(cmd, stdout_only = True, logger = logger)
+        tup_bams = [tup_bams[i] for i in range(len(tup_bams)) if i not in tb_removed_indices]
+        tup_bams = sorted(tup_bams, key=lambda x: os.path.getsize(x[0]), reverse=True)
+        raw_bams = [cb[0] for cb in tup_bams]
+        intrinsic_bams = [cb[1] for cb in tup_bams]
+        raw_bam_regions = [cb[2] for cb in tup_bams]
+        clean_bams = [ re.sub(r"\.raw\.", ".", cb) for cb in raw_bams]
+        
+        # Filter out the misaligned_reads per chromosome
+        job_num, _ = configure_parallelism(threads, numba_threads)
+        nm_cutoff, _ = calculate_NM_distribution_poisson(input_bam, conf_level, stat_sample_size, logger)
 
-    df = pd.read_table(StringIO(var_pos_str), header = None, sep = "\t", names = ["chrom", "start", "end"], dtype = {"chrom": str, "start": int, "end": int})
-    logger.info(f"The variant positions are extracted from the VCF file. There are {df.shape[0]} variants in total. They looks like :\n{df[:5].to_string(index=False)}\n")
-    gc.collect()
+        # Create a dedicated log directory
+        log_dir = os.path.dirname(output_bam)
+        os.makedirs(log_dir, exist_ok=True)
 
-    return df
+        with ctx.Pool(job_num, initializer=gt_filter_init, initargs=(numba_threads,)) as pool:
+            # Pass the log_dir parameter to the function
+            result_records = pool.starmap(
+                imap_filter_out, 
+                [(
+                    (raw_bam, 
+                     clean_bam, 
+                     intrinsic_bam, 
+                     raw_bam_region,
+                     nm_cutoff,
+                     mapq_cutoff,
+                     basequal_median_cutoff,
+                     edge_weight_cutoff,
+                     i), 
+                    log_dir
+                ) for i, (raw_bam, clean_bam, intrinsic_bam, raw_bam_region) in enumerate(zip(raw_bams, clean_bams, intrinsic_bams, raw_bam_regions))]
+            )
+            
+            result_record_strs = []
+            i = 0
+            for result in result_records:
+                i += 1
+                print(f"\n************************************{i}_subprocess_start_for_filtering************************************\n", file=sys.stderr)
+                
+                result_parts = result.split(",")
+                raw_bam = result_parts[0]
+                
+                # Extract the log file path (now at position 2)
+                log_file = result_parts[2] if len(result_parts) >= 3 else "No log file"
+                
+                # For result processing, we need to add placeholders to match the expected 5 fields
+                # The original expected: raw_bam, masked_bam, clean_masked_bam, noise_masked_bam, masked_vcf
+                if len(result_parts) == 3 and result_parts[1] != "NaN":  # Successful result: raw_bam, output_bam, log_file
+                    standard_result = f"{result_parts[0]},{result_parts[1]}"
+                else:  # Error result: raw_bam, NaN, log_file
+                    standard_result = f"{result_parts[0]},NaN"
+                    
+                result_record_strs.append(standard_result)
+                
+                # Print a reference to the log file instead of all log content
+                print(f"Subprocess {i} for {raw_bam} complete. Full log available at: {log_file}", file=sys.stderr)
+                
+                # Display brief status based on result
+                if len(result_parts) >= 2 and result_parts[1] != "NaN":
+                    print(f"  Status: SUCCESS - Created output: {result_parts[1]}", file=sys.stderr)
+                else:
+                    # For errors, show the last few lines of the log file to help with debugging
+                    try:
+                        with open(log_file, 'r') as f:
+                            log_tail = "".join(f.readlines()[-5:])  # Last 5 lines
+                        print(f"  Status: ERROR - Check log file for details", file=sys.stderr)
+                        print(f"  Error summary:\n{log_tail}", file=sys.stderr)
+                    except:
+                        print(f"  Status: ERROR - Could not read log file", file=sys.stderr)
+                    
+                print(f"{datetime.now()}: ************************************{i}_subprocess_end_for_filtering_{raw_bam}************************************", file=sys.stderr)
 
-
-
-def main_function(bam,
-                  output_bam = None,
-                  filter_out_bam = None,
-                  intrinsic_bam = None,
-                  raw_vcf = None,
-                  bam_region_bed = None,
-                  max_varno = 5,
-                  mapq_cutoff = 20,
-                  basequal_median_cutoff = 15,
-                  edge_weight_cutoff = 0.201,
-                  logger=logger):
-    '''
-    Main function for processing and analyzing BAM files to identify and filter misaligned reads.
-
-    This function performs the following main tasks:
-    1. Migrates BAM files to NCLS format for efficient query of reads or read pairs overlapping a query genomic region
-    2. Builds a read-pair graph from the BAM data for phasing, where each vertex represents a read pair and each edge represents the confidence that two read pairs are originated from the same haplotype
-    3. Identifies haplotypes in the graph by finding non-overlapping maximal cliques iteratively (using an approximate but not exact algorithm for efficient clique search, basically we iteratively run Greedy-Clique-Expansion algorithm)
-    4. After read pair grouped into different haplotypes, we put them into a binary integer linear programming model to solve the haplotype-level misalignment with HiGHs solver.
-    5. Generates output BAM files with filtered and annotate haplotype index assigned to each read pairs.
-
-    Parameters:
-    - bam (str): Path to the input BAM file
-    - output_bam (str, optional): Path for the output filtered BAM file, if not specified, output_bam will be the input bam with .clean.bam suffix
-    - filter_out_bam (str, optional): Path for the BAM file containing filtered-out reads, if not specified, we do not output the filtered BAM file
-    - intrinsic_bam (str): Path to the intrinsic BAM file, generated earlier in the SDrecall workflow (basically it aligns the reference sequence of one SD to the other SD)
-    - raw_vcf (str): Path to the raw VCF file, the variants detected in the raw pooled alignments.
-    - bam_region_bed (str, optional): Path to the BED file defining covered regions of the processing bam file, if not specified, bam_region_bed will be generated with a name after the input bam with .coverage.bed suffix
-    - max_varno (float): Maximum variant number allowed
-    - mapq_cutoff (int): Mapping quality cutoff to be included in the analysis
-    - basequal_median_cutoff (int): Base quality median cutoff to be included in the analysis (if the median BQ of a read is lower than this cutoff, we will discard this read because it is too noisy)
-    - edge_weight_cutoff (float): Edge weight cutoff separating two rounds of BK clique searches
-    - logger (Logger object): Logger for output messages
-
-    Returns:
-    - phased_graph (Graph object): The constructed phasing graph
-
-    This function integrates various analysis steps including BAM processing,
-    graph construction, haplotype identification, and read filtering to improve
-    the quality of genomic alignments and identify potential misalignments.
-    '''
-
-    # Given the top 1% mismatch count per read (one structrual variant count as 1 mismatch)
-    tmp_bam = bam.replace(".bam", ".tmp.bam")
-
-    if output_bam is None:
-        output_bam = bam.replace(".bam", ".clean.bam")
-        replace = True
+            pool.close()
+            gc.collect()
+            
+            # Continue with existing result processing...
+            logger.info("Start to compose the parallel returned results into a dataframe")
+            post_result_tab = os.path.join(os.path.dirname(raw_bams[0]), "post_result.tsv")
+            post_result_df = pd.read_csv(StringIO("\n".join(result_record_strs)), header=None, names=["raw_masked_bam", "masked_bam"], na_values="NaN")
+            post_result_df.to_csv(post_result_tab, sep="\t", index=False)
+            
+            # Log summary statistics about the results
+            success_count = len(post_result_df.dropna(subset=["masked_bam"]))
+            total_count = len(post_result_df)
+            logger.info(f"Processing completed: {success_count}/{total_count} regions successfully processed")
+            
+            # Log output file location but not the entire content
+            logger.info(f"Detailed results saved to {post_result_tab}")
+            
+            # Show a summary table with just the counts by status
+            summary = post_result_df.notna().sum()
+            logger.info(f"Result summary:\n{summary}")
+            
+            # Now we merge the masked bams and vcfs across different chromosomes
+            merge_bams(post_result_df.loc[:, "masked_bam"].dropna().drop_duplicates().tolist(), output_bam, ref_fasta = ref_genome, threads=threads - 1, logger=logger)
+            merge_bams(post_result_df.loc[:, "raw_masked_bam"].dropna().drop_duplicates().tolist(), input_bam, ref_fasta = ref_genome, threads=threads - 1, logger=logger)
+            return input_bam, output_bam
+            
     else:
-        replace = False
-
-    max_varno = float(max_varno)
-
-    if filter_out_bam is None:
-        filter_out_bam = output_bam.replace(".bam", ".noise.bam")
-
-    noisy_qnames = set([])
-    mismap_qnames = set([])
-    norm_qnames = {"":set([])}
-    noisy_num = 0
-    total_num = 0
-
-    bam_ncls = migrate_bam_to_ncls(bam,
-                                   mapq_filter = mapq_cutoff,
-                                   basequal_median_filter = basequal_median_cutoff,
-                                   logger=logger)
-
-    # parse the results from the tuple returned by migrate_bam_to_ncls
-    ncls_dict, read_dict, qname_dict, qname_idx_dict, total_lowqual_qnames = bam_ncls
-    logger.info(f"Successfully migrated the BAM file {bam} to NCLS format\n\n")
-
-    # Now migrate the intrinsic BAM file to NCLS format
-    intrin_bam_ncls = migrate_bam_to_ncls(intrinsic_bam,
-                                          mapq_filter = 0,
-                                          basequal_median_filter = 0,
-                                          paired = False,
-                                          logger=logger)
-    # Since intrinsic BAM reads are reference sequences, therefore there are no low quality reads
-    intrin_bam_ncls = intrin_bam_ncls[:-1]
-    logger.info(f"Successfully migrated the intrinsic BAM file {intrinsic_bam} to NCLS format\n")
-    logger.info(f"Containing {len(intrin_bam_ncls[1])} reads in total.\n\n")
-    bam_graph = bam.replace(".bam", ".phased.graphml")
-
-    # Calculate the mean read length of the input bam file, which can be used for read pair similarity calculation
-    mean_read_length = calculate_mean_read_length(bam)
-
-    # Create the read-pair graph used for phasing
-    # Detailed description of the graph construction can be found in the function docstring.
-    phased_graph, weight_matrix, qname_to_node, total_readhap_vector, read_ref_pos_dict = build_phasing_graph(bam,
-                                                                                                            ncls_dict,
-                                                                                                            read_dict,
-                                                                                                            qname_dict,
-                                                                                                            qname_idx_dict,
-                                                                                                            mean_read_length,
-                                                                                                            edge_weight_cutoff = edge_weight_cutoff,
-                                                                                                            logger = logger)
-    if phased_graph is None:
-        return None
-
-    logger.info(f"Now succesfully built the phasing graph with {phased_graph.num_vertices()} vertices and {phased_graph.num_edges()} edges. Save it to {bam_graph}\n\n")
-    # Now we need to extract the components in the phased graph
-    phased_graph.save(bam_graph)
-
-    # Now we need to do local phasing for each component in the graph. (Finding non-overlapping high edge weight cliques inside each component iteratively)
-    qname_hap_info, hap_qname_info = phasing_realigned_reads(phased_graph,
-                                                             weight_matrix,
-                                                             edge_weight_cutoff,
-                                                             logger = logger)
-
-    # Inspect the raw BAM corresponding variants to get the high density regions
-    # It's like active region identification for GATK HC
-    if not bam_region_bed:
-        bam_region_bed = bam.replace(".bam", ".coverage.bed")
-        cmd = f"bash {shell_utils} samtools_bam_coverage \
-                -i {bam} \
-                -d 0 \
-                -o {bam_region_bed}"
-        executeCmd(cmd, logger = logger)
-
-    # tobe_inspected_regions, var_df = extract_var_pos(raw_vcf, bam_region_bed, padding_size = 30, density_cutoff = 1/50, logger = logger)
-    var_df = extract_var_pos(raw_vcf, bam_region_bed, logger = logger)
-
-    total_genomic_haps = {}
-    total_readerr_vector = {}
-    compare_haplotype_meta_tab = bam.replace(".bam", ".haplotype_meta.tsv")
-
-    correct_qnames, mismap_qnames = inspect_by_haplotypes(bam,
-                                                        hap_qname_info,
-                                                        qname_hap_info,
-                                                        bam_ncls,
-                                                        intrin_bam_ncls,
-                                                        qname_to_node,
-                                                        total_lowqual_qnames,
-                                                        total_readhap_vector,
-                                                        total_readerr_vector,
-                                                        total_genomic_haps,
-                                                        read_ref_pos_dict,
-                                                        compare_haplotype_meta_tab = compare_haplotype_meta_tab,
-                                                        mean_read_length = mean_read_length,
-                                                        logger = logger )
-
-    assert len(correct_qnames & mismap_qnames) == 0, f"The correct_qnames and mismap_qnames have overlap: {correct_qnames & mismap_qnames}"
-
-    logger.info(f"In total has found {len(hap_qname_info)} clique separated components (haplotypes) in the target inspected regions.")
-    logger.info(f"We found {len(mismap_qnames)} read pairs that are likely to be misaligned in the target regions.\n {mismap_qnames}\n And {len(correct_qnames)} read pairs that are likely to be correctly aligned in the target regions.\n {correct_qnames}\n")
-
-    with pysam.AlignmentFile(bam, "rb") as bam_handle:
-        # Extract the sample name (SM) from the existing read groups in the header
-        with pysam.AlignmentFile(tmp_bam, "wb", header = bam_handle.header) as tmp_handle:
-            with pysam.AlignmentFile(output_bam, "wb", header = bam_handle.header) as output_handle:
-                with pysam.AlignmentFile(filter_out_bam, "wb", header = bam_handle.header) as noisy_handle:
-                    # viewed_regions = {}
-                    for read in bam_handle:
-                        if read.is_supplementary or \
-                           read.is_secondary:
-                           continue
-                        total_num += 1
-                        qname = read.query_name
-                        hap_id = qname_hap_info.get(qname_to_node.get(qname, -1), "NA")
-                        if qname in mismap_qnames:
-                            hap_id = f"{hap_id}_HIGHVD"
-                        if qname in total_lowqual_qnames:
-                            hap_id = f"{hap_id}_LOWQUAL"
-                        # Filter out reads with oddly high editing distance that breakthrough the cutoff
-                        if read.is_mapped and read.mapping_quality > 10:
-                            gap_sizes = [t[1] for t in read.cigartuples if t[0] in [1,2] and t[1] > 1]
-                            max_gap_size = max(gap_sizes) if len(gap_sizes) > 0 else 0
-                            edit_dist = read.get_tag("NM")
-                            scatter_edit_dist = edit_dist - max_gap_size
-                            if qname in total_lowqual_qnames:
-                                pass
-                            elif qname in noisy_qnames:
-                                # logger.debug(f"Read {1 if read.is_read1 else 2} from pair {read.query_name} has an edit distance {scatter_edit_dist} which is too high to be likely correctly mapped")
-                                noisy_handle.write(read)
-                            elif qname in mismap_qnames:
-                                # logger.debug(f"Read {1 if read.is_read1 else 2} from pair {read.query_name} has an edit distance {scatter_edit_dist} which is significantly higher than other reads so it is considered as noisy and misaligned")
-                                noisy_handle.write(read)
-                            elif scatter_edit_dist > max_varno and qname not in correct_qnames:
-                                noisy_num += 1
-                                logger.info(f"Read {1 if read.is_read1 else 2} from pair {read.query_name} has an edit distance {scatter_edit_dist} which is so high that it is considered as noisy and misaligned")
-                                noisy_qnames.add(qname)
-                                noisy_handle.write(read)
-                            elif not read.is_secondary and \
-                                not read.is_supplementary and \
-                                not read.is_duplicate and \
-                                not read.is_qcfail:
-                                # logger.debug(f"Read {1 if read.is_read1 else 2} from pair {read.query_name} has an edit distance {read.get_tag('NM')} which is considered as normal")
-                                qname_pair = norm_qnames.get(qname, set([]))
-                                qname_pair.add(read)
-                                norm_qnames[qname] = qname_pair
-                        else:
-                            logger.info(f"Read {1 if read.is_read1 else 2} from pair {read.query_name} is not mapped or has low mapping quality {read.mapping_quality}, skip this read")
-
-                        if qname in noisy_qnames:
-                            hap_id = f"{hap_id}_HIGHVD"
-                        read.set_tag('HP', f'HAP_{hap_id}')
-                        tmp_handle.write(read)
-
-                # logger.warning(f"Check {check_odd_num} reads to find oddly high editing distance reads, {zero_odd_num} reads found no odd editing distance read pairs")
-                for qname, pair in norm_qnames.items():
-                    if (not qname in noisy_qnames) and (not qname in mismap_qnames):
-                        for read in pair:
-                            output_handle.write(read)
-
-    logger.warning(f"Filtered out {len(noisy_qnames)} noisy read-pairs (Editing distance without the biggest gap > {max_varno}) and {len(mismap_qnames - noisy_qnames)} read-pairs with ODD high editing distance, remaining {len(set(norm_qnames.keys()) - noisy_qnames - mismap_qnames)} read-pairs from {bam} (with total {total_num} reads) and output to {output_bam}\n\n")
-
-    # Replace the input BAM file with the tmp BAM file with modified RG tags for visualization of haplotype clusters
-    executeCmd(f"samtools sort -O bam -o {bam} {tmp_bam} && samtools index {bam} && rm {tmp_bam}", logger=logger)
-
-    if replace:
-        logger.info(f"Replacing {bam} with {output_bam}")
-        executeCmd(f"samtools sort -O bam -o {bam} {output_bam} && samtools index {bam} && rm {output_bam}", logger=logger)
-    else:
-        logger.info(f"Generated a new BAM file: {output_bam}")
-        tmp_bam = output_bam.replace(".bam", ".tmp.bam")
-        executeCmd(f"samtools sort -O bam -o {tmp_bam} {output_bam} && mv {tmp_bam} {output_bam} && samtools index {output_bam}", logger = logger)
-
-    cmd = f"samtools sort -O bam -o {tmp_bam} {filter_out_bam} && mv {tmp_bam} {filter_out_bam} && samtools index {filter_out_bam}"
-    executeCmd(cmd, logger = logger)
-    logger.info(f"Generated two BAM files: {filter_out_bam} and {output_bam}.")
-    return phased_graph
-
+        logger.info(f"The post processed masked bam and vcf files are already up-to-date. No need to run the post processing again.")
+        return input_bam, output_bam
 
 
 if __name__ == "__main__":
-    parser = ap.ArgumentParser(description='Process and analyze BAM files to identify and filter misaligned reads.')
-    
-    # Required arguments
-    parser.add_argument("-b", "--bam", type=str, required=True,
-                      help="Path to the input BAM file")
-    parser.add_argument("-i", "--intrinsic_bam", type=str, required=True,
-                      help="Path to the intrinsic BAM file (aligns reference sequence of one SD to other SD)")
-    parser.add_argument("-v", "--raw_vcf", type=str, required=True,
-                      help="Path to the raw VCF file containing variants detected in raw pooled alignments")
-    
-    # Optional arguments
-    parser.add_argument("-o", "--output_bam", type=str,
-                      help="Path for output filtered BAM file. If not specified, will use input.clean.bam")
-    parser.add_argument("-f", "--filter_out_bam", type=str,
-                      help="Path for BAM file containing filtered-out reads. If not specified, will use output.noise.bam")
-    parser.add_argument("-r", "--bam_region_bed", type=str,
-                      help="Path to BED file defining covered regions. If not specified, will generate from input BAM")
-    parser.add_argument("-m", "--max_varno", type=float, default=5,
-                      help="Maximum variant number allowed (default: 5)")
-    parser.add_argument("-q", "--mapq_cutoff", type=int, default=20,
-                      help="Mapping quality cutoff (default: 20)")
-    parser.add_argument("-Q", "--basequal_median_cutoff", type=int, default=15,
-                      help="Base quality median cutoff (default: 15)")
-    parser.add_argument("-e", "--edge_weight_cutoff", type=float, default=0.201,
-                      help="Edge weight cutoff for BK clique searches (default: 0.201)")
-
+    import argparse as ap
+    parser = ap.ArgumentParser(description="Eliminate the misalignments from the input bam file")
+    parser.add_argument("--input_bam", type=str, required=True, help="The input bam file")
+    parser.add_argument("--output_bam", type=str, required=True, help="The output bam file")
+    parser.add_argument("--intrinsic_bam", type=str, required=True, help="The intrinsic bam file")
+    parser.add_argument("--ref_genome", type=str, required=True, help="The reference genome file")
+    parser.add_argument("--avg_frag_size", type=int, required=True, help="The average fragment size")
+    parser.add_argument("--threads", type=int, required=True, help="The number of threads")
+    parser.add_argument("--numba_threads", type=int, required=True, help="The number of threads for numba")
+    parser.add_argument("--logger", type=str, required=True, help="The logger")
     args = parser.parse_args()
 
-    # Configure logging
-    logger.info("Starting BAM processing with parameters:")
-    for arg, value in vars(args).items():
-        logger.info(f"{arg}: {value}")
-
-    # Call main function with parsed arguments
-    main_function(
-        bam=args.bam,
-        output_bam=args.output_bam,
-        filter_out_bam=args.filter_out_bam,
-        intrinsic_bam=args.intrinsic_bam,
-        raw_vcf=args.raw_vcf,
-        bam_region_bed=args.bam_region_bed,
-        max_varno=args.max_varno,
-        mapq_cutoff=args.mapq_cutoff,
-        basequal_median_cutoff=args.basequal_median_cutoff,
-        edge_weight_cutoff=args.edge_weight_cutoff,
-        logger=logger
-    )
-
-
+    eliminate_misalignments(args.input_bam,
+                            args.output_bam,
+                            args.intrinsic_bam,
+                            args.ref_genome,
+                            args.avg_frag_size,
+                            args.threads,
+                            args.numba_threads,
+                            args.logger)
 
 

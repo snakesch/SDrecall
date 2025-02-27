@@ -104,12 +104,11 @@ def process_masked_bam( rg_tag,
             
             sub_running_log = raw_masked_vcf.replace(".vcf.gz", ".log")
             cmd = f"bash {shell_utils} bcftools_call_per_RG \
-                    -a {original_bam} \
                     -m {ref_genome} \
                     -c {threads} \
                     -o {raw_masked_vcf} \
                     -p {rg_tag} \
-                    -b {raw_masked_bam} > {sub_running_log} 2>&1"
+                    -b {raw_masked_bam}"
                 # We need to allow this function to be failed sometimes
             try:
                 executeCmd(cmd, logger=logger)

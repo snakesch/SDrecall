@@ -3,13 +3,15 @@ import subprocess
 import logging
 import tempfile
 import re
-from typing import List
+import numpy as np
+from typing import List, Tuple
 
 from pybedtools import BedTool
 from src.log import logger
+from src.const import shell_utils
+
 
 # - Miscellaneous helper functions - #
-
 def executeCmd(cmd, logger = logger) -> None:
 
     proc = subprocess.run(cmd, shell=True, capture_output=True)
@@ -97,8 +99,10 @@ def merge_bed_files(bed_files: List[str]) -> BedTool:
         merged_bedtool = merged_bedtool.cat(bt, postmerge=False)
     return merged_bedtool.sort()
 
+
 def filter_bed_by_interval_size(bed_obj, interval_size_cutoff):
     return bed_obj.filter(lambda x: len(x) > interval_size_cutoff).sort()
+
 
 # - VCF/BCF file manipulation using bcftools -# 
 def combine_vcfs(*vcfs, output=None, threads=4):
@@ -120,5 +124,59 @@ def combine_vcfs(*vcfs, output=None, threads=4):
     proc = subprocess.run(cmd, shell=True, capture_output=False)
     
     if proc.returncode != 0: raise RuntimeError("Error combining VCFs")
+
+
+def configure_parallelism(total_threads: int,
+                              threads_per_job: int = 4) -> Tuple[int, int]:
+    """
+    Configures parallelisation for a given number of total threads and threads per job.
+    
+    Args:
+        total_threads (int): The total number of threads available.
+    """
+    num_jobs = np.ceil(total_threads / threads_per_job)
+    return num_jobs, threads_per_job
+
+
+def merge_bams(bam_list: list, 
+               merged_bam: str, 
+               ref_fasta = "/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta",
+               threads = 2,
+               logger = logger):
+    # For data visualization and debugging
+    merged_bam_header = merged_bam.replace(".bam", ".header")
+    cmd = f"bash {shell_utils} modify_bam_sq_lines {bam_list[0]} {ref_fasta} {merged_bam_header}"
+    executeCmd(cmd, logger=logger)
+    
+    test_cmd = f"bash {shell_utils} quick_check_bam_validity {merged_bam}"
+    try:
+        executeCmd(test_cmd)
+    except RuntimeError:
+        logger.info(f"The merged pooled BAM file {merged_bam} is not valid")
+        execute = True
+    else:
+        if all([os.path.getmtime(merged_bam) > os.path.getmtime(vb) for vb in bam_list]):
+            execute = False
+        else:
+            logger.info(f"The merged pooled BAM file {merged_bam} is valid but not updated")
+            execute = True
+
+    merged_bam_list = merged_bam.replace(".bam", ".bams.list.txt")
+    with open(merged_bam_list, "w") as f:
+        f.write("\n".join(bam_list))
+    
+    cmd = f"samtools merge -c -@ {threads} -h {merged_bam_header} -b {merged_bam_list} -o - | \
+            samtools sort -O bam -o {merged_bam} -@ {threads} && \
+            samtools index {merged_bam} && \
+            ls -lht {merged_bam} || \
+            echo Failed to concatenate all the pooled BAM files. It wont be a fatal error but brings troubles to debugging and variant tracing."
+    if execute:
+        executeCmd(cmd, logger = logger)
+
+    return execute
+
+
+
+
 
 

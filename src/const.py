@@ -199,6 +199,22 @@ class SDrecallPaths:
         return dirs
     
 
+    def pooled_raw_bam_path(self) -> str:
+        """Path for pooled raw bam file"""
+        return os.path.join(self.recall_results_dir, f"{self.sample_id}.pooled.raw.bam")
+    
+    def recall_raw_vcf_path(self) -> str:
+        """Path for recall raw vcf file"""
+        return os.path.join(self.recall_results_dir, f"{self.sample_id}.sdrecall.raw.vcf.gz")
+    
+    def pooled_filtered_bam_path(self) -> str:
+        """Path for pooled filtered bam file"""
+        return os.path.join(self.recall_results_dir, f"{self.sample_id}.pooled.bam")
+    
+    def recall_filtered_vcf_path(self) -> str:
+        """Path for recall filtered vcf file"""
+        return os.path.join(self.recall_results_dir, f"{self.sample_id}.sdrecall.vcf.gz")
+
     def realign_meta_table_path(self) -> str:
         """Path for realign meta table"""
         return os.path.join(self.work_dir, f"{self.sample_id}_realign_meta_table.tsv")

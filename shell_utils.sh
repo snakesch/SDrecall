@@ -464,11 +464,10 @@ function independent_minimap2_masked () {
 
 
 function bcftools_call_per_RG {
-    local OPTIND a m o c b p
-    while getopts a:m:o::c::b::p:: args
+    local OPTIND m o c b p
+    while getopts m:o::c::b:p:: args
     do
         case ${args} in
-            a) local input_align_file=$OPTARG ;;
             m) local masked_genome=$OPTARG ;;
             b) local masked_bam=$OPTARG ;;
             o) local output_vcf=$OPTARG ;;
@@ -484,7 +483,6 @@ function bcftools_call_per_RG {
     # Skip the record if output_vcf is valid and updated.
     if check_vcf_validity ${output_vcf} 1 && \
        [[ ${output_vcf} -nt ${masked_genome} ]] && \
-       [[ ${output_vcf} -nt ${input_align_file} ]] && \
        [[ ${output_vcf} -nt ${masked_bam} ]]; then
         log "${output_vcf} already valid and updated. Skip the rest"
         return 0

@@ -165,14 +165,11 @@ def find_uncovered_regions_numba(existing_starts, existing_ends, new_start, new_
 
 
 
-
 def build_phasing_graph(bam_file,
                         ncls_dict,
                         ncls_read_dict,
                         ncls_qname_dict,
-                        ncls_qname_idx_dict,
                         mean_read_length,
-                        edge_weight_cutoff = 0.201,
                         logger = logger):
     '''
     Construct a phasing graph from BAM data for efficient haplotype identification.
@@ -237,7 +234,7 @@ def build_phasing_graph(bam_file,
     See Also:
     ---------
     migrate_bam_to_ncls : For creating the NCLS data structures.
-    clique_iterator_per_component : For identifying haplotypes in the constructed graph.
+    find_cliques_in_components : For identifying haplotypes in the constructed graph.
     '''
 
     logger.info(f"There are totally {len(ncls_read_dict)} pair of reads, mean read length is {mean_read_length}. with adequate mapping or base quality which can be used to build the graph")

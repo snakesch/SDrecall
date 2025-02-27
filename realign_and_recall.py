@@ -6,21 +6,18 @@ import multiprocessing as mp
 ctx = mp.get_context("spawn")
 
 import gc
-import pysam
 import pandas as pd
-import pybedtools as pb
 
-from typing import List, Set, Tuple, Dict
 from itertools import repeat
-from multiprocessing import Pool
 
-from src.utils import executeCmd, prepare_tmp_file
-from src.const import shell_utils, SDrecallPaths
+from src.utils import executeCmd, merge_bams, configure_parallelism
+from src.const import SDrecallPaths, shell_utils
 from src.log import logger
 
 from realign_recall.stat_realign_group_regions import stat_all_RG_region_size
 from realign_recall.realign_per_RG import imap_process_masked_bam
 from realign_recall.cal_edge_NM_values import calculate_NM_distribution_poisson
+from .misalignment_elimination import eliminate_misalignments
 
 
 def pool_init():
@@ -32,9 +29,7 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
                         threads = 12,
                         numba_threads = 4,
                         mq_cutoff = 20,
-                        conf_level = 0.01,
-                        varno_cutoff = 3,
-                        histo_fig = None):
+                        conf_level = 0.01):
     # First calculate input bam fragment size distribution
     input_bam = sdrecall_paths.input_bam
     avg_frag_size, std_frag_size = sdrecall_paths.avg_frag_size, sdrecall_paths.frag_size_std
@@ -52,7 +47,10 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
     
     ref_genome = sdrecall_paths.ref_genome
     target_region = sdrecall_paths.target_bed
-    pool = ctx.Pool(threads, initializer=pool_init)
+
+    # Prepare the regions to recruit reads for downstream realignment
+    num_jobs, _ = configure_parallelism(threads, 1)
+    pool = ctx.Pool(num_jobs, initializer=pool_init)
     prepared_beds = pool.imap_unordered(imap_prepare_masked_align_region_per_RG, zip(uniq_rg_labels,
                                                                                     rg_subids_tup_list,
                                                                                     repeat(sdrecall_paths.tmp_dir),
@@ -93,7 +91,8 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
     sd_freads, sd_rreads = zip(*fastq_tuple_list)
 
     # Perform the realignment and recall
-    pool = ctx.Pool(threads)
+    num_jobs, threads_per_job = configure_parallelism(threads, 4)
+    pool = ctx.Pool(num_jobs, initializer=pool_init)
     results = pool.imap_unordered(imap_process_masked_bam, zip( uniq_rgs,
                                                                 rg_query_beds,
                                                                 rg_fc_beds,
@@ -104,7 +103,7 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
                                                                 repeat(sdrecall_paths.sample_id),
                                                                 sd_freads,
                                                                 sd_rreads,
-                                                                repeat(1),
+                                                                repeat(threads_per_job),
                                                                 repeat(mq_cutoff),
                                                                 repeat(ref_genome) ))
 
@@ -115,7 +114,7 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
         print(f"\n************************************{i}_subprocess_start_for_process_masked_align************************************\n", file=sys.stderr)
         if success:
             result_records.append(result)
-            print(f"Successfully filtered the masked bam file and call variants on it: {result}. The log info are:\n{log_contents}\n", file=sys.stderr)
+            print(f"Successfully filtered the masked bam file: {result}. The log info are:\n{log_contents}\n", file=sys.stderr)
         else:
             error_mes, tb_str = result
             result_records.append(tb_str)
@@ -128,5 +127,71 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
     realign_meta_table = sdrecall_paths.realign_meta_table_path()
     post_result_df = pd.read_csv(io.StringIO("\n".join(result_records)), header=None, names=["rg_label", "rg_subgroup_id", "raw_masked_bam", "raw_masked_vcf"], na_values="NaN")
     post_result_df.to_csv(realign_meta_table, sep="\t", index=False)
-    logger.info(f"The processed masked bam and vcf files stored in {realign_meta_table} and it looks like:\n{post_result_df.to_string(index=False)}\n\n")
+    logger.info(f"The processed masked bam files stored in {realign_meta_table} and it looks like:\n{post_result_df.to_string(index=False)}\n\n")
+
+    # Merge the pooled raw bam files
+    pooled_raw_bam = sdrecall_paths.pooled_raw_bam_path()
+    execute_merging = merge_bams(bam_list = post_result_df["raw_masked_bam"].dropna().unique().tolist(), 
+                                 merged_bam = pooled_raw_bam, 
+                                 ref_fasta = ref_genome,
+                                 threads = threads)
+    deduped_raw_bam = pooled_raw_bam.replace(".bam", ".deduped.bam")
+    cmd = f"samtools collate -@ {threads} -O -u {pooled_raw_bam} | \
+            samtools fixmate -@ {threads} -m -u - - | \
+            samtools sort -@ {threads} -u - | \
+            samtools markdup -@ {threads} -r - {deduped_raw_bam} && \
+            ls -lh {deduped_raw_bam}"
+    if execute_merging:
+        executeCmd(cmd, logger=logger)
+
+    # Merge variants to have the raw vcf file directly from unfiltered realignments
+    pooled_raw_vcf = sdrecall_paths.recall_raw_vcf_path()
+    vcf_list = post_result_df["raw_masked_vcf"].dropna().unique().tolist()
+
+    if len(vcf_list) > 0:
+        # Create a temporary file with the list of VCFs to merge
+        vcf_list_file = os.path.join(sdrecall_paths.tmp_dir, "vcfs_to_merge.txt")
+        with open(vcf_list_file, 'w') as f:
+            for vcf in vcf_list:
+                f.write(f"{vcf}\n")
+        
+        logger.info(f"Merging {len(vcf_list)} VCF files into {pooled_raw_vcf}")
+        cmd = f"bash {shell_utils} bcftools_concatvcfs \
+                -v {vcf_list_file} \
+                -o {pooled_raw_vcf} \
+                -c {threads} \
+                -t {sdrecall_paths.tmp_dir} \
+                -s {sdrecall_paths.sample_id}"
+        executeCmd(cmd, logger=logger)
+    else:
+        logger.warning("No valid VCF files found to merge.")
+
+    # - Now we start filtering the pooled raw bam file by phasing and mislalignment elimination - #
+    total_intrinsic_bam = sdrecall_paths.total_intrinsic_bam_path()
+    pooled_filtered_bam = sdrecall_paths.pooled_filtered_bam_path()
+    deduped_raw_bam, pooled_filtered_bam = eliminate_misalignments(deduped_raw_bam,
+                                                                  pooled_filtered_bam,
+                                                                  total_intrinsic_bam,
+                                                                  ref_genome,
+                                                                  avg_frag_size=avg_frag_size,
+                                                                  threads=threads,
+                                                                  numba_threads=numba_threads,
+                                                                  conf_level=conf_level,
+                                                                  mapq_cutoff=mq_cutoff,
+                                                                  logger=logger)
+
+    # Call variants on the filtered BAM file after misalignment elimination
+    pooled_filtered_vcf = sdrecall_paths.pooled_filtered_bam_path().replace(".bam", ".vcf")
+    logger.info(f"Calling variants on the filtered BAM file {pooled_filtered_bam}")
+    cmd = f"bash {shell_utils} bcftools_call_per_RG \
+            -m {ref_genome} \
+            -b {pooled_filtered_bam} \
+            -o {pooled_filtered_vcf} \
+            -c {threads} \
+            -p {sdrecall_paths.sample_id}"
+    executeCmd(cmd, logger=logger)
+
+    # Now we need to merge the pooled filtered vcf and the pooled raw vcf to identify which variants might be derived from misalignments
+
+    return pooled_filtered_bam, pooled_filtered_vcf
 

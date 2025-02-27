@@ -91,7 +91,7 @@ def apply_index_mask(size, initial_index_mask):
     return np.arange(size, dtype=np.int32)[initial_index_mask]
 
 
-@numba.njit
+@numba.njit(parallel=True, fastmath=True)
 def numba_diff_indices(arr1, arr2):
     """
     Find the indices where two arrays differ.
