@@ -209,10 +209,15 @@ class SDrecallPaths:
     
     def pooled_filtered_bam_path(self) -> str:
         """Path for pooled filtered bam file"""
-        return os.path.join(self.recall_results_dir, f"{self.sample_id}.pooled.bam")
+        return os.path.join(self.recall_results_dir, f"{self.sample_id}.pooled.clean.bam")
     
     def recall_filtered_vcf_path(self) -> str:
         """Path for recall filtered vcf file"""
+        return os.path.join(self.recall_results_dir, f"{self.sample_id}.sdrecall.clean.vcf.gz")
+
+
+    def final_recall_vcf_path(self) -> str:
+        """Path for final recall vcf file"""
         return os.path.join(self.recall_results_dir, f"{self.sample_id}.sdrecall.vcf.gz")
 
     def realign_meta_table_path(self) -> str:

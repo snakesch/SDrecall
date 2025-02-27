@@ -13,10 +13,12 @@ from itertools import repeat
 from src.utils import executeCmd, merge_bams, configure_parallelism
 from src.const import SDrecallPaths, shell_utils
 from src.log import logger
+from src.merge_variants_with_priority import merge_with_priority
 
 from realign_recall.stat_realign_group_regions import stat_all_RG_region_size
 from realign_recall.realign_per_RG import imap_process_masked_bam
 from realign_recall.cal_edge_NM_values import calculate_NM_distribution_poisson
+from realign_recall.annotate_HP_tag_to_vars import annotate_vcf as annotate_vcf_HP_tag
 from .misalignment_elimination import eliminate_misalignments
 
 
@@ -192,6 +194,26 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
     executeCmd(cmd, logger=logger)
 
     # Now we need to merge the pooled filtered vcf and the pooled raw vcf to identify which variants might be derived from misalignments
+    pooled_filtered_vcf = annotate_HP_tag_to_vcf(pooled_filtered_vcf, 
+                                                 pooled_filtered_vcf, 
+                                                 pooled_filtered_bam, 
+                                                 "HP", 
+                                                 logger = logger)
+    pooled_raw_vcf = annotate_HP_tag_to_vcf(pooled_raw_vcf, 
+                                            pooled_raw_vcf, 
+                                            deduped_raw_bam, 
+                                            "HP", 
+                                            logger = logger)
+    
+    final_recall_vcf = sdrecall_paths.final_recall_vcf_path()
+    merge_with_priority(query_vcf = pooled_raw_vcf, 
+                        reference_vcf = pooled_filtered_vcf, 
+                        output_vcf = final_recall_vcf, 
+                        added_filter = "MISALIGNED", 
+                        qv_tag = "RAW", 
+                        rv_tag = "CLEAN", 
+                        ref_genome = ref_genome, 
+                        threads = threads)
 
-    return pooled_filtered_bam, pooled_filtered_vcf
+    return final_recall_vcf
 

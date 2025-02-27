@@ -17,12 +17,12 @@ from src.utils import is_file_up_to_date, filter_bed_by_interval_size
 
 from src.const import SDrecallPaths
 
-def preparation(paths: SDrecallPaths,
-                mq_threshold=41,
-                high_quality_depth=10,
-                minimum_depth=3,
-                multialign_frac=0.5,
-                threads=10):
+def prepare_recall_regions( paths: SDrecallPaths,
+							mq_threshold=41,
+							high_quality_depth=10,
+							minimum_depth=3,
+							multialign_frac=0.5,
+							threads=10):
     """
     Main preparation function for SDrecall
     
@@ -246,7 +246,7 @@ def main():
     logger.info(f"Working directory: {paths.work_dir}")
 
     # Call preparation function with the initialized paths
-    preparation(
+    prepare_recall_regions(
         paths=paths,  # Pass the paths instance to the preparation function
         mq_threshold=args.mq_cutoff,
         high_quality_depth=args.high_quality_depth,

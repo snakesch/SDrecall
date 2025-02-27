@@ -1,199 +1,343 @@
 #!/usr/bin/env python3
+"""
+SDrecall - Main script for SDrecall workflow
 
-from glob import glob
-import pandas as pd
+This script provides a unified interface to run the complete SDrecall workflow
+or individual stages of preparation and variant calling.
+"""
+
 import os
-from typing import List, Tuple, Optional
+import sys
+import argparse
 import logging
-from collections import defaultdict
 
-logger = logging.getLogger('SDrecall')
+from src.const import SDrecallPaths
+from src.log import logger, configure_logger
+from src.utils import is_file_up_to_date
+from src.merge_variants_with_priority import merge_with_priority
 
-import pybedtools as pb
+from prepare_recall_regions import prepare_recall_regions
+from realign_and_recall import SDrecall_per_sample
 
-pb.set_bedtools_path("/share1/bedtools/2.30.0/bin/")
-work_dir = "/home/snakesch/work/SDrecall/test/HG002/test_run_output"
-reference = "/home/snakesch/work/SDrecall/test/ucsc.hg19.fasta"
 
-## TODO: Get fragment size distribution from file
-avg_frag_size, std_frag_size = 570.4, 150.7
-
-def enumerate_SD_qnodes(work_dir):
-    # Prepare arguments for downstream imap_prepare_masked_align_region_per_PC
-    beds = glob(f"{work_dir}/PC*_related_homo_regions/PC*_all/PC*_related_homo_regions.bed")
+def post_process_vcf(sdrecall_vcf, args, paths):
+    """
+    Process the final VCF - potentially merging with supplementary VCF
     
-    # - For load balancing: high coverage SD_qnodes top on the list - #
-    beds = sorted(beds, key = lambda f: pb.BedTool(f).total_coverage(), reverse=True)
-
-    # Extract FC regions from the total bed
-    rg_names, rg_units = [], []
-    for bed_path in beds:
-        rg_names.append(os.path.basename(bed_path).split("_")[0])
-
-        fc_regions = []
-        for interval in pb.BedTool(bed_path):
-            if interval[-1].startswith("FC:"):
-                fc_regions.append(interval)
+    Args:
+        sdrecall_vcf: Path to SDrecall VCF
+        args: Command line arguments
+        paths: SDrecallPaths instance
+    
+    Returns:
+        Path to final VCF file
+    """
+    final_vcf = sdrecall_vcf
+    
+    # First, annotate with cohort VCF if provided
+    if hasattr(args, 'cohort_vcf') and args.cohort_vcf:
+        logger.info(f"Annotating with cohort VCF: {args.cohort_vcf}")
         
-        # Sort FC regions by their tag (last field). 
-        # fc_regions.sort(key=lambda interval: interval[-1])
-
-        rg_units.append(tuple(range(len(fc_regions))))
-
-    return rg_names, rg_units
-
-def prepare_masked_align_region_per_PC(
-    rg_name: str,
-    rg_subids: Tuple[str, ...],
-    sd_map_dir: str,
-    target_region_bed: str,
-    ref_genome: str = "/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta",
-    logger: logging.Logger = logger,
-) -> Tuple[str, ...]:
-
-    # Infer the BED path given a PC name
-    whole_region_raw_bed = f"{work_dir}/{rg_name}_related_homo_regions/{rg_name}_all/{rg_name}_related_homo_regions.bed"
-
-    if not os.path.isfile(whole_region_raw_bed):
-        raise FileNotFoundError(f"Homologous region BED file not found for {rg_name}")
-
-    # Efficiently filter the raw BED file using pybedtools *directly*
-    fc_bed = pb.BedTool(whole_region_raw_bed).filter(lambda interval: interval[-1].startswith("FC")).saveas()
-
-    target_regions = pb.BedTool(target_region_bed)
-    ref_genome_fai = ref_genome + ".fai"
-
-    # Directly create and use a temporary file for the targeted FC regions
-    target_fc_bed = (
-        fc_bed.intersect(target_regions)
-        .slop(b=500, g=ref_genome_fai)
-        .sort()
-        .merge()
-        .saveas()  # saveas() returns a BedTool object.
-    )
-    target_fc_size = target_fc_bed.total_coverage()
-
-    records = []
-    for subgroup_id in rg_subids:
-        logger.info(
-            f"Start to fetch the masked align region for NFC regions for PC {rg_tag} subgroup {subgroup_id}"
+        # Create temporary output path for the annotated VCF
+        from src.utils import prepare_tmp_file
+        annotated_vcf = prepare_tmp_file(suffix='.vcf.gz').name
+        
+        # Run identify_inhouse_common
+        from identify_common_vars import identify_inhouse_common
+        annotated_vcf = identify_inhouse_common(
+            query_vcf=sdrecall_vcf,
+            cohort_vcf=args.cohort_vcf,
+            output_vcf=annotated_vcf,
+            inhouse_common_cutoff=args.inhouse_common_cutoff,
+            conf_level=args.conf_level
         )
-
-        # Filter for NFC and FC regions directly using pybedtools.
-        nfc_bed = pb.BedTool(whole_region_raw_bed).filter(
-            lambda interval: interval[6] == f"NFC:{rg_tag}_{subgroup_id}"
-        ).saveas()
-
-        fc_region_bed = pb.BedTool(whole_region_raw_bed).filter(
-            lambda x: x.name == f"FC:{rg_tag}_{subgroup_id}"
-        ).saveas()
-
-
-        # Directly use the result of extract_and_pad.
-        targeted_nfc_regions_bed, target_nfc_regions_bed_size = extract_and_pad_segments(
-            fc_region_bed,
-            nfc_bed,
-            target_regions,
-            padding=600,
-            logger=logger,
-        )
-
-        record = (
-            f"{rg_tag},{subgroup_id},{target_fc_bed.fn},{targeted_nfc_regions_bed.fn},"
-            f"{target_fc_size},{target_nfc_regions_bed_size}"
-        )
-        logger.info(f"The returned record for {rg_tag} subgroup {subgroup_id} is {record}")
-        records.append(record)
-
-    return tuple(records)
-
-
-def extract_and_pad_segments(
-    single_interval_bed: pb.BedTool,
-    multiple_intervals_bed: pb.BedTool,
-    target_regions_bed: pb.BedTool,
-    padding: int = 600,
-    logger: logging.Logger = logger,
-) -> Tuple[pb.BedTool, int]:
-    """
-    Extracts, pads, and merges segments from multiple_intervals_bed that overlap
-    target regions within a single interval in single_interval_bed.
-    """
-
-    overlapping_segments = single_interval_bed.intersect(target_regions_bed)
-    main_interval = single_interval_bed[0]
-    main_start, main_end, main_strand = main_interval.start, main_interval.end, main_interval.strand
-
-    # 1. Merge overlapping segments *after* padding.  Crucially, we now keep track of
-    #    the *original* start/end for merging purposes, and use the *padded*
-    #    start/end for BedTool creation.
-    merged_segments = []
-    for segment in overlapping_segments:
-        padded_start = max(segment.start - padding, 0)
-        padded_end = segment.end + padding
-        merged_segments.append((segment.start, segment.end, padded_start, padded_end))  # (orig_start, orig_end, padded_start, padded_end)
-
-    merged_segments.sort(key=lambda x: x[0])  # Sort by original start
-
-    if not merged_segments:
-        return pb.BedTool("", from_string=True), 0
+        
+        # Update the final_vcf to be the annotated one
+        final_vcf = annotated_vcf
+        logger.info(f"Variants annotated with inhouse_common filter: {final_vcf}")
     
-    final_merged = [merged_segments[0]]
-    for cur_orig_start, cur_orig_end, cur_padded_start, cur_padded_end in merged_segments[1:]:
-        last_orig_start, last_orig_end, last_padded_start, last_padded_end = final_merged[-1]
-        if cur_orig_start <= last_orig_end:  # Use *original* coords for overlap
-            final_merged[-1] = (
-                last_orig_start,
-                max(last_orig_end, cur_orig_end),
-                min(last_padded_start, cur_padded_start),
-                max(last_padded_end, cur_padded_end)
-            )
-        else:
-            final_merged.append((cur_orig_start, cur_orig_end, cur_padded_start, cur_padded_end))
-            
-
-    # 2. Extract corresponding segments, adjusting for strand and relative coords.
-    corresponding_segments = []
-    for interval in multiple_intervals_bed:
-        interval_strand = interval.strand
-        rel_start_interval = int(interval[3])
-        rel_end_interval = int(interval[4])
+    # Then, merge with supplementary VCF if provided
+    if hasattr(args, 'supplementary_vcf') and args.supplementary_vcf:
+        logger.info(f"Merging with supplementary VCF: {args.supplementary_vcf}")
+        
+        merge_with_priority(
+							query_vcf=sdrecall_vcf,
+							reference_vcf=args.supplementary_vcf,
+							output_vcf=merged_vcf,
+							added_filter=None,
+							qv_tag="SDrecall",
+							rv_tag=args.caller_name,
+							ref_genome=args.ref_genome,
+							threads=args.threads
+							)
+        
+        logger.info(f"Merged with supplementary VCF: {final_vcf}")
+    
+    return final_vcf
 
 
-        for orig_start, orig_end, padded_start, padded_end in final_merged:
+def run_full_pipeline(args):
+    """
+    Run the complete SDrecall pipeline from preparation to variant calling
+    
+    Args:
+        args: Command line arguments
+    
+    Returns:
+        Path to the final recalled VCF file, possibly merged with supplementary VCF
+    """
+    # Initialize paths
+    paths = SDrecallPaths.initialize(
+        ref_genome=args.ref_genome,
+        input_bam=args.input_bam,
+        reference_sd_map=args.reference_sd_map,
+        output_dir=args.outdir,
+        target_bed=args.target_bed,
+        sample_id=args.sample_id,
+        target_tag=args.target_tag
+    )
+    
+    # Log key configuration
+    logger.info(f"Running SDrecall pipeline with:")
+    logger.info(f"  Sample ID: {paths.sample_id}")
+    logger.info(f"  Assembly: {paths.assembly}")
+    logger.info(f"  Target tag: {paths.target_tag}")
+    logger.info(f"  Working directory: {paths.work_dir}")
+    
+    # Preparation phase
+    logger.info("Starting preparation phase")
+    paths = prepare_recall_regions(
+        paths=paths,
+        mq_threshold=args.mq_cutoff,
+        high_quality_depth=args.high_quality_depth,
+        minimum_depth=args.minimum_depth,
+        multialign_frac=args.multialign_frac,
+        threads=args.threads
+    )
+    
+    # Realignment and recall phase
+    logger.info("Starting realignment and recall phase")
+    sdrecall_vcf = SDrecall_per_sample(
+        sdrecall_paths=paths,
+        threads=args.threads,
+        numba_threads=args.numba_threads,
+        mq_cutoff=args.mq_cutoff,
+        conf_level=args.conf_level
+    )
+    
+    logger.info(f"SDrecall pipeline completed successfully")
+    logger.info(f"Final recalled variants: {sdrecall_vcf}")
+    
+    # Process and return final VCF
+    return post_process_vcf(sdrecall_vcf, args, paths)
 
-            # Convert padded start/end to relative coords
-            rel_start = padded_start - main_start
-            rel_end = padded_end - main_start
 
-            # Calculate overlap *after* converting to relative coords
-            overlap_start = max(rel_start, rel_start_interval)
-            overlap_end = min(rel_end, rel_end_interval)
+def run_preparation_only(args):
+    """
+    Run only the preparation phase of SDrecall
+    
+    Args:
+        args: Command line arguments
+    
+    Returns:
+        Initialized SDrecallPaths instance
+    """
+    # Initialize paths
+    paths = SDrecallPaths.initialize(
+        ref_genome=args.ref_genome,
+        input_bam=args.input_bam,
+        reference_sd_map=args.reference_sd_map,
+        output_dir=args.outdir,
+        target_bed=args.target_bed,
+        sample_id=args.sample_id,
+        target_tag=args.target_tag
+    )
+    
+    # Log key configuration
+    logger.info(f"Running preparation phase only with:")
+    logger.info(f"  Sample ID: {paths.sample_id}")
+    logger.info(f"  Assembly: {paths.assembly}")
+    logger.info(f"  Target tag: {paths.target_tag}")
+    logger.info(f"  Working directory: {paths.work_dir}")
+    
+    # Preparation phase
+    paths = prepare_recall_regions(
+        paths=paths,
+        mq_threshold=args.mq_cutoff,
+        high_quality_depth=args.high_quality_depth,
+        minimum_depth=args.minimum_depth,
+        multialign_frac=args.multialign_frac,
+        threads=args.threads
+    )
+    
+    logger.info(f"Preparation phase completed successfully")
+    return paths
 
-            if overlap_start < overlap_end:  # Only proceed if there's actual overlap
-                if interval_strand == main_strand:
-                    rel_small_start = overlap_start - rel_start_interval
-                    rel_small_end = overlap_end - rel_start_interval
-                else:
-                    rel_small_start = rel_end_interval - overlap_end
-                    rel_small_end = rel_end_interval - overlap_start
 
-                abs_start = max(interval.start, interval.start + rel_small_start)
-                abs_end = min(interval.end, interval.start + rel_small_end)
-                if abs_start < abs_end:
-                    corresponding_segments.append(
-                        pb.Interval(interval.chrom, abs_start, abs_end, strand=interval_strand, name=interval.name)
-                    )
+def run_realign_only(args):
+    """
+    Run only the realignment and recall phase of SDrecall
+    
+    Args:
+        args: Command line arguments
+    
+    Returns:
+        Path to the final recalled VCF file, possibly merged with supplementary VCF
+    """
+    # Initialize paths without running preparation
+    paths = SDrecallPaths.initialize(
+        ref_genome=args.ref_genome,
+        input_bam=args.input_bam,
+        reference_sd_map=args.reference_sd_map,
+        output_dir=args.outdir,
+        target_bed=args.target_bed,
+        sample_id=args.sample_id,
+        target_tag=args.target_tag
+    )
+    
+    # Verify that preparation has been done
+    if not os.path.exists(paths.multiplex_graph_path()):
+        logger.error(f"Preparation has not been completed. Please run the preparation step first.")
+        sys.exit(1)
+    
+    # Log configuration
+    logger.info(f"Running SDrecall realignment with:")
+    logger.info(f"  Sample ID: {paths.sample_id}")
+    logger.info(f"  Assembly: {paths.assembly}")
+    logger.info(f"  Working directory: {paths.work_dir}")
+    
+    # Run realignment and recall
+    logger.info("Starting realignment and recall phase")
+    sdrecall_vcf = SDrecall_per_sample(
+        sdrecall_paths=paths,
+        threads=args.threads,
+        numba_threads=args.numba_threads,
+        mq_cutoff=args.mq_cutoff,
+        conf_level=args.conf_level
+    )
+    
+    logger.info(f"SDrecall realignment and recall completed successfully")
+    logger.info(f"Final recalled variants: {sdrecall_vcf}")
+    
+    # Process and return final VCF
+    return post_process_vcf(sdrecall_vcf, args, paths)
 
-    return_bed = pb.BedTool(corresponding_segments).sort().merge()
-    return_bed_size = return_bed.total_coverage()
-    return return_bed, return_bed_size
 
-rg_names, rg_units = enumerate_SD_qnodes(work_dir)
+def main():
+    """Main entry point for SDrecall"""
+    
+    # Create the top-level parser
+    parser = argparse.ArgumentParser(
+        description='SDrecall - Complement SNV and small Indel detection within Segmental Duplication based on NGS reads',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    
+    # Add global arguments
+    parser.add_argument('-v', '--verbose', type=str, default="INFO", 
+                        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+                        help='Logging verbosity level')
+    
+    # Create subparsers for different modes
+    subparsers = parser.add_subparsers(dest='mode', help='Operation mode')
+    
+    # Full pipeline mode
+    full_parser = subparsers.add_parser('run', help='Run the complete SDrecall pipeline')
+    _add_common_args(full_parser)
+    _add_preparation_args(full_parser)
+    _add_realignment_args(full_parser)
+    _add_supplementary_vcf_args(full_parser)
+    _add_cohort_args(full_parser)
+    full_parser.set_defaults(func=run_full_pipeline)
+    
+    # Preparation only mode
+    prep_parser = subparsers.add_parser('prepare', help='Run only the preparation phase')
+    _add_common_args(prep_parser)
+    _add_preparation_args(prep_parser)
+    prep_parser.set_defaults(func=run_preparation_only)
+    
+    # Realignment only mode
+    realign_parser = subparsers.add_parser('realign', help='Run only the realignment and recall phase')
+    _add_common_args(realign_parser)
+    _add_realignment_args(realign_parser)
+    _add_supplementary_vcf_args(realign_parser)
+    _add_cohort_args(realign_parser)
+    realign_parser.set_defaults(func=run_realign_only)
+    
+    # Parse arguments
+    args = parser.parse_args()
+    
+    # Configure logging
+    configure_logger(log_level=args.verbose)
+    
+    # If no mode is specified, print help and exit
+    if not hasattr(args, 'func'):
+        parser.print_help()
+        sys.exit(1)
+    
+    # Run the selected mode
+    final_vcf = args.func(args)
+    
+    if final_vcf:
+        logger.info(f"Final output: {final_vcf}")
 
-# pool = ctx.Pool(threads, initializer=pool_init)
-# prepared_beds = pool.imap_unordered(imap_prepare_masked_align_region_per_PC, zip(rg_names,
-#                                                                                 rg_units,
-#                                                                                 repeat(all_RG_folder),
-#                                                                                 repeat(target_region),
-#                                                                                 repeat(ref_fasta)))
+
+def _add_common_args(parser):
+    """Add common arguments shared by multiple modes"""
+    parser.add_argument('-r', '--ref_genome', required=True, 
+                        help='Path to the reference genome (hg19 or hg38)')
+    parser.add_argument('-o', '--outdir', required=True, 
+                        help='Base directory for output files')
+    parser.add_argument('-i', '--input_bam', required=True, 
+                        help='Input BAM file')
+    parser.add_argument('-m', '--reference_sd_map', required=True, 
+                        help='Reference SD map file')
+    parser.add_argument('-b', '--target_bed', default="", 
+                        help='Optional target BED file')
+    parser.add_argument('-s', '--sample_id', default=None, 
+                        help='Sample ID (extracted from BAM filename if not provided)')
+    parser.add_argument('--target_tag', type=str, default=None, 
+                        help='Optional target region tag')
+    parser.add_argument('-t', '--threads', type=int, default=10, 
+                        help='Number of threads to use')
+    parser.add_argument('--mq_cutoff', type=int, default=41, 
+                        help='Mapping quality cutoff')
+
+
+def _add_preparation_args(parser):
+    """Add arguments specific to the preparation phase"""
+    parser.add_argument('--high_quality_depth', type=int, default=10, 
+                        help='High quality depth cutoff')
+    parser.add_argument('--minimum_depth', type=int, default=3, 
+                        help='Minimum depth cutoff')
+    parser.add_argument('--multialign_frac', type=float, default=0.5, 
+                        help='Multi-align fraction cutoff')
+
+
+def _add_realignment_args(parser):
+    """Add arguments specific to the realignment phase"""
+    parser.add_argument('--numba_threads', type=int, default=4, 
+                        help='Number of threads for numba acceleration')
+    parser.add_argument('--conf_level', type=float, default=0.01, 
+                        help='Confidence level for statistical tests')
+
+
+def _add_supplementary_vcf_args(parser):
+    """Add arguments for supplementary VCF merging"""
+    parser.add_argument('--supplementary_vcf', type=str, default=None,
+                        help='Path to a VCF file from a conventional caller (e.g., GATK, DeepVariant)')
+    parser.add_argument('--caller_name', type=str, default='conventional',
+                        help='Name of the conventional caller (e.g., GATK, DeepVariant)')
+
+
+def _add_cohort_args(parser):
+    """Add arguments for cohort VCF annotation"""
+    parser.add_argument('--cohort_vcf', type=str, default=None,
+                        help='Path to a cohort-level VCF with control samples')
+    parser.add_argument('--inhouse_common_cutoff', type=float, default=0.05,
+                        help='Frequency cutoff for common variants in cohort')
+    parser.add_argument('--conf_level', type=float, default=0.999,
+                        help='Confidence level threshold for common variant determination')
+
+
+if __name__ == "__main__":
+    main()

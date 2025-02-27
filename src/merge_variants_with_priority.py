@@ -10,90 +10,9 @@ import time
 import traceback
 import sys
 
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-formatter = logging.Formatter("%(levelname)s:%(asctime)s:%(module)s:%(funcName)s:%(lineno)s:%(message)s")
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
-
-
-def init_logger(handler = logging.StreamHandler(), tag = ""):
-    logger = logging.getLogger(f"Process-{tag}")
-    handler.setFormatter(logging.Formatter("%(levelname)s:%(asctime)s:%(module)s:%(funcName)s:%(lineno)s:%(message)s"))
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
-    return logger
-
-
-def log_command(func):
-    def wrapper(*args, **kwargs):
-        arg_names = list(inspect.signature(func).parameters.keys())
-        arg_values = list(args)
-        arg_dict = dict(zip(arg_names, arg_values))
-        arg_dict.update(kwargs)
-
-        tmp_tag = str(uuid.uuid4())
-        log_stream = StringIO()
-        ch = logging.StreamHandler(log_stream)
-        logger = init_logger(handler = ch, tag = tmp_tag)
-
-        # Get the default values of the function's keyword arguments
-        sig = inspect.signature(func)
-        defaults = {k: v.default for k, v in sig.parameters.items() if v.default is not inspect.Parameter.empty}
-
-        # Fill in missing keyword arguments with their default values
-        for arg_name, default_value in defaults.items():
-            if arg_name not in arg_dict:
-                arg_dict[arg_name] = default_value
-
-        # Convert arguments and their values to a string
-        args_str = ', '.join([f"{k}={arg_dict[k]}" for k in arg_names])
-        defaults_str = ', '.join([f"{k}={arg_dict[k]}" for k in defaults])
-
-        logger.info(f"Executing: {func.__name__}({args_str}, {defaults_str})")
-        start = time.time()
-        try:
-            result = func(*args, logger=logger, **kwargs)
-            end = time.time()
-            logger.info(f"Finished: {func.__name__}({args_str}, {defaults_str}) in {end - start} seconds")
-            log_contents = log_stream.getvalue()
-            log_stream.close()
-        except Exception as e:
-            end = time.time()
-            logger.info(f"Failed: {func.__name__}({args_str}, {defaults_str}) in {end - start} seconds")
-            tb_str = traceback.format_exc()
-            log_contents = log_stream.getvalue()
-            log_stream.close()
-            return (False, (e, tb_str), log_contents)
-        else:
-            return (True, result, log_contents)
-
-    return wrapper
-
-
-def executeCmd(cmd, stdout_only = False, shell="/home/yangyxt/miniforge3/envs/ngs_pipeline/bin/bash", logger=logger) -> None:
-    from subprocess import PIPE
-    logger.info("About to run this command in shell invoked within python: \n{}\n".format(cmd))
-    
-    if stdout_only:
-        result = subprocess.run(cmd, shell=True, executable=shell, stdout=PIPE, stderr=PIPE)
-    else:
-        result = subprocess.run(cmd, shell=True, executable=shell, stderr=subprocess.STDOUT, stdout=PIPE)
-        
-    code = result.returncode
-    cmd_lst = cmd.split(" ")
-    if code != 0:
-        logger.error("Error in \n{}\nAnd the output goes like:\n{}\n".format(" ".join(cmd_lst), result.stdout.decode()))
-        if cmd_lst[1][0] != "-":
-            raise RuntimeError
-        else:
-            raise RuntimeError
-        
-    logger.info(f"Ran the following shell command inside python:\n{cmd}\nAnd it receives a return code of {code}, the output goes like this:\n{result.stdout.decode()}\n\n")
-    return result.stdout.decode()
+from .log import logger, log_command
+from .const import shell_utils
+from .utils import executeCmd
 
 
 class VariantRecordWrapper:
@@ -455,10 +374,16 @@ def process_region(region,
 
 
 
-def sort_vcf(vcf_file):
+def sort_vcf(vcf_file, ref_genome, logger = logger):
     # Sort the VCF file using bcftools
     sorted_vcf_file = vcf_file.replace('.vcf', '.sorted.vcf')
-    subprocess.run(f"bcftools sort -Oz -o {sorted_vcf_file} {vcf_file} && bcftools index {sorted_vcf_file}", shell=True, check=True)
+	
+    cmd = f'''bcftools norm -m -both -f ${ref_genome} --multi-overlaps 0 -a -Ou {vcf_file} | \
+			  bcftools norm -d exact -Ou - | \
+			  bcftools view -i 'ALT!="*"' -Ou - | \
+			  bcftools sort -Oz -o {sorted_vcf_file} - && \
+			  bcftools index -t {sorted_vcf_file}'''
+    executeCmd(cmd, logger=logger)
     return sorted_vcf_file
 
 
@@ -497,18 +422,19 @@ def merge_vcf_headers(header1, header2):
 
 
 
-def main(query_vcf = "", 
-         reference_vcf = "", 
-         output_vcf = "", 
-         added_filter = None,
-         qv_tag = None,
-         rv_tag = None, 
-         threads = 4):
+def merge_with_priority(query_vcf = "", 
+						reference_vcf = "", 
+						output_vcf = "", 
+						added_filter = None,
+						qv_tag = None,
+						rv_tag = None, 
+						ref_genome = "",
+						threads = 4):
     # Sort the query VCF file
-    sorted_query_vcf = sort_vcf(query_vcf)
+    sorted_query_vcf = sort_vcf(query_vcf, ref_genome, logger = logger)
 
     # Sort the reference VCF file
-    sorted_reference_vcf = sort_vcf(reference_vcf)
+    sorted_reference_vcf = sort_vcf(reference_vcf, ref_genome, logger = logger)
 
     # Open the sorted query VCF file
     bcf_query = pysam.VariantFile(sorted_query_vcf)
@@ -642,17 +568,17 @@ if __name__ == '__main__':
     parser.add_argument("-qv", '--query_vcf', help='Path to the query VCF file')
     parser.add_argument("-rv", '--reference_vcf', help='Path to the reference VCF file')
     parser.add_argument("-ov", '--output_vcf', help='Path to the output VCF file')
-    parser.add_argument("-fl", "--filter_tag", type=str, help="The filter tag you want to added to the matched query VCF records", required=False, default="MISALIGNED")
+    parser.add_argument("-fl", "--filter_tag", type=str, help="The filter tag you want to added to the matched query VCF records", required=False, default="")
     parser.add_argument("-qt", "--query_vcf_tag", type=str, help="The tag added to the FILTERs to show the source of the variant from query_vcf_file", required=False, default="RAW")
     parser.add_argument("-rt", "--reference_tag", type=str, help="The tag added to the FILTERs to show the source of the variant from reference_vcf_file", required=False, default="CLEAN")
     parser.add_argument('--threads', type=int, default=4, help='Number of threads for parallel processing', required=False)
 
     args = parser.parse_args()
 
-    main(args.query_vcf, 
-         args.reference_vcf, 
-         args.output_vcf, 
-         added_filter = args.filter_tag, 
-         qv_tag = args.query_vcf_tag,
-         rv_tag = args.reference_tag,
-         threads = args.threads)
+    merge_with_priority(query_vcf = args.query_vcf, 
+                        reference_vcf = args.reference_vcf, 
+                        output_vcf = args.output_vcf, 
+                        added_filter = args.filter_tag, 
+                        qv_tag = args.query_vcf_tag,
+                        rv_tag = args.reference_tag,
+                        threads = args.threads)
