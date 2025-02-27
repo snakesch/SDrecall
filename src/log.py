@@ -58,17 +58,17 @@ def log_command(func):
         args_str = ', '.join([f"{k}={arg_dict[k]}" for k in arg_names])
         defaults_str = ', '.join([f"{k}={arg_dict[k]}" for k in defaults])
 
-        logger.debug(f"Executing: {func.__name__}({args_str}, {defaults_str})")
+        logger.info(f"Executing: {func.__name__}({args_str}, {defaults_str})")
         start = time.time()
         try:
             result = func(*args, logger=logger, **kwargs)
             end = time.time()
-            logger.debug(f"Finished: {func.__name__}({args_str}, {defaults_str}) in {end - start} seconds")
+            logger.info(f"Finished: {func.__name__}({args_str}, {defaults_str}) in {end - start} seconds")
             log_contents = log_stream.getvalue()
             log_stream.close()
         except Exception as e:
             end = time.time()
-            logger.debug(f"Failed: {func.__name__}({args_str}, {defaults_str}) in {end - start} seconds")
+            logger.info(f"Failed: {func.__name__}({args_str}, {defaults_str}) in {end - start} seconds")
             tb_str = traceback.format_exc()
             log_contents = log_stream.getvalue()
             log_stream.close()
