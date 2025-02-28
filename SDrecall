@@ -333,7 +333,7 @@ def _add_cohort_args(parser):
     """Add arguments for cohort VCF annotation"""
     parser.add_argument('--cohort_vcf', type=str, default=None,
                         help='Path to a cohort-level VCF with control samples')
-    parser.add_argument('--inhouse_common_cutoff', type=float, default=0.05,
+    parser.add_argument('--inhouse_common_cutoff', type=float, default=0.01,
                         help='Frequency cutoff for common variants in cohort')
     parser.add_argument('--conf_level', type=float, default=0.999,
                         help='Confidence level threshold for common variant determination')
