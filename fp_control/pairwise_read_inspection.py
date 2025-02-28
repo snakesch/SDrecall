@@ -4,16 +4,16 @@ import numpy as np
 from numba import types
 
 from src.log import logger
-from numba_operators import numba_diff_indices, \
-                            numba_sum, \
-                            numba_not, \
-                            numba_and, \
-                            numba_slicing, \
-                            numba_indexing_int32, \
-                            numba_indexing_int8, \
-                            numba_compare, \
-                            numba_bool_indexing, \
-                            numba_contain
+from fp_control.numba_operators import numba_diff_indices, \
+										numba_sum, \
+										numba_not, \
+										numba_and, \
+										numba_slicing, \
+										numba_indexing_int32, \
+										numba_indexing_int8, \
+										numba_compare, \
+										numba_bool_indexing, \
+										numba_contain
 
 
 @numba.njit(types.bool_[:](types.int32[:]), fastmath=True)

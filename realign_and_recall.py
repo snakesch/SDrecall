@@ -19,7 +19,7 @@ from realign_recall.stat_realign_group_regions import stat_all_RG_region_size
 from realign_recall.realign_per_RG import imap_process_masked_bam
 from realign_recall.cal_edge_NM_values import calculate_NM_distribution_poisson
 from realign_recall.annotate_HP_tag_to_vars import annotate_vcf as annotate_vcf_HP_tag
-from .misalignment_elimination import eliminate_misalignments
+from misalignment_elimination import eliminate_misalignments
 
 
 def pool_init():
@@ -40,7 +40,7 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
     prepared_arguments_df = stat_all_RG_region_size(sdrecall_paths, threads)
 
     fc_size_stat_tab = os.path.join(sdrecall_paths.tmp_dir, "FC_size_stat.tsv")
-    logger.info(f"The prepared arguments for the PC subgroups will be saved to {fc_size_stat_tab} looks like:\n{prepared_arguments_df[:20].to_string(index=False)}\n\n")
+    logger.info(f"The prepared arguments for the PC subgroups will be saved to {fc_size_stat_tab} looks like:\n{prepared_arguments_df[:10].to_string(index=False)}\n\n")
     prepared_arguments_df.to_csv(fc_size_stat_tab, sep="\t", index=False)
 
     uniq_rg_labels = prepared_arguments_df.loc[:, "rg_label"].drop_duplicates().tolist()

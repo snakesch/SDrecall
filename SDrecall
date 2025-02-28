@@ -22,12 +22,11 @@ from realign_and_recall import SDrecall_per_sample
 
 def post_process_vcf(sdrecall_vcf, args):
     """
-    Process the final VCF - potentially merging with supplementary VCF
+    Process the final VCF - potentially merging with conventional VCF
     
     Args:
         sdrecall_vcf: Path to SDrecall VCF
         args: Command line arguments
-        paths: SDrecallPaths instance
     
     Returns:
         Path to final VCF file
@@ -49,29 +48,41 @@ def post_process_vcf(sdrecall_vcf, args):
             cohort_vcf=args.cohort_vcf,
             output_vcf=annotated_vcf,
             inhouse_common_cutoff=args.inhouse_common_cutoff,
-            conf_level=args.conf_level
+            conf_level=args.cohort_conf_level
         )
         
         # Update the final_vcf to be the annotated one
         final_vcf = annotated_vcf
         logger.info(f"Variants annotated with inhouse_common filter: {final_vcf}")
     
-    # Then, merge with supplementary VCF if provided
+    # Then, merge with conventional VCF if provided
     if hasattr(args, 'conventional_vcf') and args.conventional_vcf:
-        logger.info(f"Merging with supplementary VCF: {args.conventional_vcf}")
+        logger.info(f"Merging with conventional VCF: {args.conventional_vcf}")
+        
+        # Determine output path for merged VCF
+        if hasattr(args, 'merged_vcf') and args.merged_vcf:
+            merged_vcf = args.merged_vcf
+        else:
+            # Derive from conventional VCF path
+            merged_vcf = args.conventional_vcf.replace('.vcf.gz', '.sdrecall.vcf.gz')
+            merged_vcf = merged_vcf.replace('.vcf', '.sdrecall.vcf')
+            
+        logger.info(f"Merged VCF will be written to: {merged_vcf}")
         
         merge_with_priority(
-							query_vcf=sdrecall_vcf,
-							reference_vcf=args.conventional_vcf,
-							output_vcf=merged_vcf,
-							added_filter=None,
-							qv_tag="SDrecall",
-							rv_tag=args.caller_name,
-							ref_genome=args.ref_genome,
-							threads=args.threads
-							)
+            query_vcf=final_vcf,
+            reference_vcf=args.conventional_vcf,
+            output_vcf=merged_vcf,
+            added_filter=None,
+            qv_tag="SDrecall",
+            rv_tag=args.caller_name,
+            ref_genome=args.ref_genome,
+            threads=args.threads
+        )
         
-        logger.info(f"Merged with supplementary VCF: {final_vcf}")
+        # Update the final VCF to be the merged one
+        final_vcf = merged_vcf
+        logger.info(f"Merged with conventional VCF: {final_vcf}")
     
     return final_vcf
 
@@ -84,7 +95,7 @@ def run_full_pipeline(args):
         args: Command line arguments
     
     Returns:
-        Path to the final recalled VCF file, possibly merged with supplementary VCF
+        Path to the final recalled VCF file, possibly merged with conventional VCF
     """
     # Initialize paths
     paths = SDrecallPaths.initialize(
@@ -129,7 +140,7 @@ def run_full_pipeline(args):
     logger.info(f"Final recalled variants: {sdrecall_vcf}")
     
     # Process and return final VCF
-    return post_process_vcf(sdrecall_vcf, args, paths)
+    return post_process_vcf(sdrecall_vcf, args)
 
 
 def run_preparation_only(args):
@@ -182,7 +193,7 @@ def run_realign_only(args):
         args: Command line arguments
     
     Returns:
-        Path to the final recalled VCF file, possibly merged with supplementary VCF
+        Path to the final recalled VCF file, possibly merged with conventional VCF
     """
     # Initialize paths without running preparation
     paths = SDrecallPaths.initialize(
@@ -220,7 +231,7 @@ def run_realign_only(args):
     logger.info(f"Final recalled variants: {sdrecall_vcf}")
     
     # Process and return final VCF
-    return post_process_vcf(sdrecall_vcf, args, paths)
+    return post_process_vcf(sdrecall_vcf, args)
 
 
 def main():
@@ -322,11 +333,13 @@ def _add_realignment_args(parser):
 
 
 def _add_conventional_vcf_args(parser):
-    """Add arguments for supplementary VCF merging"""
+    """Add arguments for conventional VCF merging"""
     parser.add_argument('--conventional_vcf', type=str, default=None,
                         help='Path to a VCF file from a conventional caller (e.g., GATK, DeepVariant)')
     parser.add_argument('--caller_name', type=str, default='conventional',
                         help='Name of the conventional caller (e.g., GATK, DeepVariant)')
+    parser.add_argument('--merged_vcf', type=str, default=None,
+                        help='Path for the merged output VCF (default: derived from conventional_vcf path)')
 
 
 def _add_cohort_args(parser):
@@ -335,7 +348,7 @@ def _add_cohort_args(parser):
                         help='Path to a cohort-level VCF with control samples')
     parser.add_argument('--inhouse_common_cutoff', type=float, default=0.01,
                         help='Frequency cutoff for common variants in cohort')
-    parser.add_argument('--conf_level', type=float, default=0.999,
+    parser.add_argument('--cohort_conf_level', type=float, default=0.999,
                         help='Confidence level threshold for common variant determination')
 
 

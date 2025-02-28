@@ -135,7 +135,7 @@ def configure_parallelism(total_threads: int,
         total_threads (int): The total number of threads available.
     """
     num_jobs = np.ceil(total_threads / threads_per_job)
-    return num_jobs, threads_per_job
+    return int(num_jobs), int(threads_per_job)
 
 
 def merge_bams(bam_list: list, 

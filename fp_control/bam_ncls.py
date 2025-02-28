@@ -1,8 +1,8 @@
 import pysam
 import numpy as np
 from ncls import NCLS
-from numba_operators import fast_median, numba_sum
 
+from fp_control.numba_operators import fast_median, numba_sum
 from src.log import logger
 
 def overlapping_reads_iterator(ncls_dict, read_dict, chrom, start, end):

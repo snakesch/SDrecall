@@ -93,7 +93,7 @@ SDrecall run \
   --caller_name DeepVariant \
   --cohort_vcf /path/to/control_cohort.vcf \
   --inhouse_common_cutoff 0.01 \
-  --conf_level 0.999
+  --cohort_conf_level 0.999
 ```
 ## Workflow Stages
 

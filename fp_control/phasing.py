@@ -6,11 +6,11 @@ from numba import get_num_threads
 from collections import defaultdict
 
 from src.log import logger
-from gce_algorithm import gce_algorithm
-from numba_operators import numba_isin, \
-							numba_and, \
-							numba_sum, \
-							apply_index_mask
+from fp_control.gce_algorithm import gce_algorithm
+from fp_control.numba_operators import numba_isin, \
+										numba_and, \
+										numba_sum, \
+										apply_index_mask
 
 
 

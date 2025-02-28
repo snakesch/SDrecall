@@ -42,7 +42,7 @@ def getIntrinsicBam(rg_bed,
         
     # Reference sequences of SD counterparts are extracted from reference genome
     getRawseq(all_homo_regions_bed, intrinsic_fastq, ref_genome, padding = avg_frag_size + std_frag_size)
-    logger.info(f"Reference sequences for calling intrinsic variants from {rg_bed} are written to: {intrinsic_fastq}")
+    logger.info(f"Reference sequences for intrinsic alignment from {rg_bed} are written to: {intrinsic_fastq}")
     
     # Retrieved counterpart sequences are mapped against masked genomes using minimap2
     if not os.path.exists(intrinsic_bam) or not is_file_up_to_date(intrinsic_bam, [rg_masked, shell_utils, os.path.abspath(__file__)]):

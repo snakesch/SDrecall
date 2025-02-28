@@ -5,7 +5,7 @@ import numpy as np
 from scipy import sparse
 from numba import prange, types
 
-from numba_operators import numba_and, numba_sum
+from fp_control.numba_operators import numba_and, numba_sum
 from src.log import logger
 """
 Greedy-Clique-Expansion Algorithm (Adapted by implementing an edge weight cutoff when extending cliques) Implementation for Clique Finding in Phasing Graphs

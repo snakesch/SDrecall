@@ -8,9 +8,9 @@ from numba import types
 from numba.typed import Dict
 
 from src.utils import executeCmd
-from numba_operators import any_false_numba, numba_sum
-from bam_ncls import overlap_qname_idx_iterator
-from pairwise_read_inspection import determine_same_haplotype
+from fp_control.numba_operators import any_false_numba, numba_sum
+from fp_control.bam_ncls import overlap_qname_idx_iterator
+from fp_control.pairwise_read_inspection import determine_same_haplotype
 from src.log import logger
 
 

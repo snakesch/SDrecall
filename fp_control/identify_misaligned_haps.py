@@ -7,12 +7,12 @@ import pybedtools as pb
 from collections import defaultdict
 from numba import types, prange
 
-from bam_ncls import overlapping_reads_iterator
-from bilc import lp_solve_remained_haplotypes
-from numba_operators import numba_sum
+from fp_control.bam_ncls import overlapping_reads_iterator
+from fp_control.bilc import lp_solve_remained_haplotypes
+from fp_control.numba_operators import numba_sum
 from src.log import logger
 from src.utils import executeCmd, prepare_tmp_file
-from pairwise_read_inspection import get_hapvector_from_cigar, \
+from fp_control.pairwise_read_inspection import get_hapvector_from_cigar, \
                                      get_errorvector_from_cigar, \
                                      get_read_id, \
                                      count_var, \
@@ -71,7 +71,7 @@ def assemble_consensus(seq_arrays, qual_arrays, read_spans):
     # logger.info(", ".join([f"{r.reference_start}-{r.reference_end}" for r in reads]))
 
     # Initialize the consensus sequence and quality scores with zeros
-    consensus_seq = np.ones(end_pos - start_pos, dtype=np.int32)
+    consensus_seq = np.ones(end_pos - start_pos, dtype=np.int16)
     consensus_qual = np.full(end_pos - start_pos, 0.1, dtype=np.float32)
 
     for i in prange(len(seq_arrays)):
@@ -119,7 +119,7 @@ def assemble_consensus(seq_arrays, qual_arrays, read_spans):
 
 
 
-@numba.njit(types.float32[:](types.int32[:], types.int32), fastmath=True)
+@numba.njit(types.float32[:](types.int16[:], types.int32), fastmath=True)
 def count_window_var_density(array, padding_size = 25):
     is_var = array != 1
     is_var_size = numba_sum(is_var)
@@ -174,7 +174,7 @@ def extract_true_stretches(bool_array):
 
 
 
-@numba.njit(types.boolean(types.int32[:]), fastmath=True)
+@numba.njit(types.boolean(types.int16[:]), fastmath=True)
 def judge_misalignment_by_extreme_vardensity(seq):
     five_vard = count_window_var_density(seq, padding_size = 42)
     six_vard = count_window_var_density(seq, padding_size = 65)
@@ -201,6 +201,8 @@ def judge_misalignment_by_extreme_vardensity(seq):
         max_indel_count = max(max_indel_count, indel_count)
     if max_indel_count > 1:
         return True
+    return False
+
 
 
 @numba.njit(types.float32[:](types.int32[:, :]), fastmath=True)
