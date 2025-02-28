@@ -20,7 +20,7 @@ from prepare_recall_regions import prepare_recall_regions
 from realign_and_recall import SDrecall_per_sample
 
 
-def post_process_vcf(sdrecall_vcf, args, paths):
+def post_process_vcf(sdrecall_vcf, args):
     """
     Process the final VCF - potentially merging with supplementary VCF
     
@@ -57,12 +57,12 @@ def post_process_vcf(sdrecall_vcf, args, paths):
         logger.info(f"Variants annotated with inhouse_common filter: {final_vcf}")
     
     # Then, merge with supplementary VCF if provided
-    if hasattr(args, 'supplementary_vcf') and args.supplementary_vcf:
-        logger.info(f"Merging with supplementary VCF: {args.supplementary_vcf}")
+    if hasattr(args, 'conventional_vcf') and args.conventional_vcf:
+        logger.info(f"Merging with supplementary VCF: {args.conventional_vcf}")
         
         merge_with_priority(
 							query_vcf=sdrecall_vcf,
-							reference_vcf=args.supplementary_vcf,
+							reference_vcf=args.conventional_vcf,
 							output_vcf=merged_vcf,
 							added_filter=None,
 							qv_tag="SDrecall",
@@ -245,7 +245,7 @@ def main():
     _add_common_args(full_parser)
     _add_preparation_args(full_parser)
     _add_realignment_args(full_parser)
-    _add_supplementary_vcf_args(full_parser)
+    _add_conventional_vcf_args(full_parser)
     _add_cohort_args(full_parser)
     full_parser.set_defaults(func=run_full_pipeline)
     
@@ -259,7 +259,7 @@ def main():
     realign_parser = subparsers.add_parser('realign', help='Run only the realignment and recall phase')
     _add_common_args(realign_parser)
     _add_realignment_args(realign_parser)
-    _add_supplementary_vcf_args(realign_parser)
+    _add_conventional_vcf_args(realign_parser)
     _add_cohort_args(realign_parser)
     realign_parser.set_defaults(func=run_realign_only)
     
@@ -291,12 +291,12 @@ def _add_common_args(parser):
                         help='Input BAM file')
     parser.add_argument('-m', '--reference_sd_map', required=True, 
                         help='Reference SD map file')
-    parser.add_argument('-b', '--target_bed', default="", 
-                        help='Optional target BED file')
+    parser.add_argument('-b', '--target_bed', required=True, 
+                        help='Target BED file')
     parser.add_argument('-s', '--sample_id', default=None, 
                         help='Sample ID (extracted from BAM filename if not provided)')
-    parser.add_argument('--target_tag', type=str, default=None, 
-                        help='Optional target region tag')
+    parser.add_argument('--target_tag', type=str, default="exome", 
+                        help='Target region tag')
     parser.add_argument('-t', '--threads', type=int, default=10, 
                         help='Number of threads to use')
     parser.add_argument('--mq_cutoff', type=int, default=41, 
@@ -321,9 +321,9 @@ def _add_realignment_args(parser):
                         help='Confidence level for statistical tests')
 
 
-def _add_supplementary_vcf_args(parser):
+def _add_conventional_vcf_args(parser):
     """Add arguments for supplementary VCF merging"""
-    parser.add_argument('--supplementary_vcf', type=str, default=None,
+    parser.add_argument('--conventional_vcf', type=str, default=None,
                         help='Path to a VCF file from a conventional caller (e.g., GATK, DeepVariant)')
     parser.add_argument('--caller_name', type=str, default='conventional',
                         help='Name of the conventional caller (e.g., GATK, DeepVariant)')

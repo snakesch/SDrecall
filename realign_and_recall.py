@@ -194,12 +194,12 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
     executeCmd(cmd, logger=logger)
 
     # Now we need to merge the pooled filtered vcf and the pooled raw vcf to identify which variants might be derived from misalignments
-    pooled_filtered_vcf = annotate_HP_tag_to_vcf(pooled_filtered_vcf, 
+    pooled_filtered_vcf = annotate_vcf_HP_tag(pooled_filtered_vcf, 
                                                  pooled_filtered_vcf, 
                                                  pooled_filtered_bam, 
-                                                 "HP", 
-                                                 logger = logger)
-    pooled_raw_vcf = annotate_HP_tag_to_vcf(pooled_raw_vcf, 
+                                            "HP", 
+                                            logger = logger)
+    pooled_raw_vcf = annotate_vcf_HP_tag(pooled_raw_vcf, 
                                             pooled_raw_vcf, 
                                             deduped_raw_bam, 
                                             "HP", 
