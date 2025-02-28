@@ -1,8 +1,8 @@
 import os
+
 import gc
 import re
 import sys
-import numba
 
 import pandas as pd
 import numpy as np
@@ -22,9 +22,11 @@ from realign_recall.slice_bam_by_cov import split_bam_by_cov
 from fp_control.realign_filter_per_cov import imap_filter_out
 from realign_recall.cal_edge_NM_values import calculate_NM_distribution_poisson
 
-def gt_filter_init(threads):
+def gt_filter_init(threads, cache_dir=None):
     # Set thread count for all common numerical libraries
-    os.environ["NUMBA_NUM_THREADS"] = str(threads)
+    # Ensure threading layer is configured before any numba call
+    os.environ["NUMBA_THREADING_LAYER"] = "omp"
+
     os.environ["OMP_NUM_THREADS"] = str(threads)
     os.environ["TBB_NUM_THREADS"] = str(threads)
     os.environ["MKL_NUM_THREADS"] = str(threads)  # Add Intel MKL
@@ -32,17 +34,17 @@ def gt_filter_init(threads):
     os.environ["VECLIB_MAXIMUM_THREADS"] = str(threads)  # Add Apple's Accelerate
     os.environ["NUMEXPR_NUM_THREADS"] = str(threads)  # Add numexpr
 
-    # Configure libraries directly when possible
-    numba.set_num_threads(threads)
-    numba.config.THREADING_LAYER = 'omp'
-    
+    # Configure cache directory if provided
+    if cache_dir:
+        os.environ["NUMBA_CACHE_DIR"] = cache_dir
+
     # Set NumPy threading (if using recent NumPy versions)
     try:
         np.config.threading_layer = 'threaded'  # Use Python threads
     except:
         pass
         
-    print(f"Init subprocess with {threads} threads for numerical libraries", file=sys.stderr)
+
 
 
 def eliminate_misalignments(input_bam,
@@ -57,6 +59,7 @@ def eliminate_misalignments(input_bam,
                             mapq_cutoff = 20,
                             basequal_median_cutoff = 15,
                             edge_weight_cutoff = 0.201,
+                            cache_dir = None,
                             logger = logger):
 
     self_path = os.path.abspath(__file__)
@@ -102,13 +105,13 @@ def eliminate_misalignments(input_bam,
         
         # Filter out the misaligned_reads per chromosome
         job_num, _ = configure_parallelism(threads, numba_threads)
-        nm_cutoff, _ = calculate_NM_distribution_poisson(input_bam, conf_level, stat_sample_size, logger)
+        nm_cutoff, _ = calculate_NM_distribution_poisson(input_bam, conf_level, stat_sample_size, logger=logger)
 
         # Create a dedicated log directory
         log_dir = os.path.dirname(output_bam)
         os.makedirs(log_dir, exist_ok=True)
 
-        with ctx.Pool(job_num, initializer=gt_filter_init, initargs=(numba_threads,)) as pool:
+        with ctx.Pool(job_num, initializer=gt_filter_init, initargs=(numba_threads, cache_dir)) as pool:
             # Pass the log_dir parameter to the function
             result_records = pool.starmap(
                 imap_filter_out, 
@@ -121,6 +124,7 @@ def eliminate_misalignments(input_bam,
                      mapq_cutoff,
                      basequal_median_cutoff,
                      edge_weight_cutoff,
+                     numba_threads,
                      i), 
                     log_dir
                 ) for i, (raw_bam, clean_bam, intrinsic_bam, raw_bam_region) in enumerate(zip(raw_bams, clean_bams, intrinsic_bams, raw_bam_regions))]

@@ -4,7 +4,7 @@ import scipy.stats as stats
 
 from src.log import logger
 
-def calculate_NM_distribution_poisson(bam, conf_level=0.01, sample_size=3000000, histo_fig=None, logger=logger):
+def calculate_NM_distribution_poisson(bam, conf_level=0.01, sample_size=3000000, logger=logger):
     '''
     The input vcf_rec is simply a tuple containing(chr, start, ref, alt), remember the coordinates from VCF are 1-indexed
     '''
@@ -40,20 +40,5 @@ def calculate_NM_distribution_poisson(bam, conf_level=0.01, sample_size=3000000,
     while stats.poisson.cdf(cutoff, nm_mean) < 1 - conf_level:
         cutoff += 1
     logger.info(f"NM distribution for {bam} has mean {nm_mean}, the value for {1-conf_level} percentile is {cutoff}")
-
-    if histo_fig:
-        logger.info(f"Plotting NM distribution histogram for {bam} to Figure {histo_fig}")
-        import matplotlib.pyplot as plt
-        num_bins = 100
-        n, bins, patches = plt.hist(nm_array, num_bins, density=True, alpha=0.6, color='g', edgecolor='black')
-        # Add a best fit Poisson distribution line
-        xmin, xmax = plt.xlim()
-        x = np.arange(xmin, xmax)
-        p = stats.poisson.pmf(x, nm_mean)
-        plt.plot(x, p, 'k', linewidth=2)
-
-        title = "NM distribution of %s" % bam
-        plt.title(title)
-        plt.savefig(histo_fig, dpi=300)
 
     return cutoff, nm_mean

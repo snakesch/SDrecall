@@ -170,7 +170,6 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
                 fc_node_rela_start, fc_node_rela_end = record.qnode_relative_region(fc_node)
                 # The rela_start and rela_end are based on the corresponding PC region
                 f.write("\t".join([str(value) for value in record][:3] + [str(fc_node_rela_start), str(fc_node_rela_end), record[3], f"NFC:{label}_{idx}"]) + "\n")
-    sortBed_and_merge(paths["All_region_bed"])
 
     # Now all the bed files are finalized for this RG cluster
     # We can proceed to prepare the masked genome and intrinsic bam
@@ -178,7 +177,12 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
     masked_genome_path = paths["Masked_genome"]
     contig_sizes = ref_genome.replace(".fasta", ".fasta.fai")
     # Prepare masked genomes
-    masked_genome = Genome(ref_genome).mask(paths["Query_bed"], avg_frag_size = avg_frag_size, std_frag_size=std_frag_size, genome=contig_sizes, logger=logger, path=masked_genome_path)
+    masked_genome = Genome(ref_genome).mask(paths["Query_bed"], 
+                                            avg_frag_size = avg_frag_size, 
+                                            std_frag_size = std_frag_size, 
+                                            genome=contig_sizes, 
+                                            logger=logger, 
+                                            path=masked_genome_path)
     
     # Call intrinsic variants
     bam_path = getIntrinsicBam( rg_bed = paths["Query_bed"], 

@@ -4,19 +4,20 @@ import numpy as np
 from numba import types
 
 from src.log import logger
+from src.suppress_warning import *
 from fp_control.numba_operators import numba_diff_indices, \
-										numba_sum, \
-										numba_not, \
-										numba_and, \
-										numba_slicing, \
-										numba_indexing_int32, \
-										numba_indexing_int8, \
-										numba_compare, \
-										numba_bool_indexing, \
-										numba_contain
+                                        numba_sum, \
+                                        numba_not, \
+                                        numba_and, \
+                                        numba_slicing, \
+                                        numba_indexing_int32, \
+                                        numba_indexing_int8, \
+                                        numba_compare, \
+                                        numba_bool_indexing, \
+                                        numba_contain
 
 
-@numba.njit(types.bool_[:](types.int32[:]), fastmath=True)
+@numba.njit(types.bool_[:](types.int16[:]), fastmath=True)
 def get_indel_bools(seq_arr):
     return (seq_arr > 1) | (seq_arr == -6)
 
@@ -178,7 +179,7 @@ def get_hapvector_from_cigar(cigar_tuples,
     ref_length = sum([length for operation, length in cigar_tuples if operation in {0, 7, 8, 2, 3}])
 
     # Create a haplotype vector of zeros
-    hapvector = np.empty(ref_length, dtype=np.int32)
+    hapvector = np.empty(ref_length, dtype=np.int16)
 
     index = 0
     query_pos = 0
@@ -209,7 +210,10 @@ def get_hapvector_from_cigar(cigar_tuples,
             true_mismatch = True
             if query_sequence is not None:
                 base = query_sequence[query_pos:query_pos + length]
-                if base == "N":
+                if len(base) > 1:
+                    # There are more than 1 consecutive bases with mismatches in the cigar string: {cigar_tuples}
+                    pass
+                elif base == "N":
                     true_mismatch = False
 
             if not insertion:
@@ -485,7 +489,7 @@ def determine_same_haplotype(read, other_read,
     '''
 
     read_id = get_read_id(read)
-    start = read.reference_start
+    start = np.int32(read.reference_start)
 
     ref_positions, qseq_ref_positions, query_sequence_encoded, query_sequence_qualities, read_ref_pos_dict = extract_read_qseqs(read, read_ref_pos_dict)
     other_ref_positions, other_qseq_ref_positions, other_query_sequence_encoded, other_query_sequence_qualities, read_ref_pos_dict = extract_read_qseqs(other_read, read_ref_pos_dict)
@@ -498,7 +502,7 @@ def determine_same_haplotype(read, other_read,
         read_hap_vectors[read_id] = read_hap_vector
 
     other_read_id = get_read_id(other_read)
-    other_start = other_read.reference_start
+    other_start = np.int32(other_read.reference_start)
 
     if other_read_id in read_hap_vectors:
         other_read_hap_vector = read_hap_vectors[other_read_id]

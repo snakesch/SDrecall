@@ -83,8 +83,8 @@ def process_masked_bam( rg_tag,
         executeCmd(cmd, logger=logger)
         
         # Now perform the mapping
-        cmd = f"bash {shell_utils} independent_minimap2_masked \
-                -b {original_bam} \
+        cmd = f"bash {shell_utils} \
+			    independent_minimap2_masked \
                 -a {masked_genome} \
                 -s {sample_ID} \
                 -f {sd_freads} \

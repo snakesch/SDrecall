@@ -40,7 +40,7 @@ def get_supporting_tags(bam_file, chrom, pos, ref, alts, tag, min_mapq=10, min_b
 
 
 
-def annotate_vcf(input_vcf, output_vcf, bam_file, tag, min_mapq=10, min_bq=15):
+def annotate_vcf(input_vcf, output_vcf, bam_file, tag, min_mapq=10, min_bq=15, logger=logger):
     assert output_vcf.endswith(".vcf.gz"), "Output VCF must be a .vcf.gz file"
     tmp_output = prepare_tmp_file(suffix = ".vcf").name
     with pysam.VariantFile(input_vcf) as vcf_in:

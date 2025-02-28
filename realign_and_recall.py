@@ -17,8 +17,8 @@ from src.merge_variants_with_priority import merge_with_priority
 
 from realign_recall.stat_realign_group_regions import stat_all_RG_region_size
 from realign_recall.realign_per_RG import imap_process_masked_bam
-from realign_recall.cal_edge_NM_values import calculate_NM_distribution_poisson
 from realign_recall.annotate_HP_tag_to_vars import annotate_vcf as annotate_vcf_HP_tag
+from realign_recall.prepare_masked_align_region import imap_prepare_masked_align_region_per_RG
 from misalignment_elimination import eliminate_misalignments
 
 
@@ -180,6 +180,7 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
                                                                   numba_threads=numba_threads,
                                                                   conf_level=conf_level,
                                                                   mapq_cutoff=mq_cutoff,
+                                                                  cache_dir=sdrecall_paths.tmp_dir,
                                                                   logger=logger)
 
     # Call variants on the filtered BAM file after misalignment elimination
