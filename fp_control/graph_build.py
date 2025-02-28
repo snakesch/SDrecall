@@ -8,6 +8,7 @@ from numba import types
 from numba.typed import Dict
 
 from src.utils import executeCmd
+from src.suppress_warning import *
 from fp_control.numba_operators import any_false_numba, numba_sum
 from fp_control.bam_ncls import overlap_qname_idx_iterator
 from fp_control.pairwise_read_inspection import determine_same_haplotype
@@ -49,7 +50,7 @@ def stat_ad_to_dict(bam_file, logger = logger):
             continue
 
         if inner_key is None:
-            logger.warning(f"The inner key is None for the row {i} of the ad table: {ad_table.iloc[i, :].to_string(index=False)}")
+            logger.warning(f"The inner key is None for the row {i} of the ad table: \n{ad_table.iloc[i, :].to_string(index=False)}\n")
             continue
 
         total_dp = value
@@ -288,8 +289,6 @@ def build_phasing_graph(bam_file,
         start = min(r.reference_start for r in paired_reads)
         end = max(r.reference_end for r in paired_reads)
         qidx_iter = overlap_qname_idx_iterator(ncls_dict, 
-                                               ncls_read_dict, 
-                                               ncls_qname_dict, 
                                                chrom, start, end)
 
         # Iterate through the reads

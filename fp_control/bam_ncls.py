@@ -56,10 +56,6 @@ def overlap_qname_idx_iterator(ncls_dict, chrom, start, end):
     -----------
     ncls_dict : dict
         Dictionary of NCLS objects, keyed by chromosome names.
-    read_dict : dict
-        Dictionary of read objects, keyed by query name indices.
-    qname_dict : dict
-        Dictionary mapping query name indices to query names.
     chrom : str
         Chromosome name.
     start : int

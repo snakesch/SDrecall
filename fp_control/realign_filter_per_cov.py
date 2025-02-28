@@ -7,17 +7,16 @@ from src.utils import executeCmd, prepare_tmp_file
 from src.const import shell_utils
 from src.log import logger
 
-from fp_control.bam_ncls import migrate_bam_to_ncls, calculate_mean_read_length
-from fp_control.graph_build import build_phasing_graph
-from fp_control.identify_misaligned_haps import inspect_by_haplotypes
-from fp_control.phasing import phasing_realigned_reads
-
 
 def imap_filter_out(args, log_dir=""):
+    import sys
     """Worker function that processes a single region and returns results with log file path"""
     # Unpack arguments
-    raw_bam, output_bam, intrinsic_bam, bam_region_bed, max_varno, mapq_cutoff, basequal_median_cutoff, edge_weight_cutoff, job_id = args
-    
+    raw_bam, output_bam, intrinsic_bam, bam_region_bed, max_varno, mapq_cutoff, basequal_median_cutoff, edge_weight_cutoff, numba_threads, job_id = args
+    import numba
+    numba.set_num_threads(numba_threads)
+    numba.config.THREADING_LAYER = 'omp'
+
     # Create unique log file for this subprocess
     log_file = os.path.join(log_dir, f"subprocess_{job_id}_{os.path.basename(raw_bam)}.log")
     
@@ -60,7 +59,6 @@ def imap_filter_out(args, log_dir=""):
         # Log the full stack trace for debugging
         subprocess_logger.error(f"Error processing {raw_bam}: {str(e)}")
         subprocess_logger.error(traceback.format_exc())
-        
         # Return error result with log file path
         return f"{raw_bam},NaN,{log_file}"
 
@@ -73,6 +71,7 @@ def realign_filter_per_cov(bam,
                            mapq_cutoff = 20,
                            basequal_median_cutoff = 15,
                            edge_weight_cutoff = 0.201,
+                           threads = 4,
                            logger=logger):
     '''
     Main function for phasing and filtering realigned reads per continuous coverage region.
@@ -103,6 +102,11 @@ def realign_filter_per_cov(bam,
     graph construction, haplotype identification, and read filtering to improve
     the quality of genomic alignments and identify potential misalignments.
     '''
+
+    from fp_control.bam_ncls import migrate_bam_to_ncls, calculate_mean_read_length
+    from fp_control.graph_build import build_phasing_graph
+    from fp_control.identify_misaligned_haps import inspect_by_haplotypes
+    from fp_control.phasing import phasing_realigned_reads
 
     # Given the top 1% mismatch count per read (one structrual variant count as 1 mismatch)
     tmp_bam = prepare_tmp_file(suffix=".bam").name

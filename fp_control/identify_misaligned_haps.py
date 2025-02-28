@@ -13,12 +13,12 @@ from fp_control.numba_operators import numba_sum
 from src.log import logger
 from src.utils import executeCmd, prepare_tmp_file
 from fp_control.pairwise_read_inspection import get_hapvector_from_cigar, \
-                                     get_errorvector_from_cigar, \
-                                     get_read_id, \
-                                     count_var, \
-                                     count_continuous_blocks, \
-                                     count_continuous_indel_blocks, \
-                                     extract_read_qseqs
+												get_errorvector_from_cigar, \
+												get_read_id, \
+												count_var, \
+												count_continuous_blocks, \
+												count_continuous_indel_blocks, \
+												extract_read_qseqs
 
 
 
@@ -539,7 +539,7 @@ def record_hap_err_vectors_per_region(reads,
         # Store the error vector of the read into the err_vectors 2d array
         err_vectors[i, :err_vector.size] = err_vector
 
-    return read_spans, hap_vectors, err_vectors, total_hap_vectors, total_err_vectors
+    return read_spans, hap_vectors, err_vectors, total_hap_vectors, total_err_vectors, read_ref_pos_dict
 
 
 
@@ -661,7 +661,7 @@ def inspect_by_haplotypes(input_bam,
                           compare_haplotype_meta_tab = "",
                           mean_read_length = 150,
                           logger = logger):
-    _, read_dict, _, qname_idx_dict = bam_ncls
+    _, read_dict, _, qname_idx_dict, _ = bam_ncls
     record_dfs = []
     clique_sep_component_idx = 0
     hid_extreme_vard = defaultdict(bool) # Initialize a dictionary to store if the haplotype has extreme variant density
