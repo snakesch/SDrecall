@@ -41,14 +41,16 @@ def post_process_vcf(sdrecall_vcf, args):
         from src.utils import prepare_tmp_file
         annotated_vcf = prepare_tmp_file(suffix='.vcf.gz').name
         
-        # Run identify_inhouse_common
-        from identify_common_vars import identify_inhouse_common
-        annotated_vcf = identify_inhouse_common(
+        # Run annotate_inhouse_common
+        from identify_common_vars import annotate_inhouse_common
+        annotated_vcf = annotate_inhouse_common(
             query_vcf=sdrecall_vcf,
             cohort_vcf=args.cohort_vcf,
             output_vcf=annotated_vcf,
+            ref_genome=args.ref_genome,
             inhouse_common_cutoff=args.inhouse_common_cutoff,
-            conf_level=args.cohort_conf_level
+            conf_level=args.cohort_conf_level,
+			threads=args.threads
         )
         
         # Update the final_vcf to be the annotated one

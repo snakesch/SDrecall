@@ -1,7 +1,7 @@
 import logging
 import numpy as np
 
-logger = logging.getLogger("SDrecall")
+from src.log import logger
 
 class HOMOSEQ_REGION:
     def __init__(self, vertex, graph):

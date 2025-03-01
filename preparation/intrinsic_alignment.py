@@ -2,10 +2,10 @@ import os
 import logging
 
 from preparation.seq import getRawseq
-from src.utils import executeCmd, is_file_up_to_date
+from src.utils import executeCmd, is_file_up_to_date, prepare_tmp_file
 from src.const import shell_utils
+from src.log import logger
 
-logger = logging.getLogger("SDrecall")
 
 def getIntrinsicBam(rg_bed, 
                     all_homo_regions_bed, 
@@ -57,5 +57,60 @@ def getIntrinsicBam(rg_bed,
                 -m asm20 \
                 -g {ref_genome}"
         executeCmd(cmd, logger=logger)
+        intrinsic_bam = filter_intrinsic_alignments(intrinsic_bam, logger=logger)
 
     return intrinsic_bam
+
+
+
+def filter_intrinsic_alignments(bam_file, output_file=None, logger = logger):
+    """
+    Filter out alignments where the start position in the read name
+    matches the alignment position in the reference. Meaning the reference sequence is mapped to its original genomic location
+    
+    Parameters:
+    -----------
+    bam_file : str
+        Path to input BAM file
+    output_file : str
+        Path to output filtered BAM file
+    """
+    import pysam
+    import re
+    
+    qname_regex = re.compile(r'(.*):(\d+)-(\d+)')
+    tmp_output = prepare_tmp_file(suffix=".bam").name
+    
+    with pysam.AlignmentFile(bam_file, "rb") as input_bam:
+        with pysam.AlignmentFile(tmp_output, "wb", header=input_bam.header) as output_bam:
+            total_reads = 0
+            filtered_reads = 0
+            
+            for read in input_bam:
+                total_reads += 1
+                
+                # Extract start position from qname (format: chr:start-end)
+                match = qname_regex.match(read.query_name)
+                if match:
+                    qname_start = int(match.group(2))
+                    
+                    # Compare with alignment position
+                    if qname_start != read.reference_start + 1:  # pysam.read.reference_start is 0-based
+                        output_bam.write(read)
+                    else:
+                        filtered_reads += 1
+                else:
+                    # If qname doesn't match the expected format, keep the read
+                    output_bam.write(read)
+            
+            logger.info(f"Filtered out {filtered_reads} of {total_reads} reads where reference position matches qname start")
+    
+    # Index the output BAM
+    if output_file is None:
+        cmd = f"mv {tmp_output} {bam_file} && samtools index {bam_file}"
+        executeCmd(cmd, logger=logger)
+        return bam_file
+    else:
+        cmd = f"mv {tmp_output} {output_file} && samtools index {output_file}"
+        executeCmd(cmd, logger=logger)
+        return output_file

@@ -5,8 +5,7 @@
 import pysam
 import numpy as np
 import random
-import logging
-logger = logging.getLogger("SDrecall")
+from src.log import logger
 
 def get_insert_size_distribution(bam_file, num_runs=10, num_samples=2000, max_template_length=8000, sample_prob=0.001):
     """

@@ -136,7 +136,8 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
     execute_merging = merge_bams(bam_list = post_result_df["raw_masked_bam"].dropna().unique().tolist(), 
                                  merged_bam = pooled_raw_bam, 
                                  ref_fasta = ref_genome,
-                                 threads = threads)
+                                 threads = threads,
+                                 logger = logger)
     deduped_raw_bam = pooled_raw_bam.replace(".bam", ".deduped.bam")
     cmd = f"samtools collate -@ {threads} -O -u {pooled_raw_bam} | \
             samtools fixmate -@ {threads} -m -u - - | \
@@ -184,7 +185,7 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
                                                                   logger=logger)
 
     # Call variants on the filtered BAM file after misalignment elimination
-    pooled_filtered_vcf = sdrecall_paths.pooled_filtered_bam_path().replace(".bam", ".vcf")
+    pooled_filtered_vcf = sdrecall_paths.recall_filtered_vcf_path()
     logger.info(f"Calling variants on the filtered BAM file {pooled_filtered_bam}")
     cmd = f"bash {shell_utils} bcftools_call_per_RG \
             -m {ref_genome} \
@@ -196,15 +197,15 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
 
     # Now we need to merge the pooled filtered vcf and the pooled raw vcf to identify which variants might be derived from misalignments
     pooled_filtered_vcf = annotate_vcf_HP_tag(pooled_filtered_vcf, 
-                                                 pooled_filtered_vcf, 
-                                                 pooled_filtered_bam, 
-                                            "HP", 
-                                            logger = logger)
+                                              pooled_filtered_vcf, 
+                                              pooled_filtered_bam, 
+                                              "HP", 
+                                              logger = logger)
     pooled_raw_vcf = annotate_vcf_HP_tag(pooled_raw_vcf, 
-                                            pooled_raw_vcf, 
-                                            deduped_raw_bam, 
-                                            "HP", 
-                                            logger = logger)
+                                         pooled_raw_vcf, 
+                                         deduped_raw_bam, 
+                                         "HP", 
+                                         logger = logger)
     
     final_recall_vcf = sdrecall_paths.final_recall_vcf_path()
     merge_with_priority(query_vcf = pooled_raw_vcf, 

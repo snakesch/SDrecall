@@ -11,7 +11,7 @@ from itertools import repeat
 from preparation.graph_traversal import traverse_network_to_get_homology_counterparts
 from preparation.homoseq_region import HOMOSEQ_REGION
 
-logger = logging.getLogger('SDrecall')
+from src.log import logger
 
 def convert_networkx_to_graphtool(nx_graph):
     # Create a new graph-tool graph

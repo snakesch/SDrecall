@@ -8,7 +8,8 @@ import graph_tool.all as gt
 from intervaltree import Interval, IntervalTree
 from pybedtools import BedTool
 
-logger = logging.getLogger("SDrecall")
+
+from src.log import logger
 
 
 def string_to_tuple(string):

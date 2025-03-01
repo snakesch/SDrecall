@@ -393,7 +393,7 @@ def summarize_enclosing_haps(hap_subgraphs, qname_to_node, region, logger = logg
             logger.info(f"At region {region}, only found {len(region_haplotype_info)} haplotype clusters enwrapping the whole region even after the recover trial.\n")
             return None, None
 
-    return region_haplotype_info, inspect_results
+    return region_haplotype_info, overlapping_span
 
 
 
@@ -522,7 +522,7 @@ def record_hap_err_vectors_per_region(reads,
             hap_vector = total_hap_vectors[rid]
         else:
             _, _, query_sequence_encoded, _, read_ref_pos_dict = extract_read_qseqs(r, read_ref_pos_dict)
-            cigar_arr = np.array(r.cigartuples, dtype = np.int16)
+            cigar_arr = np.array(r.cigartuples, dtype = np.int32)
             hap_vector = get_hapvector_from_cigar(cigar_arr, query_sequence_encoded)
             total_hap_vectors[rid] = hap_vector
 
@@ -582,7 +582,7 @@ def stat_refseq_similarity(intrin_bam_ncls,
             homo_refseq_hap_vector = total_genomic_haps[homo_refseq_id]
         else:
             _, _, query_sequence_encoded, _, read_ref_pos_dict = extract_read_qseqs(homo_refseq, read_ref_pos_dict)
-            cigar_arr = np.array(homo_refseq.cigartuples, dtype = np.int16)
+            cigar_arr = np.array(homo_refseq.cigartuples, dtype = np.int32)
             homo_refseq_hap_vector = get_hapvector_from_cigar(cigar_arr, query_sequence_encoded)
             total_genomic_haps[homo_refseq_id] = homo_refseq_hap_vector
 

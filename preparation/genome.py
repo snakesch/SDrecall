@@ -10,9 +10,9 @@ from Bio.SeqRecord import SeqRecord
 from pyfaidx import Fasta
 
 from pybedtools import BedTool
-from src.utils import executeCmd, update_plain_file_on_md5
 
-logger = logging.getLogger("SDrecall")
+from src.utils import executeCmd, update_plain_file_on_md5
+from src.log import logger
 
 class Genome:
     """

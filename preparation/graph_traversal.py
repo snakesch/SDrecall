@@ -5,11 +5,10 @@ import os
 import graph_tool.all as gt
 from typing import Tuple
 
-from src.log import log_command
+from src.log import log_command, logger
 from src.utils import executeCmd, prepare_tmp_file
 from preparation.homoseq_region import HOMOSEQ_REGION
 
-logger = logging.getLogger('SDrecall')
 
 def inspect_cnode_along_route(graph, 
                               verts, 

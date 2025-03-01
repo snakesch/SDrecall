@@ -2,7 +2,7 @@ import pandas as pd
 import logging
 import numpy as np
 
-logger = logging.getLogger("SDrecall")
+from src.log import logger
 
 class Pair:
     """Represents a pair of genomic intervals."""

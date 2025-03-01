@@ -4,6 +4,8 @@ import logging
 import tempfile
 import re
 import numpy as np
+import pandas as pd
+import math
 from typing import List, Tuple
 
 from pybedtools import BedTool
@@ -16,7 +18,7 @@ def executeCmd(cmd, logger = logger) -> None:
 
     proc = subprocess.run(cmd, shell=True, capture_output=True)
         
-    logger.debug(f"Command run:{cmd}")
+    logger.debug(f"Command run: {cmd}")
     logger.debug(f"Return code: {proc.returncode}")
 
     err_msg = proc.stderr.decode()
@@ -37,6 +39,31 @@ def prepare_tmp_file(tmp_dir="/tmp", **kwargs):
 def is_file_up_to_date(file_to_check, list_of_dependency_files):
     file_to_check_time = os.path.getmtime(file_to_check)
     return all(file_to_check_time > os.path.getmtime(dep_file) for dep_file in list_of_dependency_files)
+
+
+def na_value(v):
+    # logger.info("Input value is {}, and its type is {}, whether its NAN? {}, {}".format(v, type(v), v in [np.nan], math.isnan(v)))
+    if type(v) == str:
+        if re.search(r"^[Nn][Aa][Nn]*$", v):
+            return True
+        elif re.search(r"^[;,\|]*[Nn][Aa][Nn]*[;,\|]*$", v):
+            return True
+        elif re.search(r"^([Nn][Aa][Nn]*[;,\|_\- ]+)+([Nn][Aa][Nn]*)*$", v):
+            return True
+        elif re.search(r"^[\.\-\*_ ]*$", v):
+            return True
+        else:
+            return False
+    elif v is None:
+        return True
+    elif v in [np.nan]:
+        return True
+    elif type(v) == pd._libs.tslibs.timestamps.Timestamp:
+        return False
+    elif math.isnan(v):
+        return True
+    else:
+        return False
 
 
 def update_plain_file_on_md5(old_file, new_file, logger=logger):
@@ -150,7 +177,7 @@ def merge_bams(bam_list: list,
     
     test_cmd = f"bash {shell_utils} quick_check_bam_validity {merged_bam}"
     try:
-        executeCmd(test_cmd)
+        executeCmd(test_cmd, logger=logger)
     except RuntimeError:
         logger.info(f"The merged pooled BAM file {merged_bam} is not valid")
         execute = True
@@ -165,11 +192,11 @@ def merge_bams(bam_list: list,
     with open(merged_bam_list, "w") as f:
         f.write("\n".join(bam_list))
     
-    cmd = f"samtools merge -c -@ {threads} -h {merged_bam_header} -b {merged_bam_list} -o - | \
+    cmd = f"samtools merge -c -@ {threads} -h {merged_bam_header} -b {merged_bam_list} -u -o - | \
             samtools sort -O bam -o {merged_bam} -@ {threads} && \
             samtools index {merged_bam} && \
             ls -lht {merged_bam} || \
-            echo Failed to concatenate all the pooled BAM files. It wont be a fatal error but brings troubles to debugging and variant tracing."
+            >&2 echo Failed to concatenate all the pooled BAM files. It wont be a fatal error but brings troubles to debugging and variant tracing."
     if execute:
         executeCmd(cmd, logger = logger)
 

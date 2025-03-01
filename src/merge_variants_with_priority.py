@@ -374,17 +374,18 @@ def process_region(region,
 
 
 
-def sort_vcf(vcf_file, ref_genome, logger = logger):
+def sort_vcf(vcf_file, ref_genome, output_vcf = None, logger = logger):
     # Sort the VCF file using bcftools
-    sorted_vcf_file = vcf_file.replace('.vcf', '.sorted.vcf')
-	
-    cmd = f'''bcftools norm -m -both -f ${ref_genome} --multi-overlaps 0 -a -Ou {vcf_file} | \
-			  bcftools norm -d exact -Ou - | \
-			  bcftools view -i 'ALT!="*"' -Ou - | \
-			  bcftools sort -Oz -o {sorted_vcf_file} - && \
-			  bcftools index -t {sorted_vcf_file}'''
+    if output_vcf is None:
+        output_vcf = vcf_file.replace('.vcf', '.sorted.vcf')
+    
+    cmd = f'''bcftools norm -m -both -f {ref_genome} --multi-overlaps 0 -a -Ou {vcf_file} | \
+              bcftools norm -d exact -Ou - | \
+              bcftools view -i 'ALT!="*"' -Ou - | \
+              bcftools sort -Oz -o {output_vcf} - && \
+              bcftools index -f -t {output_vcf}'''
     executeCmd(cmd, logger=logger)
-    return sorted_vcf_file
+    return output_vcf
 
 
 
@@ -423,13 +424,13 @@ def merge_vcf_headers(header1, header2):
 
 
 def merge_with_priority(query_vcf = "", 
-						reference_vcf = "", 
-						output_vcf = "", 
-						added_filter = None,
-						qv_tag = None,
-						rv_tag = None, 
-						ref_genome = "",
-						threads = 4):
+                        reference_vcf = "", 
+                        output_vcf = "", 
+                        added_filter = None,
+                        qv_tag = None,
+                        rv_tag = None, 
+                        ref_genome = "",
+                        threads = 4):
     # Sort the query VCF file
     sorted_query_vcf = sort_vcf(query_vcf, ref_genome, logger = logger)
 

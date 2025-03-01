@@ -15,7 +15,7 @@ from src.log import configure_logger, logger
 from prepare_recall_regions import prepare_recall_regions
 from realign_and_recall import SDrecall_per_sample
 from misalignment_elimination import eliminate_misalignments
-from identify_common_vars import identify_inhouse_common
+from identify_common_vars import annotate_inhouse_common
 
 # Define what should be imported with "from SDrecall import *"
 __all__ = [
@@ -25,5 +25,5 @@ __all__ = [
     'prepare_recall_regions',
     'SDrecall_per_sample',
     'eliminate_misalignments',
-    'identify_inhouse_common'
+    'annotate_inhouse_common'
 ]

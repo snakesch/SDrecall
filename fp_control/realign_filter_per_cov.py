@@ -26,7 +26,7 @@ def imap_filter_out(args, log_dir=""):
     
     # Create logger that writes to file
     subprocess_logger = logging.getLogger(f"SubProcess-{job_id}")
-    subprocess_logger.setLevel(logging.INFO)
+    subprocess_logger.setLevel(logging.DEBUG)
     subprocess_logger.addHandler(file_handler)
     subprocess_logger.propagate = False  # Don't send logs to parent loggers
     
@@ -248,22 +248,26 @@ def realign_filter_per_cov(bam,
                     read.set_tag('HP', f'HAP_{hap_id}')
                     tmp_handle.write(read)
 
-            # logger.warning(f"Check {check_odd_num} reads to find oddly high editing distance reads, {zero_odd_num} reads found no odd editing distance read pairs")
-            for qname, pair in norm_qnames.items():
-                if (not qname in noisy_qnames) and (not qname in mismap_qnames):
-                    for read in pair:
-                        output_handle.write(read)
+                # logger.warning(f"Check {check_odd_num} reads to find oddly high editing distance reads, {zero_odd_num} reads found no odd editing distance read pairs")
+                for qname, pair in norm_qnames.items():
+                    if (not qname in noisy_qnames) and (not qname in mismap_qnames):
+                        for read in pair:
+                            output_handle.write(read)
 
     logger.warning(f"Filtered out {len(noisy_qnames)} noisy read-pairs (Editing distance without the biggest gap > {max_varno}) and {len(mismap_qnames - noisy_qnames)} read-pairs with ODD high editing distance, remaining {len(set(norm_qnames.keys()) - noisy_qnames - mismap_qnames)} read-pairs from {bam} (with total {total_num} reads) and output to {output_bam}\n\n")
 
     # Replace the input BAM file with the tmp BAM file with modified RG tags for visualization of haplotype clusters
     executeCmd(f"samtools sort -O bam -o {bam} {tmp_bam} && \
                  samtools index {bam} && \
-                 rm {tmp_bam}", logger=logger)
+                 rm {tmp_bam} && \
+                 [[ $(samtools view {bam} | wc -l) -ge 1 ]] && \
+                 ls -lh {bam}", logger=logger)
     # Sort and index the output bam file
     executeCmd(f"samtools sort -O bam -o {tmp_bam} {output_bam} && \
                  mv {tmp_bam} {output_bam} && \
-                 samtools index {output_bam}", logger=logger)
+                 samtools index {output_bam} && \
+                 [[ $(samtools view {output_bam} | wc -l) -ge 1 ]] && \
+                 ls -lh {output_bam}", logger=logger)
     return phased_graph, output_bam
 
 

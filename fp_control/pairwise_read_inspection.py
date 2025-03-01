@@ -2,6 +2,7 @@ import logging
 import numba
 import numpy as np
 from numba import types
+from numba.typed import Dict
 
 from src.log import logger
 from src.suppress_warning import *
@@ -177,6 +178,7 @@ def get_hapvector_from_cigar(cigar_tuples,
 
     # Determine the length of the reference sequence consumption
     ref_length = sum([length for operation, length in cigar_tuples if operation in {0, 7, 8, 2, 3}])
+    assert ref_length > 0, f"The reference length is 0 for the cigar string: \n{cigar_tuples}\n"
 
     # Create a haplotype vector of zeros
     hapvector = np.empty(ref_length, dtype=np.int16)
@@ -388,6 +390,11 @@ def tolerate_mismatches_two_seq(read1_package,
     And to decide whether we are safe to determine the mismatches are originated from sequencing error or not.
 
     Use seq_err_det_stacked_bases() to determine if the mismatches can be explained by sequencing artifacts, details can be found in the docstring of the function
+
+    the value at diff_ind in nested_ad_dict should be a dictionary with:
+    {0: ad, 1: ad, 2: ad, 3: ad, 4: ad, 5: dp} (ad is allele depth, dp is depth)
+    also:
+    {A: 0, T: 1, C: 2, G: 3, N: 4}
     '''
     read1_start, read1_qseq_encoded, read1_qseq_qualities, read1_ref_positions = read1_package
     read2_start, read2_qseq_encoded, read2_qseq_qualities, read2_ref_positions = read2_package
@@ -399,7 +406,8 @@ def tolerate_mismatches_two_seq(read1_package,
                                              read1_qseq_qualities,
                                              read1_ref_positions,
                                              diff_ind,
-                                             nested_ad_dict[diff_ind])
+                                             nested_ad_dict.get(diff_ind, Dict.empty(key_type=types.int8,
+                                                                                     value_type=types.int16)))
         # if added_stack_base_dict:
         #     stack_base_dict.update(added_stack_base_dict)
 
@@ -408,7 +416,8 @@ def tolerate_mismatches_two_seq(read1_package,
                                              read2_qseq_qualities,
                                              read2_ref_positions,
                                              diff_ind,
-                                             nested_ad_dict[diff_ind])
+                                             nested_ad_dict.get(diff_ind, Dict.empty(key_type=types.int8,
+                                                                                     value_type=types.int16)))
         tolerate_mismatches.append(seq_err1 or seq_err2)
 
     if all(tolerate_mismatches):

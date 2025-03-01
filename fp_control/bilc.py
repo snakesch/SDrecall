@@ -39,7 +39,7 @@ This script only contains the HiGHs solver part used in a bigger workflow to ide
 
 Note:
 This implementation assumes that the input DataFrame has specific columns including
-'hap_id', 'coefficient', 'ref_genome_similarities', 'chrom', 'start', 'end', and 'rank'.
+'hap_id', 'coefficient', 'hap_max_sim_scores', 'chrom', 'start', 'end', and 'rank'.
 Ensure that the input data is properly formatted before using this module.
 """
 
@@ -64,8 +64,8 @@ def lp_solve_remained_haplotypes(total_record_df,
                                  logger = logger):
     # total_record_df = total_record_df.loc[np.logical_not(total_record_df["extreme_vard"]), :]
     hap_id_coefficients = total_record_df.groupby(["hap_id"])["coefficient"].mean().reset_index()
-    hap_id_coefficients = hap_id_coefficients.merge(total_record_df.loc[:, ["hap_id", "ref_genome_similarities"]], how="left", on="hap_id")
-    hap_id_coefficients.loc[:, "coefficient"] = hap_id_coefficients["coefficient"] + hap_id_coefficients["ref_genome_similarities"]
+    hap_id_coefficients = hap_id_coefficients.merge(total_record_df.loc[:, ["hap_id", "hap_max_sim_scores"]], how="left", on="hap_id")
+    hap_id_coefficients.loc[:, "coefficient"] = hap_id_coefficients["coefficient"] + hap_id_coefficients["hap_max_sim_scores"]
     hap_id_coefficients.drop_duplicates(inplace=True)
 
     logger.info(f"The hap_id_coefficients looks like \n{hap_id_coefficients.to_string(index=False)}\n")
@@ -98,9 +98,6 @@ def lp_solve_remained_haplotypes(total_record_df,
     # Then we need to fill the constraint matrix A properly to correctly specify start indices, row_indices, and values in the future function calls.
     lower_bounds = np.zeros(hap_no, dtype=np.int32)
     upper_bounds = np.ones(hap_no, dtype=np.int32)
-
-    # Set the output_flag to False to suppress output
-    highs.setOptionValue('output_flag', True)
 
     col_costs = - hap_id_coefficients["coefficient"].to_numpy().astype(np.double)
 

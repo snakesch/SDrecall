@@ -20,10 +20,13 @@ def slice_bam_per_bed(bed, bam, ref_genome, threads = 4, logger = logger):
     chunk_id = os.path.basename(bed).split(".")[-2]
     cov_bam = bam.replace(".bam", f".{chunk_id}.bam")
     cov_bam_header = cov_bam.replace(".bam", ".header")
-    if not os.path.exists(bam + ".bai") or os.path.getmtime(bam) > os.path.getmtime(bam + ".bai"):
+    bam_index = bam + ".bai"
+    if not os.path.exists(bam_index) or os.path.getmtime(bam) > os.path.getmtime(bam_index):
         tmp_index = prepare_tmp_file(suffix=".bai").name
         cmd = f"samtools index -b -o {tmp_index} {bam} && \
-                mv {tmp_index} {bam + '.bai'}"
+                [[ -f {bam_index} ]] && \
+                [[ {bam_index} -nt {bam} ]] || \
+                mv -f {tmp_index} {bam_index}"
         executeCmd(cmd, logger = logger)
         # We need to make sure the index update is atomic
 
