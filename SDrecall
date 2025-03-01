@@ -68,7 +68,7 @@ def post_process_vcf(sdrecall_vcf, args):
             # Derive from conventional VCF path
             merged_vcf = args.conventional_vcf.replace('.vcf.gz', '.sdrecall.vcf.gz')
             
-        logger.info(f"Merged VCF will be written to: {merged_vcf}")
+        logger.info(f"Merged VCF will be written to: {merged_vcf}, from {final_vcf} and {args.conventional_vcf}")
         
         merge_with_priority(
             query_vcf=final_vcf,

@@ -381,7 +381,7 @@ def sort_vcf(vcf_file, ref_genome, output_vcf = None, logger = logger):
     
     cmd = f'''bcftools norm -m -both -f {ref_genome} --multi-overlaps 0 -a -Ou {vcf_file} | \
               bcftools norm -d exact -Ou - | \
-              bcftools view -i 'ALT!="*"' -Ou - | \
+              bcftools filter -e 'ALT[0] == "*" || GT = "mis" || GT = "ref"' -Ou - | \
               bcftools sort -Oz -o {output_vcf} - && \
               bcftools index -f -t {output_vcf}'''
     executeCmd(cmd, logger=logger)
@@ -521,10 +521,15 @@ def merge_with_priority(query_vcf = "",
                                              filter=filters, 
                                              info=dict(info))
                 for sample, values in samples:
-                    hps = [t[1] for t in values if t[0] == "HPSUP"][0]
-                    logger.info(f"The hps returned by get is {hps} and its type is {type(hps)}")
-                    num_hps = len(hps[0].split(";"))
-                    ref_dp, alt_dp = [t[1] for t in values if t[0] == "AD"][0] # Default to [0, 0] if AD is not present
+                    hps = [t[1] for t in values if t[0] == "HPSUP"]
+                    logger.debug(f"The hps returned by get is {hps} and its type is {type(hps)}")
+                    num_hps = len(hps[0][0].split(";")) if len(hps) > 0 else 0
+                    ad = [t[1] for t in values if t[0] == "AD"][0] # Default to [0, 0] if AD is not present
+                    if len(ad) > 2:
+                        logger.warning(f"This record is not biallelic, take a look at the record: {chrom}:{pos}:{ref} -> {alts}")
+                        ref_dp, alt_dp = ad[0], ad[1]
+                    else:
+                        ref_dp, alt_dp = ad
                     gq = [t[1] for t in values if t[0] == "GQ"][0] # Default to 0 if GQ is not present
                     for key, value in values:
                         if key == "HPSUP":
@@ -533,7 +538,7 @@ def merge_with_priority(query_vcf = "",
                             if gq < 30 and alt_dp > ref_dp:
                                 value = (1, 1)
                             if num_hps >= 4 and alt_dp/(alt_dp + ref_dp) >= 0.8:
-                                logger.info(f"Setting the GT to (1, 1) due to the num_hps {num_hps} and alt/dp ratio {alt_dp/(alt_dp + ref_dp)} for the variant {chrom}:{pos}:{ref} -> {alts}")
+                                logger.warning(f"Setting the GT to (1, 1) due to the num_hps {num_hps} and alt/dp ratio {alt_dp/(alt_dp + ref_dp)} for the variant {chrom}:{pos}:{ref} -> {alts}")
                                 value = (1, 1)
                         try:
                             rrec.samples[sample][key] = value
