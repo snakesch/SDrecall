@@ -466,6 +466,8 @@ def annotate_inhouse_common(query_vcf = "",
     sort_vcf(tmp_output_vcf, 
              ref_genome, 
              output_vcf = output_vcf)
+
+    return output_vcf
     
     
     
