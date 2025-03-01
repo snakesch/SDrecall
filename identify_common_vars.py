@@ -365,22 +365,6 @@ def process_region(region,
             frozenset([ r.pickable() for r in non_overlap_crecs ]))
 
 
-
-def sort_vcf(vcf_file, ref_genome, logger = logger):
-    # Sort the VCF file using bcftools
-    sorted_vcf_file = vcf_file.replace('.vcf', '.sorted.vcf')
-    
-    cmd = f'''bcftools norm -m -both -f {ref_genome} --multi-overlaps 0 -a -Ou {vcf_file} | \
-              bcftools norm -d exact -Ou - | \
-              bcftools view -i 'ALT!="*"' -Ou - | \
-              bcftools sort -Oz -o {sorted_vcf_file} - && \
-              bcftools index -t {sorted_vcf_file}'''
-    executeCmd(cmd, logger=logger)
-    return sorted_vcf_file
-
-
-
-
 def annotate_inhouse_common(query_vcf = "", 
                             cohort_vcf = "", 
                             output_vcf = "", 
