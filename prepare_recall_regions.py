@@ -18,11 +18,11 @@ from src.utils import is_file_up_to_date, filter_bed_by_interval_size
 from src.const import SDrecallPaths
 
 def prepare_recall_regions( paths: SDrecallPaths,
-							mq_threshold=41,
-							high_quality_depth=10,
-							minimum_depth=3,
-							multialign_frac=0.5,
-							threads=10):
+                            mq_threshold=41,
+                            high_quality_depth=10,
+                            minimum_depth=3,
+                            multialign_frac=0.5,
+                            threads=10):
     """
     Main preparation function for SDrecall
     
@@ -53,7 +53,15 @@ def prepare_recall_regions( paths: SDrecallPaths,
 
     
     # Step 1 : Pick the multi_aligned regions within the target regions
-    if not os.path.exists(multi_align_bed) or not is_file_up_to_date(multi_align_bed, [input_bam, target_bed]):
+    pick_multialign_regions = True
+    if os.path.exists(multi_align_bed) and \
+       is_file_up_to_date(multi_align_bed, [input_bam, target_bed]) and \
+       os.path.getsize(multi_align_bed) > 10:
+        logger.info(f"Seems the multialign bed has already been created, skipping the multialign bed creation step.")
+        executeCmd(f"ls -lh {multi_align_bed}", logger= logger)
+        pick_multialign_regions = False
+
+    if pick_multialign_regions:
         multi_align_bed = pick_multialigned_regions(input_bam, 
                                                     multi_align_bed, 
                                                     MQ_threshold=mq_threshold, 
@@ -62,7 +70,7 @@ def prepare_recall_regions( paths: SDrecallPaths,
                                                     multialign_frac=multialign_frac,
                                                     target_region=target_bed, 
                                                     target_tag=paths.target_tag,
-                                                    genome_file=paths.ref_genome_fai_path() )
+                                                    genome_file=paths.ref_genome_fai_path())
 
     multi_align_bed_obj = pb.BedTool(multi_align_bed).sort()
     logger.info("The multialign bed extracted from {} is {} and it covers {} bp.".format(input_bam,
@@ -97,8 +105,9 @@ def prepare_recall_regions( paths: SDrecallPaths,
     main_contigs_pattern = r'^(chr)?([0-9]+|[XYM]|MT)$'
     # Filter to keep only SD pairs where both contigs are main chromosomes
     main_contig_mask = (
-        total_bin_sd_df['chr_1'].str.match(main_contigs_pattern, case=False) & 
-        total_bin_sd_df['chr_2'].str.match(main_contigs_pattern, case=False)
+        total_bin_sd_df['chr_1'].str.match(main_contigs_pattern, case=False) & \
+        total_bin_sd_df['chr_2'].str.match(main_contigs_pattern, case=False) & \
+        total_bin_sd_df['chr_bam1'].str.match(main_contigs_pattern, case=False)
     )
     total_bin_sd_df = total_bin_sd_df[main_contig_mask].reset_index(drop=True)
     logger.info(f"After filtering out alternative contigs, {total_bin_sd_df.shape[0]} SD pairs remain")
@@ -128,7 +137,11 @@ def prepare_recall_regions( paths: SDrecallPaths,
     logger.debug(f"Final SD map has shape {total_bin_sd_df.shape} and looks like: \n{total_bin_sd_df.head(5).to_string(index=False)}")
     
     # Step 4: Create a multiplex graph with SD and PO edges
-    if os.path.exists(graph_path) and is_file_up_to_date(graph_path, [input_bam, target_bed]):
+    if os.path.exists(graph_path) and \
+       is_file_up_to_date(graph_path, [input_bam, target_bed]) and \
+       os.path.getsize(graph_path) > 10:
+        logger.info(f"Seems the graph has already been created, skipping the graph creation step.")
+        executeCmd(f"ls -lh {graph_path}", logger= logger)
         graph = read_graphml(graph_path)
     else:
         graph = create_multiplex_graph( total_bin_sd_df, graph_path, threads = threads)
@@ -136,14 +149,14 @@ def prepare_recall_regions( paths: SDrecallPaths,
     # Step 4: Extract SD + PO BED regions with depth issues caused by mapping ambiguity. Mutual overlap exists between intervals.
     ## expanded_total_bin_sd_df is constructed from reference SD map, multi_align_bed_obj is constructed from specified target regions.
     ## Filter out regions with length > 140bp (compared to 150bp reads)
-    graph_bed = pb.BedTool.from_dataframe(expanded_total_bin_sd_df)
+    graph_bed = pb.BedTool.from_dataframe(expanded_total_bin_sd_df.drop_duplicates())
     graph_bed = filter_bed_by_interval_size(graph_bed, 140)
     
     ## Extract SD + PO BED regions with depth issues caused by mapping ambiguity
-    intersect_df = graph_bed.intersect(multi_align_bed_obj.merge(), wo=True).to_dataframe(disable_auto_names=True, names=["chrA", "startA", "endA", "strandA", 
-                                                                                                                      "chrB", "startB", "endB", "strandB",
-                                                                                                                      "mismatch_rate",
-                                                                                                                      "chr_target", "start_target", "end_target", "overlap_len"])
+    intersect_df = graph_bed.intersect(multi_align_bed_obj.sort().merge(), wo=True).to_dataframe(disable_auto_names=True, names=["chrA", "startA", "endA", "strandA", 
+                                                                                                                                "chrB", "startB", "endB", "strandB",
+                                                                                                                                "mismatch_rate",
+                                                                                                                                "chr_target", "start_target", "end_target", "overlap_len"])
     ## Sanity check
     intersect_df = intersect_df.loc[(intersect_df["endA"] > intersect_df["startA"]) & \
                                     (intersect_df["end_target"] > intersect_df["start_target"]) & \
@@ -177,7 +190,8 @@ def prepare_recall_regions( paths: SDrecallPaths,
     logger.info("{} SD-paralog pairs pooled from SD + PO graph".format(len(sd_paralog_pairs)))
     
     # Step 6: Collapse qnodes by identifying qnodes that can be put in the same masked genome
-    grouped_qnode_cnodes = query_connected_nodes(sd_paralog_pairs, connected_qnode_components)
+    grouped_qnode_cnodes = query_connected_nodes(sd_paralog_pairs, 
+                                                 connected_qnode_components)
 
     '''
     (Debug code) Enumerate qnodes and cnodes in the graph. (FC -> qnode; NFC -> cnode)

@@ -132,13 +132,13 @@ def imap_traverse(tup_args):
 
 
 def extract_SD_paralog_pairs_from_graph(query_nodes, 
-                                    directed_graph, 
-                                    graph_path = "", 
-                                    reference_fasta = "",
-                                    avg_frag_size = 500, 
-                                    std_frag_size = 150, 
-                                    threads = 12,
-                                    logger = logger):
+                                        directed_graph, 
+                                        graph_path = "", 
+                                        reference_fasta = "",
+                                        avg_frag_size = 500, 
+                                        std_frag_size = 150, 
+                                        threads = 12,
+                                        logger = logger):
     '''
     Returns:
     sd_paralog_pairs: dict = {(qnode): (cnode1, cnode2, ...), ...}
@@ -222,16 +222,20 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                 sys.exit(1)
             else:
                 if len(tup) == 0:
-                    logger.debug(f"No SD-paralog pairs are found for query node {tup[0]}, so we will skip this query node")
-                    logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************")
+                    logger.warning(f"No SD-paralog pairs are found for query node {tup[0]}, so we will skip this query node")
+                    print(logs, file = sys.stderr)
+                    print(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************\n\n", file = sys.stderr)
                     i+=1
                     continue
-                sd_paralog_pairs[tup[0]] = tup[1]
                 qnode, counterparts_nodes, query_counter_nodes = tup
-                if len(counterparts_nodes) == 0:
-                    # WGAC contains one interval (chrX, 70902050, 71018311) which only corresponds with itself, and is thus filtered out
-                    logger.debug(f"No counterparts nodes are found for query node {qnode}, skipping current query node")
-                    logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************")
+                if len(counterparts_nodes) > 0:
+                    assert isinstance(qnode, tuple)
+                    assert isinstance(counterparts_nodes[0], HOMOSEQ_REGION)
+                    sd_paralog_pairs[tup[0]] = tup[1]
+                else:
+                    logger.warning(f"No counterparts nodes are found for query node {qnode}, skipping current query node")
+                    print(logs, file = sys.stderr)
+                    print(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************\n\n", file = sys.stderr)
                     i+=1
                     continue
                 
@@ -254,7 +258,6 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
     qnode_components = list(nx.connected_components(connected_qnodes_graph))
     
     logger.debug(f"The connected qnode graph has {len(qnode_components)} subgraphs. One component has {len(qnode_components[0])} nodes:\n{qnode_components[0]}")
-
     return sd_paralog_pairs, qnode_components
 
 def query_connected_nodes(sd_paralog_pairs, 
@@ -279,7 +282,7 @@ def query_connected_nodes(sd_paralog_pairs,
       
     # Identify qnodes that can be put into the same masked genome
     unique_qnodes = pick_from_each_group(connected_qnode_components)
-    logger.debug("{} groups of qnodes can be put into the same masked genome: {}".format(len(unique_qnodes), "\n".join(str(g) for g in unique_qnodes)))
+    logger.debug("{} groups of qnodes can be put into the same masked genome: \n{}".format(len(unique_qnodes), "\n".join(str(g) for g in unique_qnodes)))
     
     grouped_results = []
     for group in unique_qnodes:

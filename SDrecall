@@ -50,7 +50,7 @@ def post_process_vcf(sdrecall_vcf, args):
             ref_genome=args.ref_genome,
             inhouse_common_cutoff=args.inhouse_common_cutoff,
             conf_level=args.cohort_conf_level,
-			threads=args.threads
+            threads=args.threads
         )
         
         # Update the final_vcf to be the annotated one
@@ -114,6 +114,8 @@ def run_full_pipeline(args):
     logger.info(f"  Sample ID: {paths.sample_id}")
     logger.info(f"  Assembly: {paths.assembly}")
     logger.info(f"  Target tag: {paths.target_tag}")
+    logger.info(f"  Target BED: {paths.target_bed}")
+    logger.info(f"  Input BAM: {paths.input_bam}")
     logger.info(f"  Working directory: {paths.work_dir}")
     
     # Preparation phase
@@ -170,6 +172,8 @@ def run_preparation_only(args):
     logger.info(f"  Sample ID: {paths.sample_id}")
     logger.info(f"  Assembly: {paths.assembly}")
     logger.info(f"  Target tag: {paths.target_tag}")
+    logger.info(f"  Target BED: {paths.target_bed}")
+    logger.info(f"  Input BAM: {paths.input_bam}")
     logger.info(f"  Working directory: {paths.work_dir}")
     
     # Preparation phase
@@ -215,6 +219,7 @@ def run_realign_only(args):
     # Log configuration
     logger.info(f"Running SDrecall realignment with:")
     logger.info(f"  Sample ID: {paths.sample_id}")
+    logger.info(f"  Input BAM: {paths.input_bam}")
     logger.info(f"  Assembly: {paths.assembly}")
     logger.info(f"  Working directory: {paths.work_dir}")
     

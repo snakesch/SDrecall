@@ -289,19 +289,19 @@ class SDrecallPaths:
     # File path getter methods
     def multi_align_bed_path(self) -> str:
         """Path for multi-aligned regions BED file"""
-        return os.path.join(self.dirs["root"], f"{self.basename}.{self.target_tag}.multialign.bed")
+        return os.path.join(self.work_dir, f"{self.basename}.{self.target_tag}.multialign.bed")
     
     def raw_sd_binary_map_path(self) -> str:
         """Path for raw SD binary map"""
-        return os.path.join(self.dirs["root"], "raw_SD_binary_map.tsv")
+        return os.path.join(self.work_dir, "raw_SD_binary_map.tsv")
     
     def filtered_sd_binary_map_path(self) -> str:
         """Path for filtered SD binary map"""
-        return os.path.join(self.dirs["root"], "filtered_SD_binary_map.tsv")
+        return os.path.join(self.work_dir, "filtered_SD_binary_map.tsv")
     
     def multiplex_graph_path(self) -> str:
         """Get path for multiplex graph"""
-        return os.path.join(self.dirs["root"], f"{self.basename}_multiplexed_SDs.graphml")
+        return os.path.join(self.work_dir, f"{self.basename}_multiplexed_SDs.graphml")
     
     def annotated_graph_path(self) -> str:
         """Get path for annotated graph"""
@@ -376,7 +376,7 @@ class SDrecallPaths:
     
     def total_intrinsic_bam_path(self) -> str:
         """Path for total intrinsic alignment BAM"""
-        return os.path.join(self.dirs["root"], f"total_intrinsic_alignments.bam")
+        return os.path.join(self.work_dir, f"total_intrinsic_alignments.bam")
     
     def intrinsic_bam_path(self, rg_label_or_index) -> str:
         """Path for intrinsic alignment SAM"""
@@ -406,4 +406,4 @@ class SDrecallPaths:
     
     def total_homo_regions_bed_path(self) -> str:
         """Get path to all homologous regions bed file"""
-        return os.path.join(self.dirs["root"], "all_RG_related_homo_regions.bed")
+        return os.path.join(self.work_dir, "all_RG_related_homo_regions.bed")
