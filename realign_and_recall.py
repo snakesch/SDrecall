@@ -33,6 +33,9 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
                         mq_cutoff = 20,
                         conf_level = 0.01):
     # First calculate input bam fragment size distribution
+    print("\n"*2, "*"*100, file=sys.stderr)
+    logger.info(f"START PERFORMING REALIGNMENT AND RECALL FOR {sdrecall_paths.sample_id} based on the REALIGNMENT GROUP REGIONS in {sdrecall_paths.work_dir}")
+    print("*"*100, "\n"*2, file=sys.stderr)
     input_bam = sdrecall_paths.input_bam
     avg_frag_size, std_frag_size = sdrecall_paths.avg_frag_size, sdrecall_paths.frag_size_std
     logger.info(f"BAM {input_bam} has an average fragment size of {avg_frag_size}bp (std: {std_frag_size}bp)")
@@ -172,6 +175,9 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
     # - Now we start filtering the pooled raw bam file by phasing and mislalignment elimination - #
     total_intrinsic_bam = sdrecall_paths.total_intrinsic_bam_path()
     pooled_filtered_bam = sdrecall_paths.pooled_filtered_bam_path()
+    print("\n"*2, "*"*100, file=sys.stderr)
+    logger.info(f"START PERFORMING MISALIGNMENT ELIMINATION FOR {sdrecall_paths.sample_id} on file {deduped_raw_bam}")
+    print("*"*100, "\n"*2, file=sys.stderr)
     deduped_raw_bam, pooled_filtered_bam = eliminate_misalignments(deduped_raw_bam,
                                                                   pooled_filtered_bam,
                                                                   total_intrinsic_bam,
@@ -216,6 +222,10 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
                         rv_tag = "CLEAN", 
                         ref_genome = ref_genome, 
                         threads = threads)
+
+    print("\n"*2, "*"*100, file=sys.stderr)
+    logger.info(f"FINISHED PERFORMING REALIGNMENT AND RECALL FOR {sdrecall_paths.sample_id} based on the REALIGNMENT GROUP REGIONS in {sdrecall_paths.work_dir}, the final recall vcf is {final_recall_vcf}")
+    print("*"*100, "\n"*2, file=sys.stderr)
 
     return final_recall_vcf
 

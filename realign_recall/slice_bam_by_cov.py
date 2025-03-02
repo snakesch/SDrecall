@@ -21,7 +21,14 @@ def slice_bam_per_bed(bed, bam, ref_genome, threads = 4, logger = logger):
     cov_bam = bam.replace(".bam", f".{chunk_id}.bam")
     cov_bam_header = cov_bam.replace(".bam", ".header")
     bam_index = bam + ".bai"
-    if not os.path.exists(bam_index) or os.path.getmtime(bam) > os.path.getmtime(bam_index):
+    if not os.path.exists(bam_index):
+        execute = True
+    elif os.path.getmtime(bam) > os.path.getmtime(bam_index):
+        execute = True
+    else:
+        execute = False
+
+    if execute:
         tmp_index = prepare_tmp_file(suffix=".bai").name
         cmd = f"samtools index -b -o {tmp_index} {bam} && \
                 [[ -f {bam_index} ]] && \

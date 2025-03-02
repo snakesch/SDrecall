@@ -124,10 +124,11 @@ class SDrecallPaths:
     
     def _extract_assembly_version(self, reference_sd_map: str, ref_genome: str) -> str:
         """Extract assembly version from reference SD map path and reference genome"""
+        sd_map_name = os.path.basename(reference_sd_map)
         # Try to detect from reference_sd_map
-        if "hg19" in reference_sd_map or "GRCh37" in reference_sd_map:
+        if "hg19" in sd_map_name or "GRCh37" in sd_map_name:
             return "hg19"
-        elif "hg38" in reference_sd_map or "GRCh38" in reference_sd_map:
+        elif "hg38" in sd_map_name or "GRCh38" in sd_map_name:
             return "hg38"
         
         # As fallback, try ref_genome

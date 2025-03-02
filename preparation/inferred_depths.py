@@ -60,7 +60,7 @@ def calculate_inferred_coverage(bam_file, min_mapq=10, filter_tags: list[str] = 
 
     if os.path.exists(output_tsv) and os.path.getmtime(output_tsv) > os.path.getmtime(bam_file):
         logger.info(f"Inferred coverage file {output_tsv} already exists. Skipping calculation.")
-        return pd.read_csv(output_tsv, sep="\t", header=None)
+        return pd.read_csv(output_tsv, sep="\t", header=None, names=["chrom", "pos", "depth"])
 
     reads_list = []
     with pysam.AlignmentFile(bam_file, "rb") as bam:
