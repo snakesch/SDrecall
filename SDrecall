@@ -20,6 +20,24 @@ from prepare_recall_regions import prepare_recall_regions
 from realign_and_recall import SDrecall_per_sample
 
 
+# Add this new function to set thread limits based on user input
+def set_numerical_thread_limits(threads):
+    """
+    Set thread limits for numerical libraries based on user-specified thread count
+    
+    Args:
+        threads: Number of threads requested by user
+    """
+    # Set environment variables
+    os.environ["OMP_NUM_THREADS"] = str(threads)
+    os.environ["OPENBLAS_NUM_THREADS"] = str(threads)
+    os.environ["MKL_NUM_THREADS"] = str(threads)
+    os.environ["VECLIB_MAXIMUM_THREADS"] = str(threads)
+    os.environ["NUMEXPR_NUM_THREADS"] = str(threads)
+    
+    logger.info(f"Numerical library thread limits set to {threads}")
+
+
 def post_process_vcf(sdrecall_vcf, args):
     """
     Process the final VCF - potentially merging with conventional VCF
@@ -98,6 +116,9 @@ def run_full_pipeline(args):
     Returns:
         Path to the final recalled VCF file, possibly merged with conventional VCF
     """
+    # Set thread limits based on user input
+    set_numerical_thread_limits(args.threads)
+    
     # Initialize paths
     paths = SDrecallPaths.initialize(
         ref_genome=args.ref_genome,
@@ -156,6 +177,9 @@ def run_preparation_only(args):
     Returns:
         Initialized SDrecallPaths instance
     """
+    # Set thread limits based on user input
+    set_numerical_thread_limits(args.threads)
+    
     # Initialize paths
     paths = SDrecallPaths.initialize(
         ref_genome=args.ref_genome,
@@ -200,6 +224,9 @@ def run_realign_only(args):
     Returns:
         Path to the final recalled VCF file, possibly merged with conventional VCF
     """
+    # Set thread limits based on user input
+    set_numerical_thread_limits(args.threads)
+    
     # Initialize paths without running preparation
     paths = SDrecallPaths.initialize(
         ref_genome=args.ref_genome,

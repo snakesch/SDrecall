@@ -286,14 +286,14 @@ def query_connected_nodes(sd_paralog_pairs,
     
     grouped_results = []
     for group in unique_qnodes:
-        sd_counterparts = [cnode for qnode in group for cnode in sd_paralog_pairs[qnode]]
-        assert isinstance(sd_counterparts[0], HOMOSEQ_REGION)
-        grouped_result = { "SD_qnodes": group, "SD_counterparts": sd_counterparts }
+        sd_counterparts = [cnode for qnode in group for cnode in sd_paralog_pairs.get(qnode, [])]
         if len(group) == 0:
             logger.warning(f"Empty group in the unique_qnodes: {unique_qnodes}")
         elif len(sd_counterparts) == 0:
             logger.warning(f"No SD counterparts in group {group}. Please check sd_paralog_pairs: {sd_paralog_pairs}.")
         else:
+            assert isinstance(sd_counterparts[0], HOMOSEQ_REGION)
+            grouped_result = { "SD_qnodes": group, "SD_counterparts": sd_counterparts }
             grouped_results.append(grouped_result)
 
     logger.info(f"Total {len(grouped_results) + 1} SD-paralog pairs for the preparation of realignment bed file")

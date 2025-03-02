@@ -13,7 +13,7 @@ from preparation import *
 
 from src.log import logger, configure_logger
 from src.suppress_warning import *
-from src.utils import is_file_up_to_date, filter_bed_by_interval_size
+from src.utils import is_file_up_to_date, filter_bed_by_interval_size, executeCmd
 
 from src.const import SDrecallPaths
 

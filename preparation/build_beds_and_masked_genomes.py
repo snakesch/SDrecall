@@ -24,8 +24,9 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
         new_result = {"SD_qnodes": {}, "SD_counterparts": {}}
         for i in range(0, len(result["SD_qnodes"])):
             fc_node = result["SD_qnodes"][i]
-            new_result['SD_qnodes'][i] = [fc_node]
-            new_result['SD_counterparts'][i] = sd_paralog_pairs[fc_node]
+            if fc_node in sd_paralog_pairs:
+                new_result['SD_qnodes'][i] = [fc_node]
+                new_result['SD_counterparts'][i] = sd_paralog_pairs[fc_node]
         new_results.append(new_result)
 
     # Load balancing
