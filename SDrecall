@@ -138,7 +138,7 @@ def run_full_pipeline(args):
     logger.info(f"  Working directory: {paths.work_dir}")
     
     # Preparation phase
-    logger.info("Starting preparation phase")
+    logger.info(f"Starting preparation phase, calling function prepare_recall_regions(paths={paths}, mq_threshold={args.mq_cutoff}, high_quality_depth={args.high_quality_depth}, minimum_depth={args.minimum_depth}, multialign_frac={args.multialign_frac}, threads={args.threads})")
     paths = prepare_recall_regions(
         paths=paths,
         mq_threshold=args.mq_cutoff,
@@ -149,7 +149,7 @@ def run_full_pipeline(args):
     )
     
     # Realignment and recall phase
-    logger.info("Starting realignment and recall phase")
+    logger.info(f"Starting realignment and recall phase, calling function SDrecall_per_sample(sdrecall_paths={paths}, threads={args.threads}, numba_threads={args.numba_threads}, mq_cutoff={args.mq_cutoff}, conf_level={args.conf_level})")
     sdrecall_vcf = SDrecall_per_sample(
         sdrecall_paths=paths,
         threads=args.threads,

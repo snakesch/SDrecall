@@ -76,7 +76,6 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
             print(f"Successfully prepared the masked bam file. The log info are:\n{log_contents}\n", file=sys.stderr)
         else:
             error_mes, tb_str = result
-            result_beds.append(tb_str)
             logger.error(f"An error occurred: {error_mes}\nTraceback: {tb_str}\nThe error message is :\n{log_contents}\n")
         print(f"\n************************************{i}_subprocess_end_for_prepare_masked_align_beds************************************\n", file=sys.stderr)
 
@@ -89,6 +88,7 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
     # Prepare the input arguments for parallel execution of realignment and recall
     uniq_rgs = prepared_beds_df.loc[:, "rg_label"].drop_duplicates().tolist()
     uniq_rgs = sorted(uniq_rgs, key = lambda x: prepared_beds_df.loc[prepared_beds_df["rg_label"] == x, "nfc_bed_size"].sum(), reverse=True)  # Load balancing
+    logger.info(f"The uniq_rgs are {uniq_rgs}")
     rg_query_beds = [ sdrecall_paths.rg_query_bed_path(rg) for rg in uniq_rgs ]
     rg_fc_beds = [ prepared_beds_df.loc[prepared_beds_df["rg_label"] == rg, "fc_bed"].tolist() for rg in uniq_rgs ]
     rg_nfc_beds = [ prepared_beds_df.loc[prepared_beds_df["rg_label"] == rg, "nfc_bed"].tolist() for rg in uniq_rgs]
