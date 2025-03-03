@@ -4,7 +4,7 @@ import numpy as np
 from src.log import logger
 
 class HOMOSEQ_REGION:
-    def __init__(self, vertex, graph):
+    def __init__(self, vertex, graph, logger=logger):
         node_tuple = graph.vertex_properties["node_index"][vertex]
         self.chrom = node_tuple[0]
         self.start = node_tuple[1]
@@ -26,6 +26,7 @@ class HOMOSEQ_REGION:
         # overlapping node (vertex) -> (rela_start, rela_end)
         # traverse_route looks like [(node, edge_type), (node, edge_type), (node, edge_type)]
         self.traverse_route = []
+        self.logger = logger
 
     def __hash__(self):
         return hash(self.data)
@@ -53,7 +54,7 @@ class HOMOSEQ_REGION:
     def fix_coord(self):
         return tuple([self.chrom, self.start + self.ups_rela_start, self.start + self.ups_rela_end, self.strand])
     
-    def qnode_relative_region(self, qnode_tuple):
+    def qnode_relative_region(self, qnode_tuple, logger=logger):
         # The qnode tuple should be a 4-item tuple containint (chrom, start, end, strand)
         # We also need to utilize the record info in the traverse route.
         total_route = list(self.traverse_route)

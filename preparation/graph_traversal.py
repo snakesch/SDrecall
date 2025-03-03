@@ -23,7 +23,7 @@ def inspect_cnode_along_route(graph,
         edge = edges[i]
         cnode = HOMOSEQ_REGION(vertex, graph)
         logger.debug(f"The cnode is {cnode} at the other end of the {i}th edge. The relative_start is {cnode.rela_start} and relative end is {cnode.rela_end}")
-        if graph.ep.get("type", {}).get(edge, None) == "segmental_duplication":
+        if graph.ep["type"][edge] == "segmental_duplication":
             if qnode.strand == cnode.strand:
                 cnode.ups_rela_start = max(qnode.rela_start, 0)
                 cnode.ups_rela_end = min(qnode.rela_end, cnode.size)
@@ -36,7 +36,7 @@ def inspect_cnode_along_route(graph,
                 logger.error(f"The relative end is smaller than the relative start for {cnode} at the end of {i}th edge, rela_start is {cnode.rela_start} and rela_end is {cnode.rela_end}. The upstream qnode is {qnode}, rela_start is {qnode.rela_start} and rela_end is {qnode.rela_end}")
                 sys.exit(1)
             cnode.traverse_route = tuple(list(qnode.traverse_route) + [(qnode, "segmental_duplication")])
-        elif graph.ep.get("overlap", {}).get(edge, None) == "True":
+        elif graph.ep["overlap"][edge] == "True":
             qnode_rela_start = cnode.start - qnode.start
             qnode_rela_end = min(qnode_rela_start + cnode.size, qnode.size)
             qnode_rela_start = max(qnode_rela_start, 0)
@@ -207,12 +207,12 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
                                                                     weights=graph.ep["weight"])
 
         # Skip the current path if the last edge is a PO edge
-        if graph.ep.get("overlap", {}).get(shortest_path_edges[-1], None) == "True":
+        if graph.ep["overlap"][shortest_path_edges[-1]] == "True":
             continue
         # Skip the current path in case of adjacent PO edges
-        if len([i for i in range(0, len(shortest_path_edges) - 1) if graph.ep.get("overlap", {}).get(shortest_path_edges[i], None) == "True" and graph.ep.get("overlap", {}).get(shortest_path_edges[i+1], None) == "True"]) > 1:
+        if len([i for i in range(0, len(shortest_path_edges) - 1) if graph.ep["overlap"][shortest_path_edges[i]] == "True" and graph.ep["overlap"][shortest_path_edges[i+1]] == "True"]) > 1:
             continue
-        if reduce(mul, [1 - graph.ep["weight"][e] for e in shortest_path_edges if graph.ep.get("type", {}).get(e, None) == "segmental_duplication"]) < 0.95:
+        if reduce(mul, [1 - graph.ep["weight"][e] for e in shortest_path_edges if graph.ep["type"][e] == "segmental_duplication"]) < 0.95:
             continue
         
         # If the last edge is segmental duplication, then check if the region is considerably large

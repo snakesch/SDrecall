@@ -40,7 +40,7 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
     avg_frag_size, std_frag_size = sdrecall_paths.avg_frag_size, sdrecall_paths.frag_size_std
     logger.info(f"BAM {input_bam} has an average fragment size of {avg_frag_size}bp (std: {std_frag_size}bp)")
 
-    prepared_arguments_df = stat_all_RG_region_size(sdrecall_paths, threads)
+    prepared_arguments_df = stat_all_RG_region_size(sdrecall_paths)
 
     fc_size_stat_tab = os.path.join(sdrecall_paths.tmp_dir, "FC_size_stat.tsv")
     logger.info(f"The prepared arguments for the PC subgroups will be saved to {fc_size_stat_tab} looks like:\n{prepared_arguments_df[:10].to_string(index=False)}\n\n")

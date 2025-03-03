@@ -6,7 +6,7 @@ from src.log import logger
 from src.const import SDrecallPaths
 
 
-def stat_all_RG_region_size(sdrecall_paths: SDrecallPaths, threads=10):
+def stat_all_RG_region_size(sdrecall_paths: SDrecallPaths):
     # Test this function, only takes 3 min to finish
     # use glob module to list out all the bed files under wkd named as "PC*_related_homo_regions.raw.bed"
     beds = sdrecall_paths.all_homo_regions_bed_paths()
