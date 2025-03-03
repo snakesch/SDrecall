@@ -3,6 +3,7 @@ import os
 from src.utils import executeCmd
 from src.log import logger
 
+
 def bam_to_fastq_biobambam(input_bam, 
                            region_bed, 
                            output_freads, 
@@ -48,21 +49,14 @@ def bam_to_fastq_biobambam(input_bam,
                   rm -rf {tmp_dir}/{tmp_prefix}"""
     else:
         # For non-multi-aligned BAMs, use the original approach with regions
-        ranges_str = ""
-        with open(region_bed, 'r') as bed:
-            for line in bed:
-                if line.strip() and not line.startswith('#'):
-                    cols = line.strip().split('\t')
-                    if len(cols) >= 3:
-                        chrom, start, end = cols[0], int(cols[1])+1, int(cols[2])+1  # Convert 0-based BED to 1-based
-                        ranges_str += f"{chrom}:{start}-{end} "
-        cmd = f"""bamtofastq \
+        cmd = f"""samtools view -h -P -@ {threads} -L {region_bed} -u {input_bam} | \
+                  bamtofastq \
                     filename={input_bam} \
-                    ranges="{ranges_str}" \
                     F={output_freads} \
                     F2={output_rreads} \
                     collate=1 \
-                    T={tmp_prefix}"""
+                    T={tmp_dir}/{tmp_prefix} && \
+                  rm -rf {tmp_dir}/{tmp_prefix}"""
     
     executeCmd(cmd, logger=logger)
     
