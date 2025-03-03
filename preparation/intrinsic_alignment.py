@@ -36,7 +36,6 @@ def getIntrinsicBam(rg_bed,
     - str: Path to the generated BAM file.
     '''
 
-    fastq_dir = os.path.dirname(all_homo_regions_bed)
     intrinsic_fastq = intrinsic_bam.replace(".bam", ".fastq")
     rg_label = rg_label or os.path.basename(rg_bed.replace(".bed",""))
         
@@ -78,7 +77,7 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger = logger):
     import pysam
     import re
     
-    qname_regex = re.compile(r'(.*):(\d+)-(\d+)')
+    qname_regex = re.compile(r'(.*):(\d+)-(\d+)(.*)')
     tmp_output = prepare_tmp_file(suffix=".bam").name
     
     with pysam.AlignmentFile(bam_file, "rb") as input_bam:
@@ -103,7 +102,7 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger = logger):
                     # If qname doesn't match the expected format, keep the read
                     output_bam.write(read)
             
-            logger.info(f"Filtered out {filtered_reads} of {total_reads} reads where reference position matches qname start")
+            logger.info(f"Filtered out {filtered_reads} of {total_reads} reads where reference position matches qname start from {bam_file}")
     
     # Index the output BAM
     if output_file is None:

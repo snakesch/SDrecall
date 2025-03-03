@@ -170,7 +170,6 @@ def compare_homologous_sequences(
                 os.unlink(tmp_file.name)
             except:
                 pass
-
     return False, 0.0
 
 
@@ -212,7 +211,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
         # Skip the current path in case of adjacent PO edges
         if len([i for i in range(0, len(shortest_path_edges) - 1) if graph.ep["overlap"][shortest_path_edges[i]] == "True" and graph.ep["overlap"][shortest_path_edges[i+1]] == "True"]) > 1:
             continue
-        if reduce(mul, [1 - graph.ep["weight"][e] for e in shortest_path_edges if graph.ep["type"][e] == "segmental_duplication"]) < 0.95:
+        if reduce(mul, [1 - graph.ep["weight"][e] for e in shortest_path_edges if graph.ep["type"][e] == "segmental_duplication"]) <= 0.95:
             continue
         
         # If the last edge is segmental duplication, then check if the region is considerably large

@@ -5,7 +5,7 @@ from pybedtools import helpers
 
 from src.utils import executeCmd, sortBed_and_merge, merge_bed_files
 from src.const import shell_utils, SDrecallPaths
-from src.log import error_handling_decorator, logger
+from src.log import log_command, logger
 from preparation.homoseq_region import HOMOSEQ_REGION
 from preparation.genome import Genome
 from preparation.intrinsic_alignment import getIntrinsicBam
@@ -34,7 +34,7 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
 
     # Load balancing
     new_results = sorted(new_results, key = lambda x: sum(v[0][2] - v[0][1] for k,v in x["SD_qnodes"].items()) * sum(len(v) for k,v in x["SD_counterparts"].items()), reverse=True)
-    labels = [ "RG" + str(n) for n in range(0, len(grouped_qnode_cnodes))]
+    labels = [ "RG" + str(n) for n in range(0, len(new_results))]
 
     # Register all realign groups
     for label in labels:
@@ -96,9 +96,8 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
     cmd = f"samtools merge -@ {nthreads} -h {intrinsic_bam_header} -b {intrinsic_bam_list} -o - | \
             samtools sort -T {sdrecall_paths.tmp_dir} -O bam -o {total_intrinsic_bam} && \
             samtools index {total_intrinsic_bam} && \
-            ls -lht {total_intrinsic_bam} || \
-            echo Failed to concatenate all the filtered realigned BAM files."
-    executeCmd(cmd)
+            ls -lht {total_intrinsic_bam}"
+    executeCmd(cmd, logger=logger)
                
     # Fourth, extract all PC*_related_homo_regions.bed file and concat them together.
     beds = sdrecall_paths.all_homo_regions_bed_paths()
@@ -110,7 +109,7 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
 def imap_establish(tup_args):
     return establish_beds_per_RG_cluster(*tup_args)
 
-@error_handling_decorator
+@log_command
 def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
                                                 "SD_counterparts":{}},
                                   label = "RG0",
@@ -194,6 +193,7 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
                                 rg_masked = masked_genome,
                                 ref_genome = ref_genome,
                                 intrinsic_bam = paths["Intrinsic_bam"],
+                                rg_label = label,
                                 avg_frag_size = avg_frag_size,
                                 std_frag_size = std_frag_size,
                                 threads = threads )

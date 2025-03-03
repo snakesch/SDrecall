@@ -197,8 +197,7 @@ def merge_bams(bam_list: list,
     cmd = f"samtools merge -c -@ {threads} -h {merged_bam_header} -b {merged_bam_list} -u -o - | \
             samtools sort -O bam -T {tmp_dir} -o {merged_bam} -@ {threads} && \
             samtools index {merged_bam} && \
-            ls -lht {merged_bam} || \
-            >&2 echo Failed to concatenate all the pooled BAM files. It wont be a fatal error but brings troubles to debugging and variant tracing."
+            ls -lht {merged_bam}"
     if execute:
         executeCmd(cmd, logger = logger)
 
