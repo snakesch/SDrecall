@@ -1,6 +1,7 @@
 import os
 import re
 import shutil
+import sys
 from typing import Dict, List, Set
 
 from src.insert_size import get_insert_size_distribution
@@ -119,7 +120,7 @@ class SDrecallPaths:
         self.realign_groups = set()
         
         # Create standard directory structure
-        self.dirs = self._initialize_directories(clean_dirs)
+        self._initialize_directories(clean_dirs)
         
     
     def _extract_assembly_version(self, reference_sd_map: str, ref_genome: str) -> str:
@@ -191,6 +192,7 @@ class SDrecallPaths:
         self.recall_results_dir = dirs["recall_results"]
         self.realign_groups_dir = dirs["realign_groups"]
         self.tmp_dir = dirs["intermediates"]
+        self.dirs = dirs
 
         # Create directories if they don't exist and clean if requested
         for dir_name, dir_path in dirs.items():
@@ -275,7 +277,7 @@ class SDrecallPaths:
                 
         # Log what we found
         if self.realign_groups:
-            print(f"Discovered {len(self.realign_groups)} existing realign groups: {', '.join(sorted(self.realign_groups))}")
+            print(f"Discovered {len(self.realign_groups)} existing realign groups: {', '.join(sorted(self.realign_groups))}", file=sys.stderr)
 
     
     def _normalize_rg_label(self, rg_label_or_index) -> str:
