@@ -46,7 +46,9 @@ SDrecall run \
   -m /path/to/sd_map.bed \
   -o /path/to/output_dir \
   -b /path/to/target.bed \
-  -t 16
+  -t 16 \
+  -s <sample_id> \
+  --target_tag <label_of_target_region> \
 ```
 
 ### Preparation Only
@@ -60,6 +62,8 @@ SDrecall prepare \
   -o /path/to/output_dir \
   -b /path/to/target.bed \
   -t 16 \
+  -s <sample_id> \
+  --target_tag <label_of_target_region> \
   --high_quality_depth 10 \
   --minimum_depth 3
 ```
@@ -74,7 +78,9 @@ SDrecall realign \
   -m /path/to/sd_map.bed \
   -b /path/to/target.bed \
   -o /path/to/output_dir \
+  -s <sample_id> \
   -t 16 \
+  --target_tag <label_of_target_region> \
   --numba_threads 4
 ```
 
@@ -89,6 +95,8 @@ SDrecall run \
   -b /path/to/target.bed \
   -o /path/to/output_dir \
   -t 16 \
+  -s <sample_id> \
+  --target_tag <label_of_target_region> \
   --conventional_vcf /path/to/deep_variant.vcf \
   --caller_name DeepVariant \
   --cohort_vcf /path/to/control_cohort.vcf \
@@ -157,6 +165,7 @@ The main outputs include:
 -s, --sample_id        Sample ID (default: extracted from BAM filename)
 -t, --threads          Number of threads to use (default: 10)
 -v, --verbose          Verbosity level (INFO, DEBUG, etc.)
+--target_tag           Label of the target region (recommended to specify)
 ```
 
 ## Code development and feature requests
