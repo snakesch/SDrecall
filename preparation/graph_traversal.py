@@ -110,8 +110,8 @@ def compare_homologous_sequences(
         return False, 0.0
 
     # Create temporary FASTA files for the regions
-    tmp_q = prepare_tmp_file(suffix=".fa")
-    tmp_c = prepare_tmp_file(suffix=".fa")
+    tmp_q = prepare_tmp_file(suffix=".fasta")
+    tmp_c = prepare_tmp_file(suffix=".fasta")
     
     try:
         # Extract query sequence

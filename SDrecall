@@ -308,6 +308,11 @@ def main():
     
     # Parse arguments
     args = parser.parse_args()
+
+    # Check if the reference genome file name suffix is .fasta
+    if not args.ref_genome.endswith('.fasta'):
+        logger.error(f"Reference genome file name suffix has to be .fasta, but {args.ref_genome} is not.")
+        sys.exit(1)
     
     # Configure logging
     configure_logger(log_level=args.verbose)
@@ -327,7 +332,7 @@ def main():
 def _add_common_args(parser):
     """Add common arguments shared by multiple modes"""
     parser.add_argument('-r', '--ref_genome', required=True, 
-                        help='Path to the reference genome (hg19 or hg38)')
+                        help='Path to the reference genome FASTA file (hg19 or hg38), file name suffix has to be .fasta')
     parser.add_argument('-o', '--outdir', required=True, 
                         help='Base directory for output files')
     parser.add_argument('-i', '--input_bam', required=True, 
