@@ -78,7 +78,7 @@ SDrecall realign \
   --numba_threads 4
 ```
 
-### With Supplementary VCF and Cohort Annotation
+### With Supplementary VCF and Cohort Annotation (Recommended)
 
 ```bash
 # Run with conventional caller integration and cohort annotation
@@ -123,30 +123,30 @@ Final steps may include:
 
 ## Inputs
 
-- **BAM file**: Aligned sequencing reads (must be indexed)
+- **BAM file**: Aligned sequencing reads (must be sorted by coordinates and indexed)
 - **Reference genome**: FASTA format (hg19 or hg38 supported)
-- **Reference SD map**: BED file with segmental duplication coordinates
-- **Target BED** (optional): Specific regions to analyze
-- **Supplementary VCF** (optional): Conventional caller results to merge with
-- **Cohort VCF** (optional): Population data for identifying common variants
+- **Reference SD map**: BED file with segmental duplication coordinates (Two gzipped bed files are offered in data/hg19(hg38)/ref_SD)
+- **Target BED** : Specific regions to analyze (the targeting regions you want to ensure detection sensitivity. For molecular diagnosis of Mendelian diseases, this can be the whole exome, or the coding regions of functionally relevant genes.)
+- **Supplementary VCF** (optional): Conventional caller results to merge with (The VCF file of the same sample, called by other conventional callers like GATK and DeepVariant. If provided, SDrecall will try to merge its own output with this VCF file to offer a final output VCF for downstream analysis)
+- **Cohort VCF** (optional): Population data for identifying common variants ( It is recommended to perform SDrecall on dozens of control samples with the similar coverage profile. Then merge them with bcftools and have AC and AN INFO tags calculated in the final merged VCF. This way, the AN, AC info for each variant called by SDrecall within your inhouse control cohort can be exploited to estimate whether it is truly a common variant in the general population. This is important because traditional population databases like gnomAD and 1000g is based on NGS data, therefore having gaps on the regions like segmental duplications due to the mapping ambiguity)
 
 ## Outputs
 
 The main outputs include:
-- **Filtered BAM files**: Realigned reads in SD regions (in `<output_dir>/realigned/`)
-- **Variant calls**: VCF files with variants in SD regions (in `<output_dir>/vcf/`)
+- **Filtered BAM files**: Realigned reads in SD regions (in `<output_dir>/<sample_id>_<assembly>_<target_tag>_SDrecall/recall_results`)
+- **Variant calls**: VCF files with variants in SD regions (in `<output_dir>/<sample_id>_<assembly>_<target_tag>_SDrecall/recall_results/<sample_id>.sdrecall.vcf.gz`)
 - **Final merged VCF**: Combined results with appropriate filters/tags (in `<output_dir>/final_vcf/`)
 - **Log files**: Detailed processing information
 
 ## Advanced Features
 
 - **Mapping quality filtering**: Adjust thresholds with `--mq_cutoff` (default: 41)
-- **Depth filtering**: Control with `--high_quality_depth` (default: 10) and `--minimum_depth` (default: 3)
-- **Confidence levels**: Set statistical confidence with `--conf_level`
-- **Variant filtering**: Filter with `--inhouse_common_cutoff` (default: 0.05) when using cohort data
+- **Depth filtering**: Control with `--high_quality_depth` (default: 10, used for pickup multialigned regions, specifies maximal depth of high MAPQ reads to be considered as insufficient coverage for downstream variant calling) and `--minimum_depth` (default: 3, used for pick up the region suffering multialignments, this specifies the minimal required depth regardless of MAPQs)
+- **Confidence levels**: Set statistical confidence with `--conf_level` (default: 0.999, used for common variant estimation)
+- **Variant filtering**: Filter with `--inhouse_common_cutoff` (default: 0.01) when using cohort data
 - **Performance tuning**: Adjust `--threads` for overall parallelism and `--numba_threads` for computational acceleration
 
-## Common Arguments
+## Common Arguments Use SDrecall --help and SDrecall run/prepare/realign --help to see the full argument list
 
 ```
 -i, --input_bam        Input BAM file path (must be indexed)

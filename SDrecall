@@ -9,11 +9,9 @@ or individual stages of preparation and variant calling.
 import os
 import sys
 import argparse
-import logging
 
 from src.const import SDrecallPaths
 from src.log import logger, configure_logger
-from src.utils import is_file_up_to_date
 from src.merge_variants_with_priority import merge_with_priority
 
 from prepare_recall_regions import prepare_recall_regions
@@ -235,7 +233,8 @@ def run_realign_only(args):
         output_dir=args.outdir,
         target_bed=args.target_bed,
         sample_id=args.sample_id,
-        target_tag=args.target_tag
+        target_tag=args.target_tag,
+        clean_dirs=False
     )
     
     # Verify that preparation has been done
@@ -272,7 +271,7 @@ def main():
     
     # Create the top-level parser
     parser = argparse.ArgumentParser(
-        description='SDrecall - Complement SNV and small Indel detection within Segmental Duplication based on NGS reads',
+        description='SDrecall - Complement SNV and small Indel detection within Segmental Duplication based on NGS data',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     

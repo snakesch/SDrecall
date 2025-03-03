@@ -163,7 +163,7 @@ class SDrecallPaths:
         # Get first part of filename delimited by dot
         return bed_name.split('.')[0]
     
-    def _clean_directory(self, directory: str) -> None:
+    def _clean_directory(self, directory: str, file_only: bool = False) -> None:
         """Remove all content from a directory"""
         if os.path.exists(directory):
             for item in os.listdir(directory):
@@ -171,7 +171,8 @@ class SDrecallPaths:
                 if os.path.isfile(item_path):
                     os.unlink(item_path)
                 elif os.path.isdir(item_path):
-                    shutil.rmtree(item_path)
+                    if not file_only:
+                        shutil.rmtree(item_path)
     
     def _initialize_directories(self, clean_dirs: bool = True) -> Dict[str, str]:
         """
@@ -194,8 +195,11 @@ class SDrecallPaths:
         # Create directories if they don't exist and clean if requested
         for dir_name, dir_path in dirs.items():
             os.makedirs(dir_path, exist_ok=True)
-            if clean_dirs and dir_name != "root":  # Don't clean root dir
-                self._clean_directory(dir_path)
+            if clean_dirs:  # Don't clean root dir
+                if dir_name != "root":
+                    self._clean_directory(dir_path, file_only=True)
+                else:
+                    self._clean_directory(dir_path, file_only=False)
             
         return dirs
     
