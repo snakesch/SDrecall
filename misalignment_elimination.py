@@ -125,6 +125,7 @@ def eliminate_misalignments(input_bam,
                      basequal_median_cutoff,
                      edge_weight_cutoff,
                      numba_threads,
+                     cache_dir,
                      i), 
                     log_dir
                 ) for i, (raw_bam, clean_bam, intrinsic_bam, raw_bam_region) in enumerate(zip(raw_bams, clean_bams, intrinsic_bams, raw_bam_regions))]
@@ -191,8 +192,18 @@ def eliminate_misalignments(input_bam,
             logger.info(f"Result summary:\n{summary}")
             
             # Now we merge the masked bams and vcfs across different chromosomes
-            merge_bams(post_result_df.loc[:, "masked_bam"].dropna().drop_duplicates().tolist(), output_bam, ref_fasta = ref_genome, threads=threads - 1, logger=logger)
-            merge_bams(post_result_df.loc[:, "raw_masked_bam"].dropna().drop_duplicates().tolist(), input_bam, ref_fasta = ref_genome, threads=threads - 1, logger=logger)
+            merge_bams(post_result_df.loc[:, "masked_bam"].dropna().drop_duplicates().tolist(), 
+                        output_bam, 
+                        ref_fasta = ref_genome, 
+                        threads=threads - 1, 
+                        tmp_dir = cache_dir, 
+                        logger=logger)
+            merge_bams(post_result_df.loc[:, "raw_masked_bam"].dropna().drop_duplicates().tolist(), 
+                        input_bam, 
+                        ref_fasta = ref_genome, 
+                        threads=threads - 1, 
+                        tmp_dir = cache_dir, 
+                        logger=logger)
             return input_bam, output_bam
             
     else:

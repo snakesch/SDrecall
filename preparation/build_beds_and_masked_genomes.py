@@ -91,7 +91,7 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
         f.write("\n".join(intrinsic_bams))
 
     cmd = f"samtools merge -@ {nthreads} -h {intrinsic_bam_header} -b {intrinsic_bam_list} -o - | \
-            samtools sort -O bam -o {total_intrinsic_bam} && \
+            samtools sort -T {sdrecall_paths.tmp_dir} -O bam -o {total_intrinsic_bam} && \
             samtools index {total_intrinsic_bam} && \
             ls -lht {total_intrinsic_bam} || \
             echo Failed to concatenate all the filtered realigned BAM files."

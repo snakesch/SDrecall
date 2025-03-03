@@ -169,6 +169,7 @@ def merge_bams(bam_list: list,
                merged_bam: str, 
                ref_fasta = "/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta",
                threads = 2,
+			   tmp_dir = "/tmp",
                logger = logger):
     # For data visualization and debugging
     merged_bam_header = merged_bam.replace(".bam", ".header")
@@ -193,7 +194,7 @@ def merge_bams(bam_list: list,
         f.write("\n".join(bam_list))
     
     cmd = f"samtools merge -c -@ {threads} -h {merged_bam_header} -b {merged_bam_list} -u -o - | \
-            samtools sort -O bam -o {merged_bam} -@ {threads} && \
+            samtools sort -O bam -T {tmp_dir} -o {merged_bam} -@ {threads} && \
             samtools index {merged_bam} && \
             ls -lht {merged_bam} || \
             >&2 echo Failed to concatenate all the pooled BAM files. It wont be a fatal error but brings troubles to debugging and variant tracing."

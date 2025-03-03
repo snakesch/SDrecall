@@ -12,7 +12,7 @@ def imap_filter_out(args, log_dir=""):
     import sys
     """Worker function that processes a single region and returns results with log file path"""
     # Unpack arguments
-    raw_bam, output_bam, intrinsic_bam, bam_region_bed, max_varno, mapq_cutoff, basequal_median_cutoff, edge_weight_cutoff, numba_threads, job_id = args
+    raw_bam, output_bam, intrinsic_bam, bam_region_bed, max_varno, mapq_cutoff, basequal_median_cutoff, edge_weight_cutoff, numba_threads, tmp_dir, job_id = args
     import numba
     numba.set_num_threads(numba_threads)
     numba.config.THREADING_LAYER = 'omp'
@@ -48,6 +48,7 @@ def imap_filter_out(args, log_dir=""):
             mapq_cutoff=mapq_cutoff,
             basequal_median_cutoff=basequal_median_cutoff,
             edge_weight_cutoff=edge_weight_cutoff,
+            tmp_dir=tmp_dir,
             logger=subprocess_logger
         )
         
@@ -72,6 +73,7 @@ def realign_filter_per_cov(bam,
                            basequal_median_cutoff = 15,
                            edge_weight_cutoff = 0.201,
                            threads = 4,
+                           tmp_dir = "/tmp",
                            logger=logger):
     '''
     Main function for phasing and filtering realigned reads per continuous coverage region.
@@ -109,7 +111,7 @@ def realign_filter_per_cov(bam,
     from fp_control.phasing import phasing_realigned_reads
 
     # Given the top 1% mismatch count per read (one structrual variant count as 1 mismatch)
-    tmp_bam = prepare_tmp_file(suffix=".bam").name
+    tmp_bam = prepare_tmp_file(suffix=".bam", tmp_dir = tmp_dir).name
 
     max_varno = float(max_varno)
 
@@ -257,13 +259,13 @@ def realign_filter_per_cov(bam,
     logger.warning(f"Filtered out {len(noisy_qnames)} noisy read-pairs (Editing distance without the biggest gap > {max_varno}) and {len(mismap_qnames - noisy_qnames)} read-pairs with ODD high editing distance, remaining {len(set(norm_qnames.keys()) - noisy_qnames - mismap_qnames)} read-pairs from {bam} (with total {total_num} reads) and output to {output_bam}\n\n")
 
     # Replace the input BAM file with the tmp BAM file with modified RG tags for visualization of haplotype clusters
-    executeCmd(f"samtools sort -O bam -o {bam} {tmp_bam} && \
+    executeCmd(f"samtools sort -O bam -T {tmp_dir} -o {bam} {tmp_bam} && \
                  samtools index {bam} && \
                  rm {tmp_bam} && \
                  [[ $(samtools view {bam} | wc -l) -ge 1 ]] && \
                  ls -lh {bam}", logger=logger)
     # Sort and index the output bam file
-    executeCmd(f"samtools sort -O bam -o {tmp_bam} {output_bam} && \
+    executeCmd(f"samtools sort -O bam -T {tmp_dir} -o {tmp_bam} {output_bam} && \
                  mv {tmp_bam} {output_bam} && \
                  samtools index {output_bam} && \
                  [[ $(samtools view {output_bam} | wc -l) -ge 1 ]] && \

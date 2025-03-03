@@ -139,12 +139,13 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
     execute_merging = merge_bams(bam_list = post_result_df["raw_masked_bam"].dropna().unique().tolist(), 
                                  merged_bam = pooled_raw_bam, 
                                  ref_fasta = ref_genome,
+                                 tmp_dir = sdrecall_paths.tmp_dir,
                                  threads = threads,
                                  logger = logger)
     deduped_raw_bam = pooled_raw_bam.replace(".bam", ".deduped.bam")
     cmd = f"samtools collate -@ {threads} -O -u {pooled_raw_bam} | \
             samtools fixmate -@ {threads} -m -u - - | \
-            samtools sort -@ {threads} -u - | \
+            samtools sort -T {sdrecall_paths.tmp_dir} -@ {threads} -u - | \
             samtools markdup -@ {threads} -r - {deduped_raw_bam} && \
             ls -lh {deduped_raw_bam}"
     if execute_merging:
