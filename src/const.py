@@ -200,6 +200,9 @@ class SDrecallPaths:
                     self._clean_directory(dir_path, file_only=True)
                 else:
                     self._clean_directory(dir_path, file_only=False)
+
+        if not clean_dirs:
+            self._discover_and_register_realign_groups()
             
         return dirs
     
@@ -253,6 +256,26 @@ class SDrecallPaths:
         # Ensure the RG directory exists
         rg_dir = self.rg_dir(rg_label)
         os.makedirs(rg_dir, exist_ok=True)
+
+
+    def _discover_and_register_realign_groups(self):
+        """
+        Discover existing realign groups from the file system and register them
+        """
+        if not os.path.exists(self.realign_groups_dir):
+            return
+            
+        # Look for directories matching the RG pattern in the realign_groups directory
+        for item in os.listdir(self.realign_groups_dir):
+            item_path = os.path.join(self.realign_groups_dir, item)
+            # If it's a directory and matches the RG pattern
+            if os.path.isdir(item_path) and re.match(r'^RG\d+$', item):
+                # Register this realign group
+                self.register_realign_group(item)
+                
+        # Log what we found
+        if self.realign_groups:
+            print(f"Discovered {len(self.realign_groups)} existing realign groups: {', '.join(sorted(self.realign_groups))}")
 
     
     def _normalize_rg_label(self, rg_label_or_index) -> str:
