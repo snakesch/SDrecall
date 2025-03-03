@@ -234,10 +234,8 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
             similarity = 0.0
         
         if is_similar:
-            logger.info(f"Found a new counterparts node {cnode} for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes. The traverse route is {cnode.traverse_route} \n")
+            logger.info(f"Found a new counterparts node {cnode} for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes. The similarity is {similarity}. The traverse route is {cnode.traverse_route} \n")
             counter_nodes.append(cnode)
-        else:
-            logger.info(f"The cnode {cnode} is not similar to (similarity only {similarity}) the query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes. The traverse route is {cnode.traverse_route} \n")
 
     if len(counter_nodes) == 0:
         logger.debug(f"No cnodes found for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes, (one of the node is {HOMOSEQ_REGION(shortest_path_verts[-1], graph)}).")
