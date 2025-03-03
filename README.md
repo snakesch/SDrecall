@@ -38,6 +38,28 @@ SDrecall provides three main execution modes:
 
 ### Complete Pipeline
 
+### With Supplementary VCF and Cohort Annotation (Recommended way to run SDrecall)
+
+```bash
+# Run with conventional caller integration and cohort annotation
+SDrecall run \
+  -i input.bam \
+  -r /path/to/reference.fa \
+  -m /path/to/sd_map.bed \
+  -b /path/to/target.bed \
+  -o /path/to/output_dir \
+  -t 16 \
+  -s <sample_id> \
+  --target_tag <label_of_target_region> \
+  --conventional_vcf /path/to/deep_variant.vcf \
+  --caller_name DeepVariant \
+  --cohort_vcf /path/to/control_cohort.vcf \
+  --inhouse_common_cutoff 0.01 \
+  --cohort_conf_level 0.999
+```
+
+### Without Supplementary VCF and Cohort Annotation
+
 ```bash
 # Run the complete SDrecall pipeline
 SDrecall run \
@@ -84,25 +106,6 @@ SDrecall realign \
   --numba_threads 4
 ```
 
-### With Supplementary VCF and Cohort Annotation (Recommended)
-
-```bash
-# Run with conventional caller integration and cohort annotation
-SDrecall run \
-  -i input.bam \
-  -r /path/to/reference.fa \
-  -m /path/to/sd_map.bed \
-  -b /path/to/target.bed \
-  -o /path/to/output_dir \
-  -t 16 \
-  -s <sample_id> \
-  --target_tag <label_of_target_region> \
-  --conventional_vcf /path/to/deep_variant.vcf \
-  --caller_name DeepVariant \
-  --cohort_vcf /path/to/control_cohort.vcf \
-  --inhouse_common_cutoff 0.01 \
-  --cohort_conf_level 0.999
-```
 ## Workflow Stages
 
 ### 1. Preparation (`prepare_recall_regions.py`)
