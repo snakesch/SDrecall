@@ -22,9 +22,11 @@ from realign_recall.prepare_masked_align_region import imap_prepare_masked_align
 from misalignment_elimination import eliminate_misalignments
 
 
-def pool_init():
+def pool_init(tmp_dir: str):
     global imap_prepare_masked_align_region_per_RG
     from realign_recall.prepare_masked_align_region import imap_prepare_masked_align_region_per_RG
+    from pybedtools import helpers
+    helpers.set_tempdir(tmp_dir)
 
 
 def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
@@ -55,7 +57,7 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
 
     # Prepare the regions to recruit reads for downstream realignment
     num_jobs, _ = configure_parallelism(threads, 1)
-    pool = ctx.Pool(num_jobs, initializer=pool_init)
+    pool = ctx.Pool(num_jobs, initializer=pool_init, initargs=(sdrecall_paths.tmp_dir,))
     prepared_beds = pool.imap_unordered(imap_prepare_masked_align_region_per_RG, zip(uniq_rg_labels,
                                                                                     rg_subids_tup_list,
                                                                                     repeat(sdrecall_paths.tmp_dir),
@@ -97,7 +99,7 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
 
     # Perform the realignment and recall
     num_jobs, threads_per_job = configure_parallelism(threads, 4)
-    pool = ctx.Pool(num_jobs, initializer=pool_init)
+    pool = ctx.Pool(num_jobs, initializer=pool_init, initargs=(sdrecall_paths.tmp_dir,))
     results = pool.imap_unordered(imap_process_masked_bam, zip( uniq_rgs,
                                                                 rg_query_beds,
                                                                 rg_fc_beds,

@@ -8,6 +8,7 @@ import math
 from typing import List, Tuple
 
 from pybedtools import BedTool
+from pybedtools import helpers
 from src.log import logger
 from src.const import shell_utils
 
@@ -113,8 +114,9 @@ def sortBed_and_merge(bed_file, output=None):
     
     return None
     
-def merge_bed_files(bed_files: List[str]) -> BedTool:
+def merge_bed_files(bed_files: List[str], tmp_dir: str = "/tmp") -> BedTool:
     """Merges multiple BED files using pybedtools. Returns BedTool."""
+    helpers.set_tempdir(tmp_dir)
     bed_files = list(dict.fromkeys(bed_files))  # Remove duplicates
     if not bed_files:
         return BedTool("", from_string=True)  # Return empty BedTool

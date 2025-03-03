@@ -31,6 +31,7 @@ def prepare_recall_regions( paths: SDrecallPaths,
         multialign_frac: Multi-align fraction cutoff
         threads: Number of threads to use
     """
+    pb.helpers.set_tempdir(paths.tmp_dir)
     # Access all paths through the paths object
     ref_genome = paths.ref_genome
     input_bam = paths.input_bam

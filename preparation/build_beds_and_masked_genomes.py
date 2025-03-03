@@ -1,7 +1,7 @@
 import sys
 from multiprocessing import Pool
-
 from pybedtools import BedTool
+from pybedtools import helpers
 
 from src.utils import executeCmd, sortBed_and_merge, merge_bed_files
 from src.const import shell_utils, SDrecallPaths
@@ -19,6 +19,7 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
                                   std_frag_size=140):    
     # Label SD-paralog pairs. Name disconnected qnodes as RG0, connected qnodes as PC1, PC2, ...
     # We need to restructure the grouped_qnode_cnodes to pass the information of sd-paralog pairs to the establish_beds_per_RG_cluster function
+    helpers.set_tempdir(sdrecall_paths.tmp_dir)
     new_results = []
     for result in grouped_qnode_cnodes:
         new_result = {"SD_qnodes": {}, "SD_counterparts": {}}
@@ -99,7 +100,7 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
                
     # Fourth, extract all PC*_related_homo_regions.bed file and concat them together.
     beds = sdrecall_paths.all_homo_regions_bed_paths()
-    combined_bed = merge_bed_files(beds)
+    combined_bed = merge_bed_files(beds, tmp_dir=sdrecall_paths.tmp_dir)
     combined_bed.saveas(sdrecall_paths.total_homo_regions_bed_path())
 
     return sdrecall_paths

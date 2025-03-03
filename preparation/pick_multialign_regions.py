@@ -1,5 +1,4 @@
 import multiprocessing as mp
-import pandas as pd
 from pybedtools import BedTool
 from src.log import logger
 from .inferred_depths import calculate_inferred_coverage

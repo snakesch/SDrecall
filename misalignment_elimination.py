@@ -11,10 +11,8 @@ ctx = mp.get_context("spawn")
 
 from io import StringIO
 from datetime import datetime
-from itertools import repeat
-
 from src.utils import executeCmd, configure_parallelism, merge_bams
-from src.log import logger, log_command
+from src.log import logger
 from src.const import shell_utils
 from src.suppress_warning import *
 
