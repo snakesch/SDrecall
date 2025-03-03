@@ -1,14 +1,7 @@
 import pybedtools as pb
 import pandas as pd
-import logging
 import os
-import inspect
-import uuid
-from io import StringIO
-import time
-import traceback
-import argparse as ap
-import numpy as np
+
 
 from src.log import logger, log_command
 from src.utils import prepare_tmp_file

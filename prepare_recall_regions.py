@@ -2,12 +2,9 @@ import argparse
 import logging
 import os
 from multiprocessing import Pool
-import sys
 
 import pandas as pd
 import pybedtools as pb
-import networkx as nx
-import graph_tool.all
 
 from preparation import *
 

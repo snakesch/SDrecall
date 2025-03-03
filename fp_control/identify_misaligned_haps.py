@@ -1,5 +1,4 @@
 import numba
-import logging
 import numpy as np
 import pandas as pd
 import pybedtools as pb
