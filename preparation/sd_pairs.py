@@ -33,9 +33,9 @@ class Pair:
 
         Args:
             other (Pair): The other Pair object to calculate overlap with.
-            fraction_select (int, optional): If 0, returns overlap fraction relative to this Pair.
-                                            If 1, returns overlap fraction relative to the other Pair.
-                                            If None (default), returns the maximum overlap fraction.
+            fraction_select (int, optional): If self, returns overlap fraction relative to this Pair.
+                                             If other, returns overlap fraction relative to the other Pair.
+                                             If None (default), returns the maximum overlap fraction.
 
         Returns:
             float: The overlap fraction (0 if no overlap).
@@ -43,24 +43,24 @@ class Pair:
         overlap_span_A = max(0, min(self.endA, other.endA) - max(self.startA, other.startA))
         overlap_span_B = max(0, min(self.endB, other.endB) - max(self.startB, other.startB))
 
-        if overlap_span_A == 0 or overlap_span_B == 0:
-            return 0
-
         size1_A = self.endA - self.startA
         size2_A = other.endA - other.startA
         size1_B = self.endB - self.startB
         size2_B = other.endB - other.startB
 
+        fraction_1 = (overlap_span_A / size1_A, overlap_span_B / size1_B)
+        fraction_2 = (overlap_span_A / size2_A, overlap_span_B / size2_B)
+
         if fraction_select is not None:
-            if fraction_select == 0:
-                return max(overlap_span_A / size1_A, overlap_span_B / size1_B)
-            elif fraction_select == 1:
-                return max(overlap_span_A / size2_A, overlap_span_B / size2_B)
+            if fraction_select == "self":
+                return fraction_1
+            elif fraction_select == "other":
+                return fraction_2
             else:
-                raise ValueError("fraction_select must be 0, 1, or None.")
+                raise ValueError("fraction_select must be 'self' or 'other' or None.")
         else:  # Return the *maximum* overlap fraction
-            return max(overlap_span_A / size1_A, overlap_span_B / size1_B,
-                       overlap_span_A / size2_A, overlap_span_B / size2_B)
+            return max(fraction_1, fraction_2, key=lambda x: sum(x))
+        
 
     def is_same_pair(self, other):
         """
@@ -74,20 +74,27 @@ class Pair:
         """
         # Check for both original and swapped order
         return (
-            (self.chrA == other.chrA and self.startA == other.startA and
-             self.endA == other.endA and self.strandA == other.strandA and
-             self.chrB == other.chrB and self.startB == other.startB and
-             self.endB == other.endB and self.strandB == other.strandB)
+            (self.chrA == other.chrA and \
+             self.startA == other.startA and \
+             self.endA == other.endA and \
+             self.chrB == other.chrB and \
+             self.startB == other.startB and \
+             self.endB == other.endB and \
+             (self.strandB == self.strandA) == (other.strandB == other.strandA))
             or
-            (self.chrA == other.chrB and self.startA == other.startB and
-             self.endA == other.endB and self.strandA == other.strandB and
-             self.chrB == other.chrA and self.startB == other.startA and
-             self.endB == other.endA and self.strandB == other.strandA)
+            (self.chrA == other.chrB and \
+             self.startA == other.startB and \
+             self.endA == other.endB and \
+             self.chrB == other.chrA and \
+             self.startB == other.startA and \
+             self.endB == other.endA and \
+             (self.strandB == self.strandA) == (other.strandB == other.strandA))
         )
 
-    def is_umbrella_pair(self, other, coverage_threshold):
+    def is_umbrella_pair(self, other, coverage_threshold=0.9):
         """
         Checks if this pair is an umbrella pair enclosing another pair.
+        Input order matters for the same pair of SDs.
 
         Args:
             other (Pair): The other Pair object to compare with.
@@ -100,54 +107,64 @@ class Pair:
             return False
 
         # Check for strand consistency
-        if (self.strandA == other.strandA and self.strandB != other.strandB) or \
-           (self.strandA != other.strandA and self.strandB == other.strandB):
+        if (self.strandA == self.strandB) != (other.strandA == other.strandB):
             return False
 
         # Calculate overlap fractions
-        coverage_A = self.calculate_interval_overlaps(other)
-        if coverage_A < coverage_threshold:
-            return False
-
-        coverage_B = other.calculate_interval_overlaps(self) #Correct implementation
-        if coverage_B < coverage_threshold:
+        coverage_fraction_A, coverage_fraction_B = self.calculate_interval_overlaps(other, fraction_select="other")
+        if coverage_fraction_A < coverage_threshold or coverage_fraction_B < coverage_threshold:
             return False
 
         # Check if this pair's overlap length is greater than or equal to the other's
         return self.overlap_len >= other.overlap_len
 
+
     def __repr__(self):
         """Returns a string representation of the Pair."""
-        return (f"Pair({self.chrA}:{self.startA}-{self.endA}:{self.strandA}, "
-                f"{self.chrB}:{self.startB}-{self.endB}:{self.strandB})")
+        return (f"Pair({self.chrA}:{self.startA}-{self.endA}:{self.strandA}, \
+                       {self.chrB}:{self.startB}-{self.endB}:{self.strandB})")
 
-def _find_umbrella_pairs(groupdf, coverage_threshold, overlap_len_col):
+def _find_umbrella_pairs(groupdf, overlap_len_col, coverage_threshold=0.9):
     """
     Internal function to find umbrella pairs within a grouped DataFrame.
+    Umbrella pairs (more general pairs that encompass other pairs) are identified for removal.
 
     Args:
         groupdf (pd.DataFrame): Grouped DataFrame.
-        coverage_threshold (float): Coverage threshold.
         overlap_len_col (str): Column name for overlap length.
+        coverage_threshold (float): Coverage threshold.
 
     Returns:
-        list: List of indices of umbrella pairs.
+        list: List of indices of umbrella pairs to be removed.
     """
-    umbrella_indices = []
+    to_remove = set()  # Pairs marked for removal
     chrA, startA, endA, strandA, chrB, startB, endB, strandB = groupdf.columns[:8]
+    
     # Create Pair objects for each row in the group
     pairs = [Pair(row, chrA, startA, endA, strandA, chrB, startB, endB, strandB, overlap_len_col)
              for _, row in groupdf.iterrows()]
-
+    
     # Compare each pair to every other pair
-    for i in range(len(pairs) - 1):
+    for i in range(len(pairs)):
+        if i in to_remove:
+            continue  # Skip pairs already marked for removal
+        
         for j in range(i + 1, len(pairs)):
+            if j in to_remove:
+                continue  # Skip pairs already marked for removal
+            
+            # Check umbrella relationship (if one pair encompasses the other)
             if pairs[i].is_umbrella_pair(pairs[j], coverage_threshold):
-                umbrella_indices.append(pairs[i].row_index)  # Store the *original index*
-
-    if umbrella_indices:
-        logger.info(f"Found {len(umbrella_indices)} umbrella pairs.")
-    return umbrella_indices
+                # If i is an umbrella pair for j, remove i and stop comparing i
+                to_remove.add(i)
+                break  # No need to compare i with other pairs
+            elif pairs[j].is_umbrella_pair(pairs[i], coverage_threshold):
+                # If j is an umbrella pair for i, remove j and continue with i
+                to_remove.add(j)
+                # Continue comparing i with other pairs
+    
+    # Convert to list of original row indices
+    return [pairs[i].row_index for i in to_remove]
 
 
 def filter_umbrella_pairs(groupdf, coverage_threshold=0.9, overlap_len_col="overlap_len"):

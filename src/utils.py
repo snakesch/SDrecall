@@ -128,10 +128,6 @@ def merge_bed_files(bed_files: List[str], tmp_dir: str = "/tmp") -> BedTool:
     return merged_bedtool.sort()
 
 
-def filter_bed_by_interval_size(bed_obj, interval_size_cutoff):
-    return bed_obj.filter(lambda x: len(x) > interval_size_cutoff).sort()
-
-
 # - VCF/BCF file manipulation using bcftools -# 
 def combine_vcfs(*vcfs, output=None, threads=4):
     ## Given a list of VCFs, runs bcftools concat + tabix + sort, returns the processed VCF path

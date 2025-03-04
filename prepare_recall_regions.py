@@ -10,7 +10,7 @@ from preparation import *
 
 from src.log import logger, configure_logger
 from src.suppress_warning import *
-from src.utils import is_file_up_to_date, filter_bed_by_interval_size, executeCmd
+from src.utils import is_file_up_to_date, executeCmd
 
 from src.const import SDrecallPaths
 
@@ -117,15 +117,15 @@ def prepare_recall_regions( paths: SDrecallPaths,
     total_bin_sd_df.loc[both_neg_strand, "strand2"] = total_bin_sd_df.loc[both_neg_strand, "strand2"].map(reverse_strand_dict)
                                                            
     ## One multi-align interval (represented as *_bam1) can overlap multiple SDs, keep only the minimal set of SDs with sufficient overlap
+    logger.info(f"Before filtering, the total SD map has {total_bin_sd_df.shape[0]} SDs. Looks like: \n{total_bin_sd_df.head(10).to_string(index=False)}")
     by_bam_region = [ g for _, g in total_bin_sd_df.groupby(["chr_bam1", "start_bam1", "end_bam1"], as_index=False) ]
     with Pool(threads) as pool:
         results = pool.imap_unordered(filter_umbrella_pairs, by_bam_region)
         total_bin_sd_df = pd.concat(results, axis=0, ignore_index=True).loc[:, ["chr_1", "start_1", "end_1", "strand1",
                                                                                 "chr_2", "start_2", "end_2", "strand2", 
                                                                                 "mismatch_rate"]].drop_duplicates().dropna()
-    
-    expanded_total_bin_sd_df = total_bin_sd_df.copy()
-    logger.debug("Total SD map contains {} regions:\n{}".format(total_bin_sd_df.shape[0], total_bin_sd_df.head(5).to_string(index=False)))
+
+    logger.info("After filtering umbrella SD pairs, the total SD map contains {} SD pairs:\n{}".format(total_bin_sd_df.shape[0], total_bin_sd_df.head(10).to_string(index=False)))
     
     ## Remove the duplicated SD combinations (i.e. same SD pair in different order)
     total_bin_sd_df.loc[:, "frozenset_indx"] = total_bin_sd_df.apply(lambda row: frozenset({ row["chr_1"]+":"+str(row["start_1"])+"-"+str(row["end_1"])+":"+row["strand1"], row["chr_2"]+":"+str(row["start_2"])+"-"+str(row["end_2"])+":"+row["strand2"]}), axis=1)
@@ -143,33 +143,8 @@ def prepare_recall_regions( paths: SDrecallPaths,
         graph = read_graphml(graph_path)
     else:
         graph = create_multiplex_graph( total_bin_sd_df, graph_path, threads = threads)
-
-    # Step 4: Extract SD + PO BED regions with depth issues caused by mapping ambiguity. Mutual overlap exists between intervals.
-    ## expanded_total_bin_sd_df is constructed from reference SD map, multi_align_bed_obj is constructed from specified target regions.
-    ## Filter out regions with length > 140bp (compared to 150bp reads)
-    graph_bed = pb.BedTool.from_dataframe(expanded_total_bin_sd_df.drop_duplicates())
-    graph_bed = filter_bed_by_interval_size(graph_bed, 140)
     
-    ## Extract SD + PO BED regions with depth issues caused by mapping ambiguity
-    intersect_df = graph_bed.intersect(multi_align_bed_obj.sort().merge(), wo=True).to_dataframe(disable_auto_names=True, names=["chrA", "startA", "endA", "strandA", 
-                                                                                                                                "chrB", "startB", "endB", "strandB",
-                                                                                                                                "mismatch_rate",
-                                                                                                                                "chr_target", "start_target", "end_target", "overlap_len"])
-    ## Sanity check
-    intersect_df = intersect_df.loc[(intersect_df["endA"] > intersect_df["startA"]) & \
-                                    (intersect_df["end_target"] > intersect_df["start_target"]) & \
-                                    (intersect_df["endB"] > intersect_df["startB"]), :]
-
-    query_groups = [ g for _, g in intersect_df.groupby(["chr_target", "start_target", "end_target"], as_index=False) ]
-    
-    logger.debug(f"Before filtering, {intersect_df.shape[0]} intervals overlaps with the target regions: \n{intersect_df[:20].to_string(index=False)}\n")
-    with Pool(threads) as pool:
-        results = pool.imap_unordered(filter_umbrella_pairs, query_groups)
-        intersect_df = pd.concat(results, axis=0, ignore_index=True).drop_duplicates()
-    
-    logger.debug("Only {} non-umbrella intervals overlaps target region: \n{}\n".format(intersect_df.shape[0], intersect_df[:20].to_string(index=False)))
-    
-    query_nodes = intersect_df.loc[:, ["chrA", "startA", "endA", "strandA"]].drop_duplicates().rename(columns={"chrA":"chr", "startA":"start", "endA":"end", "strandA":"strand"})
+    query_nodes = total_bin_sd_df.loc[:, ["chr_1", "start_1", "end_1", "strand1"]].drop_duplicates().rename(columns={"chr_1":"chr", "start_1":"start", "end_1":"end", "strand1":"strand"})
     if logger.level == logging.DEBUG:
         final_query_bed = pb.BedTool.from_dataframe(query_nodes)
         final_query_bed.intersect(multi_align_bed, wo=True).saveas(paths.target_overlapping_query_sd_bed_path()) # renamed from coding_query_nodes.bed

@@ -51,7 +51,6 @@ def bam_to_fastq_biobambam(input_bam,
         # For non-multi-aligned BAMs, use the original approach with regions
         cmd = f"""samtools view -h -P -@ {threads} -L {region_bed} -u {input_bam} | \
                   bamtofastq \
-                    filename={input_bam} \
                     F={output_freads} \
                     F2={output_rreads} \
                     collate=1 \
