@@ -128,6 +128,9 @@ def prepare_recall_regions( paths: SDrecallPaths,
     total_bin_sd_df = total_bin_sd_df.loc[:, ["chr_1", "start_1", "end_1", "strand1",
                                               "chr_2", "start_2", "end_2", "strand2", 
                                               "mismatch_rate"]].drop_duplicates().dropna()
+    logger.info(f"Now there are only {total_bin_sd_df.shape[0]} SD regions left.")
+    query_nodes = total_bin_sd_df.loc[:, ["chr_1", "start_1", "end_1", "strand1"]].drop_duplicates().rename(columns={"chr_1":"chr", "start_1":"start", "end_1":"end", "strand1":"strand"})
+    
     ## Remove the duplicated SD combinations (i.e. same SD pair in different order)
     total_bin_sd_df.loc[:, "frozenset_indx"] = total_bin_sd_df.apply(lambda row: frozenset({ row["chr_1"]+":"+str(row["start_1"])+"-"+str(row["end_1"])+":"+row["strand1"], row["chr_2"]+":"+str(row["start_2"])+"-"+str(row["end_2"])+":"+row["strand2"]}), axis=1)
     total_bin_sd_df = total_bin_sd_df.drop_duplicates(subset="frozenset_indx").drop(columns=["frozenset_indx"])
@@ -145,7 +148,6 @@ def prepare_recall_regions( paths: SDrecallPaths,
     else:
         graph = create_multiplex_graph( total_bin_sd_df, graph_path, threads = threads)
     
-    query_nodes = total_bin_sd_df.loc[:, ["chr_1", "start_1", "end_1", "strand1"]].drop_duplicates().rename(columns={"chr_1":"chr", "start_1":"start", "end_1":"end", "strand1":"strand"})
     if logger.level == logging.DEBUG:
         final_query_bed = pb.BedTool.from_dataframe(query_nodes)
         final_query_bed.intersect(multi_align_bed, wo=True).saveas(paths.target_overlapping_query_sd_bed_path()) # renamed from coding_query_nodes.bed
