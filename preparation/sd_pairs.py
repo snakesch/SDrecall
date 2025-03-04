@@ -147,7 +147,6 @@ class Pair:
         # Calculate relative position in the first segment
         rel_start = overlap_start - self.startA
         rel_end = overlap_end - self.startA
-        segment_a_size = self.endA - self.startA
         
         # Calculate corresponding position in the second segment
         if self.strandA == self.strandB:  # Same strand
@@ -169,6 +168,7 @@ class Pair:
         refined_pair.strandA = self.strandA
         refined_pair.strandB = self.strandB
         refined_pair.overlap_len = self.overlap_len
+        # print(f"The original pair is {self}, and the refined pair is {refined_pair}, and the target region is {target_region}", file=sys.stderr)
         
         return refined_pair
 
@@ -197,7 +197,7 @@ def _find_umbrella_pairs(groupdf, overlap_len_col, coverage_threshold=0.95):
     chr_target, start_target, end_target = groupdf.columns[8:11]
     
     # Create Pair objects for each row in the group
-    pairs = [Pair(row, chrA, startA, endA, strandA, chrB, startB, endB, strandB, overlap_len_col).extract_subsegment_for_target((row[chr_target], row[start_target], row[end_target]))
+    pairs = [Pair(row, chrA, startA, endA, strandA, chrB, startB, endB, strandB, overlap_len_col)
              for _, row in groupdf.iterrows()]
 
     # print(f"Pairs: {pairs}\n", file=sys.stderr)
@@ -223,8 +223,34 @@ def _find_umbrella_pairs(groupdf, overlap_len_col, coverage_threshold=0.95):
                 to_remove.add(j)
                 # Continue comparing i with other pairs
     
+    granular_pairs = [pairs[i].extract_subsegment_for_target((row[chr_target], row[start_target], row[end_target]))
+                      for i, row in groupdf.iterrows()]
+    
+    # print(f"Granular pairs: {granular_pairs}\n", file=sys.stderr)
+    granular_to_remove = set()
+    # Compare each pair to every other pair
+    for i in range(len(granular_pairs)):
+        if i in granular_to_remove:
+            continue  # Skip pairs already marked for removal
+        
+        for j in range(i + 1, len(granular_pairs)):
+            if j in granular_to_remove:
+                continue  # Skip pairs already marked for removal
+            
+            # Check umbrella relationship (if one pair encompasses the other)
+            if granular_pairs[i].is_umbrella_pair(granular_pairs[j], coverage_threshold):
+                # print(f"Comparing {granular_pairs[i]} to {granular_pairs[j]}", file=sys.stderr)
+                # If i is an umbrella pair for j, remove i and stop comparing i
+                granular_to_remove.add(i)
+                break  # No need to compare i with other pairs
+            elif granular_pairs[j].is_umbrella_pair(granular_pairs[i], coverage_threshold):
+                # print(f"Comparing {granular_pairs[j]} to {granular_pairs[i]}", file=sys.stderr)
+                # If j is an umbrella pair for i, remove j and continue with i
+                granular_to_remove.add(j)
+
     # Convert to list of original row indices
-    return [pairs[i].row_index for i in to_remove]
+    merged_to_remove = to_remove | granular_to_remove
+    return [pairs[i].row_index for i in merged_to_remove]
 
 
 def filter_umbrella_pairs(groupdf, coverage_threshold=0.95, overlap_len_col="overlap_len"):
@@ -243,7 +269,6 @@ def filter_umbrella_pairs(groupdf, coverage_threshold=0.95, overlap_len_col="ove
         raise ValueError(f"Overlap length column '{overlap_len_col}' not found in DataFrame.")
 
     # 1. Preprocessing
-    chrA, startA, endA, strandA, chrB, startB, endB, strandB = groupdf.columns[:8]
     groupdf.drop_duplicates(inplace=True)
     groupdf.reset_index(drop=True, inplace=True)  # Reset index after dropping duplicates
 
