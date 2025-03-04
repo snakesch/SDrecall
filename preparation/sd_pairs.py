@@ -201,5 +201,5 @@ def filter_umbrella_pairs(groupdf, coverage_threshold=0.95, overlap_len_col="ove
     filtered_df.reset_index(drop=True, inplace=True) # Reset index after drop
 
     if len(filtered_df) < len(groupdf):
-        logger.info(f"Removed {len(groupdf) - len(filtered_df)} umbrella pairs.")
+        logger.debug(f"Removed {len(groupdf) - len(filtered_df)} umbrella pairs.")
     return filtered_df
