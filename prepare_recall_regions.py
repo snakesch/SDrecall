@@ -131,7 +131,7 @@ def prepare_recall_regions( paths: SDrecallPaths,
     logger.info(f"Now there are only {total_bin_sd_df.shape[0]} SD regions left.")
     query_nodes = total_bin_sd_df.loc[:, ["chr_1", "start_1", "end_1", "strand1"]].drop_duplicates().rename(columns={"chr_1":"chr", "start_1":"start", "end_1":"end", "strand1":"strand"})
     
-    ## Remove the duplicated SD combinations (i.e. same SD pair in different order)
+    ## Remove the duplicated SD combinations (i.e. same SD pair in different order) for graph construction
     total_bin_sd_df.loc[:, "frozenset_indx"] = total_bin_sd_df.apply(lambda row: frozenset({ row["chr_1"]+":"+str(row["start_1"])+"-"+str(row["end_1"])+":"+row["strand1"], row["chr_2"]+":"+str(row["start_2"])+"-"+str(row["end_2"])+":"+row["strand2"]}), axis=1)
     total_bin_sd_df = total_bin_sd_df.drop_duplicates(subset="frozenset_indx").drop(columns=["frozenset_indx"])
     total_bin_sd_df.to_csv(os.path.join(outdir, "filtered_SD_binary_map.tsv"), sep="\t", index=False)

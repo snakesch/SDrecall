@@ -1,4 +1,5 @@
 import sys
+import copy
 import pandas as pd
 import logging
 import numpy as np
@@ -121,9 +122,62 @@ class Pair:
         return self.overlap_len <= other.overlap_len
 
 
+    def extract_subsegment_for_target(self, target_region):
+        """
+        Extract the corresponding subsegment of this SD pair based on a target region.
+        
+        Args:
+            target_region (tuple): (chrom, start, end) of the target region
+                                  that overlaps with the first segment
+        
+        Returns:
+            Pair: A new pair object with refined coordinates
+        """
+        chrom, target_start, target_end = target_region
+        
+        # Ensure the target region overlaps with the first segment
+        if chrom != self.chrA or target_end <= self.startA or target_start >= self.endA:
+            logger.warning(f"Target region {chrom}:{target_start}-{target_end} doesn't overlap with {self}")
+            return None
+        
+        # Get the overlapping region
+        overlap_start = max(self.startA, target_start)
+        overlap_end = min(self.endA, target_end)
+        
+        # Calculate relative position in the first segment
+        rel_start = overlap_start - self.startA
+        rel_end = overlap_end - self.startA
+        segment_a_size = self.endA - self.startA
+        
+        # Calculate corresponding position in the second segment
+        if self.strandA == self.strandB:  # Same strand
+            # Direct mapping
+            new_startB = self.startB + rel_start
+            new_endB = self.startB + rel_end
+        else:  # Opposite strand
+            # Reverse the coordinates for opposite strand
+            # For "-" strand, coordinates are flipped relative to the end
+            new_startB = self.endB - rel_end
+            new_endB = self.endB - rel_start
+        
+        # Create new refined pair
+        refined_pair = copy.copy(self)
+        refined_pair.startA = overlap_start
+        refined_pair.endA = overlap_end
+        refined_pair.startB = new_startB
+        refined_pair.endB = new_endB
+        refined_pair.strandA = self.strandA
+        refined_pair.strandB = self.strandB
+        refined_pair.overlap_len = self.overlap_len
+        
+        return refined_pair
+
+
     def __repr__(self):
         """Returns a string representation of the Pair."""
         return (f"Pair({self.chrA}:{self.startA}-{self.endA}:{self.strandA}, {self.chrB}:{self.startB}-{self.endB}:{self.strandB})")
+
+
 
 def _find_umbrella_pairs(groupdf, overlap_len_col, coverage_threshold=0.95):
     """
@@ -140,9 +194,10 @@ def _find_umbrella_pairs(groupdf, overlap_len_col, coverage_threshold=0.95):
     """
     to_remove = set()  # Pairs marked for removal
     chrA, startA, endA, strandA, chrB, startB, endB, strandB = groupdf.columns[:8]
+    chr_target, start_target, end_target = groupdf.columns[8:11]
     
     # Create Pair objects for each row in the group
-    pairs = [Pair(row, chrA, startA, endA, strandA, chrB, startB, endB, strandB, overlap_len_col)
+    pairs = [Pair(row, chrA, startA, endA, strandA, chrB, startB, endB, strandB, overlap_len_col).extract_subsegment_for_target((row[chr_target], row[start_target], row[end_target]))
              for _, row in groupdf.iterrows()]
 
     # print(f"Pairs: {pairs}\n", file=sys.stderr)
