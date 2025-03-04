@@ -91,7 +91,7 @@ class Pair:
              (self.strandB == self.strandA) == (other.strandB == other.strandA))
         )
 
-    def is_umbrella_pair(self, other, coverage_threshold=0.9):
+    def is_umbrella_pair(self, other, coverage_threshold=0.95):
         """
         Checks if this pair is an umbrella pair enclosing another pair.
         Input order matters for the same pair of SDs.
@@ -124,7 +124,7 @@ class Pair:
         return (f"Pair({self.chrA}:{self.startA}-{self.endA}:{self.strandA}, \
                        {self.chrB}:{self.startB}-{self.endB}:{self.strandB})")
 
-def _find_umbrella_pairs(groupdf, overlap_len_col, coverage_threshold=0.9):
+def _find_umbrella_pairs(groupdf, overlap_len_col, coverage_threshold=0.95):
     """
     Internal function to find umbrella pairs within a grouped DataFrame.
     Umbrella pairs (more general pairs that encompass other pairs) are identified for removal.
@@ -167,7 +167,7 @@ def _find_umbrella_pairs(groupdf, overlap_len_col, coverage_threshold=0.9):
     return [pairs[i].row_index for i in to_remove]
 
 
-def filter_umbrella_pairs(groupdf, coverage_threshold=0.9, overlap_len_col="overlap_len"):
+def filter_umbrella_pairs(groupdf, coverage_threshold=0.95, overlap_len_col="overlap_len"):
     """
     Filters out umbrella pairs from a grouped DataFrame.
 
@@ -192,7 +192,7 @@ def filter_umbrella_pairs(groupdf, coverage_threshold=0.9, overlap_len_col="over
     groupdf.reset_index(inplace=True) # Keep track of original index before dropping rows.
 
     # 2. Find umbrella pairs (using the internal function)
-    umbrella_indices = _find_umbrella_pairs(groupdf, coverage_threshold, overlap_len_col)
+    umbrella_indices = _find_umbrella_pairs(groupdf, overlap_len_col, coverage_threshold)
 
     # 3. Filter the DataFrame
     filtered_df = groupdf.drop(index=umbrella_indices) # Drop based on original indices.
