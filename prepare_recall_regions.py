@@ -98,6 +98,7 @@ def prepare_recall_regions( paths: SDrecallPaths,
                                                              "overlap_len"]).loc[:,["chr_1", "start_1", "end_1", "strand1",
                                                                                     "chr_2", "start_2", "end_2", "strand2",
                                                                                     "chr_bam1", "start_bam1", "end_bam1", "mismatch_rate", "overlap_len"]].drop_duplicates().dropna()
+    total_bin_sd_df.sort_values(by=["chr_bam1", "start_bam1", "end_bam1"], inplace=True)
     # Filter out the SD pairs with either one of them on alternative contigs
     # Need to prepare the regex for main contig names first
     main_contigs_pattern = r'^(chr)?([0-9]+|[XYM]|MT)$'
@@ -121,12 +122,12 @@ def prepare_recall_regions( paths: SDrecallPaths,
     by_bam_region = [ g for _, g in total_bin_sd_df.groupby(["chr_bam1", "start_bam1", "end_bam1"], as_index=False) ]
     with Pool(threads) as pool:
         results = pool.imap_unordered(filter_umbrella_pairs, by_bam_region)
-        total_bin_sd_df = pd.concat(results, axis=0, ignore_index=True).loc[:, ["chr_1", "start_1", "end_1", "strand1",
+        total_bin_sd_df = pd.concat(results, axis=0, ignore_index=True).drop_duplicates().dropna().sort_values(by=["chr_bam1", "start_bam1", "end_bam1"])
+    logger.info("After filtering umbrella SD pairs, the total SD map contains {} SD pairs:\n{}".format(total_bin_sd_df.shape[0], total_bin_sd_df.head(10).to_string(index=False)))
+
+    total_bin_sd_df = total_bin_sd_df.loc[:, ["chr_1", "start_1", "end_1", "strand1",
                                                                                 "chr_2", "start_2", "end_2", "strand2", 
                                                                                 "mismatch_rate"]].drop_duplicates().dropna()
-
-    logger.info("After filtering umbrella SD pairs, the total SD map contains {} SD pairs:\n{}".format(total_bin_sd_df.shape[0], total_bin_sd_df.head(10).to_string(index=False)))
-    
     ## Remove the duplicated SD combinations (i.e. same SD pair in different order)
     total_bin_sd_df.loc[:, "frozenset_indx"] = total_bin_sd_df.apply(lambda row: frozenset({ row["chr_1"]+":"+str(row["start_1"])+"-"+str(row["end_1"])+":"+row["strand1"], row["chr_2"]+":"+str(row["start_2"])+"-"+str(row["end_2"])+":"+row["strand2"]}), axis=1)
     total_bin_sd_df = total_bin_sd_df.drop_duplicates(subset="frozenset_indx").drop(columns=["frozenset_indx"])
