@@ -1,3 +1,4 @@
+import sys
 import pandas as pd
 import logging
 import numpy as np
@@ -112,17 +113,17 @@ class Pair:
 
         # Calculate overlap fractions
         coverage_fraction_A, coverage_fraction_B = self.calculate_interval_overlaps(other, fraction_select="other")
+        # print(f"Coverage fractions: {coverage_fraction_A}, {coverage_fraction_B} between {self} and {other}", file=sys.stderr)
         if coverage_fraction_A < coverage_threshold or coverage_fraction_B < coverage_threshold:
             return False
 
-        # Check if this pair's overlap length is greater than or equal to the other's
-        return self.overlap_len >= other.overlap_len
+        # Check if this pair's overlap length is smaller than or equal to the other's
+        return self.overlap_len <= other.overlap_len
 
 
     def __repr__(self):
         """Returns a string representation of the Pair."""
-        return (f"Pair({self.chrA}:{self.startA}-{self.endA}:{self.strandA}, \
-                       {self.chrB}:{self.startB}-{self.endB}:{self.strandB})")
+        return (f"Pair({self.chrA}:{self.startA}-{self.endA}:{self.strandA}, {self.chrB}:{self.startB}-{self.endB}:{self.strandB})")
 
 def _find_umbrella_pairs(groupdf, overlap_len_col, coverage_threshold=0.95):
     """
@@ -143,6 +144,8 @@ def _find_umbrella_pairs(groupdf, overlap_len_col, coverage_threshold=0.95):
     # Create Pair objects for each row in the group
     pairs = [Pair(row, chrA, startA, endA, strandA, chrB, startB, endB, strandB, overlap_len_col)
              for _, row in groupdf.iterrows()]
+
+    # print(f"Pairs: {pairs}\n", file=sys.stderr)
     
     # Compare each pair to every other pair
     for i in range(len(pairs)):
@@ -155,10 +158,12 @@ def _find_umbrella_pairs(groupdf, overlap_len_col, coverage_threshold=0.95):
             
             # Check umbrella relationship (if one pair encompasses the other)
             if pairs[i].is_umbrella_pair(pairs[j], coverage_threshold):
+                # print(f"Comparing {pairs[i]} to {pairs[j]}", file=sys.stderr)
                 # If i is an umbrella pair for j, remove i and stop comparing i
                 to_remove.add(i)
                 break  # No need to compare i with other pairs
             elif pairs[j].is_umbrella_pair(pairs[i], coverage_threshold):
+                # print(f"Comparing {pairs[j]} to {pairs[i]}", file=sys.stderr)
                 # If j is an umbrella pair for i, remove j and continue with i
                 to_remove.add(j)
                 # Continue comparing i with other pairs
@@ -186,12 +191,9 @@ def filter_umbrella_pairs(groupdf, coverage_threshold=0.95, overlap_len_col="ove
     chrA, startA, endA, strandA, chrB, startB, endB, strandB = groupdf.columns[:8]
     groupdf.drop_duplicates(inplace=True)
     groupdf.reset_index(drop=True, inplace=True)  # Reset index after dropping duplicates
-    groupdf["size"] = (groupdf[endA] - groupdf[startA]) + (groupdf[endB] - groupdf[startB])
-    groupdf.sort_values(by="size", ascending=False, inplace=True) # Sort by the size of the pairs, so that the larger pairs are more likely to be kept.
-    groupdf.drop(columns=["size"], inplace=True) # Remove the temp "size" column
-    groupdf.reset_index(inplace=True) # Keep track of original index before dropping rows.
 
     # 2. Find umbrella pairs (using the internal function)
+    # print(f"Grouped DataFrame: \n{groupdf.head(10).to_string(index=False)}", file=sys.stderr)
     umbrella_indices = _find_umbrella_pairs(groupdf, overlap_len_col, coverage_threshold)
 
     # 3. Filter the DataFrame
