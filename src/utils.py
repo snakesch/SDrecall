@@ -21,12 +21,12 @@ def executeCmd(cmd, logger = logger) -> None:
     logger.debug(f"Command run: {cmd}")
     logger.debug(f"Return code: {proc.returncode}")
 
-    err_msg = proc.stderr.decode()
-    if err_msg != "":
-        logger.debug(proc.stderr.decode())
+    log_msg = proc.stderr.decode()
+    if log_msg != "":
+        logger.debug(f"Log message: \n{log_msg}")
         
     if proc.returncode != 0:
-        raise RuntimeError(err_msg)
+        raise RuntimeError(log_msg)
 
     return proc.stdout.decode()
 
@@ -114,7 +114,7 @@ def sortBed_and_merge(bed_file, output=None):
     
     return None
     
-def merge_bed_files(bed_files: List[str], tmp_dir: str = "/tmp") -> BedTool:
+def merge_bed_files(bed_files: List[str], tmp_dir: str = "/tmp", output_bed = None) -> BedTool:
     """Merges multiple BED files using pybedtools. Returns BedTool."""
     helpers.set_tempdir(tmp_dir)
     bed_files = list(dict.fromkeys(bed_files))  # Remove duplicates
@@ -125,7 +125,12 @@ def merge_bed_files(bed_files: List[str], tmp_dir: str = "/tmp") -> BedTool:
     merged_bedtool = bedtools_list[0]
     for bt in bedtools_list[1:]:
         merged_bedtool = merged_bedtool.cat(bt, postmerge=False)
-    return merged_bedtool.sort()
+
+    if output_bed is None:
+        return merged_bedtool.sort()
+    else:
+        merged_bedtool.sort().saveas(output_bed)
+        return output_bed
 
 
 # - VCF/BCF file manipulation using bcftools -# 
@@ -166,7 +171,7 @@ def merge_bams(bam_list: list,
                merged_bam: str, 
                ref_fasta = "/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta",
                threads = 2,
-			   tmp_dir = "/tmp",
+               tmp_dir = "/tmp",
                logger = logger):
     # For data visualization and debugging
     merged_bam_header = merged_bam.replace(".bam", ".header")

@@ -7,6 +7,7 @@ import pandas as pd
 import sys
 import logging
 from itertools import repeat
+from collections import defaultdict
 
 from preparation.graph_traversal import traverse_network_to_get_homology_counterparts
 from preparation.homoseq_region import HOMOSEQ_REGION
@@ -135,6 +136,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                                         directed_graph, 
                                         graph_path = "", 
                                         reference_fasta = "",
+                                        tmp_dir = "/tmp",
                                         avg_frag_size = 500, 
                                         std_frag_size = 150, 
                                         threads = 12,
@@ -207,6 +209,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                                               qnode_components,
                                               repeat(tuple([int(v) for v in qnode_vertices])),
                                               repeat(reference_fasta),
+                                              repeat(tmp_dir),
                                               repeat(avg_frag_size), 
                                               repeat(std_frag_size)))
 
@@ -254,14 +257,27 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
     # Save the annotated graph to a graphml file
     if graph_path:
         nx.write_graphml(unfiltered_graph, graph_path)
+        
     # Identify the qnodes that are in the same graph component in the new connected_qnodes_graph
     qnode_components = list(nx.connected_components(connected_qnodes_graph))
     
-    logger.debug(f"The connected qnode graph has {len(qnode_components)} subgraphs. One component has {len(qnode_components[0])} nodes:\n{qnode_components[0]}")
-    return sd_paralog_pairs, qnode_components
+    logger.info(f"The connected qnode graph has {len(qnode_components)} subgraphs. One component has {len(qnode_components[0])} nodes:\n{qnode_components[0]}")
+    return sd_paralog_pairs, connected_qnodes_graph
+
+
+def pick_from_each_group(qnode_groups):
+    '''
+    Identify non-homologous groups of qnodes for building masked genomes
+    '''
+    from itertools import zip_longest
+
+    unique_qnodes = list(zip_longest(*qnode_groups, fillvalue=None))
+    unique_qnodes = list(dict.fromkeys([tuple([ e for e in sublist if e is not None]) for sublist in unique_qnodes]))
+    return unique_qnodes
+
 
 def query_connected_nodes(sd_paralog_pairs, 
-                          connected_qnode_components):
+                          connected_qnode_graph):
     """
     Inputs:
     sd_paralog_pairs: dict = {(qnode): (cnode1, cnode2, ...), ...}
@@ -269,20 +285,9 @@ def query_connected_nodes(sd_paralog_pairs,
 
     Note: A query node can also be a cnode of another qnode.
     """
-
-    def pick_from_each_group(qnode_groups):
-        '''
-        Identify non-homologous groups of qnodes for building masked genomes
-        '''
-        from itertools import zip_longest
-
-        unique_qnodes = list(zip_longest(*qnode_groups, fillvalue=None))
-        unique_qnodes = list(dict.fromkeys([tuple([ e for e in sublist if e is not None]) for sublist in unique_qnodes]))
-        return unique_qnodes
-      
     # Identify qnodes that can be put into the same masked genome
-    unique_qnodes = pick_from_each_group(connected_qnode_components)
-    logger.debug("{} groups of qnodes can be put into the same masked genome: \n{}".format(len(unique_qnodes), "\n".join(str(g) for g in unique_qnodes)))
+    unique_qnodes = optimal_node_grouping(connected_qnode_graph)
+    logger.info("{} groups of qnodes (splitted via graph coloring) can be put into the same masked genome: \n{}".format(len(unique_qnodes), "\n".join(str(g) for g in unique_qnodes)))
     
     grouped_results = []
     for group in unique_qnodes:
@@ -298,3 +303,60 @@ def query_connected_nodes(sd_paralog_pairs,
 
     logger.info(f"Total {len(grouped_results) + 1} SD-paralog pairs for the preparation of realignment bed file")
     return grouped_results
+
+
+def optimal_node_grouping(g, min_distance=6):
+    """
+    Group nodes from a graph such that:
+    1. Nodes from the same component must be at least min_distance edges apart
+    2. Minimize the number of groups
+    
+    Args:
+        g: A graph-tool Graph
+        min_distance: Minimum distance between nodes in same component (default: 6)
+        
+    Returns:
+        List of node groups
+    """
+    # Step 1: Identify components
+    component_labels = gt.label_components(g)[0].a
+    components = defaultdict(list)
+    for v in g.vertices():
+        components[component_labels[v]].append(int(v))
+    
+    # Step 2: Build conflict graph (nodes that can't be in the same group)
+    conflict_graph = gt.Graph(directed=False)
+    vertex_map = {}  # Maps original vertices to conflict graph vertices
+    
+    # Add all vertices to conflict graph
+    for comp_id, vertices in components.items():
+        for v in vertices:
+            vertex_map[v] = conflict_graph.add_vertex()
+    
+    # Step 3: Add edges for conflicts (distance < min_distance)
+    for comp_id, vertices in components.items():
+        if len(vertices) <= 1:
+            continue
+            
+        # For each component, compute all-pairs shortest paths
+        for i, v1 in enumerate(vertices):
+            for v2 in vertices[i+1:]:
+                # Find shortest path distance
+                dist_map = gt.shortest_distance(g, v1, v2)
+                dist = dist_map[v2]
+                
+                # If distance is less than minimum, add conflict edge
+                if 0 < dist < min_distance:
+                    conflict_graph.add_edge(vertex_map[v1], vertex_map[v2])
+    
+    # Step 4: Color the conflict graph
+    colors = gt.sequential_vertex_coloring(conflict_graph)
+    
+    # Step 5: Group vertices by color
+    groups = defaultdict(list)
+    for v in g.vertices():
+        v_int = int(v)
+        color = colors[vertex_map[v_int]]
+        groups[color].append(v_int)
+    
+    return list(groups.values())

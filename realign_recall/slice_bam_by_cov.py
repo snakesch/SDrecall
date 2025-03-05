@@ -15,7 +15,7 @@ def imap_slice_bam_per_bed(tup_args):
 
 
 @log_command
-def slice_bam_per_bed(bed, bam, ref_genome, threads = 4, logger = logger):
+def slice_bam_per_bed(bed, bam, ref_genome, threads = 4, tmp_dir = "/tmp", logger = logger):
     # assert os.path.basename(bed).split(".")[-2] != chunk_id, f"The bed file {bed} should not have the same chunk_id as the previous bed file"
     chunk_id = os.path.basename(bed).split(".")[-2]
     cov_bam = bam.replace(".bam", f".{chunk_id}.bam")
@@ -37,8 +37,8 @@ def slice_bam_per_bed(bed, bam, ref_genome, threads = 4, logger = logger):
         executeCmd(cmd, logger = logger)
         # We need to make sure the index update is atomic
 
-    cmd = f"sambamba slice -q -L {bed} {bam} | \
-            sambamba sort -q -t {threads} -o {cov_bam} /dev/stdin && \
+    cmd = f"sambamba view -q -t {threads} -f unpack -L {bed} {bam} | \
+            sambamba sort -q -t {threads} --tmpdir {tmp_dir} -o {cov_bam} /dev/stdin && \
             bash {shell_utils} modify_bam_sq_lines {cov_bam} {ref_genome} {cov_bam_header} && \
             samtools reheader {cov_bam_header} {cov_bam} > {cov_bam}.tmp && \
             mv {cov_bam}.tmp {cov_bam} && \
@@ -110,6 +110,7 @@ def split_bam_by_cov(bam,
                      beds = [],
                      threads = 4,
                      ref_genome = "",
+                     tmp_dir = "/tmp",
                      logger = logger):
     
     if len(beds) == 0:
@@ -134,7 +135,8 @@ def split_bam_by_cov(bam,
         result_records = pool.imap(imap_slice_bam_per_bed, zip( beds, 
                                                                 repeat(bam),
                                                                 repeat(ref_genome), 
-                                                                repeat(1)))
+                                                                repeat(1), 
+                                                                repeat(tmp_dir)))
 
         splitted_bams = []
         i=0

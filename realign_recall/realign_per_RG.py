@@ -3,7 +3,7 @@
 
 from src.log import logger, log_command
 from src.const import shell_utils
-from src.utils import executeCmd
+from src.utils import executeCmd, merge_bed_files
 from realign_recall.read_extraction import bam_to_fastq_biobambam
 
 
@@ -13,15 +13,15 @@ def imap_process_masked_bam(tup_args):
 
 @log_command
 def process_masked_bam( rg_tag,
-						rg_bed,
+                        rg_bed,
                         rg_fc_beds,
                         rg_nfc_beds,
                         original_bam,
-						raw_masked_bam,
-						masked_genome,
+                        raw_masked_bam,
+                        masked_genome,
                         sample_ID,
-						sd_freads,
-						sd_rreads,
+                        sd_freads,
+                        sd_rreads,
                         threads=1,
                         mq_cutoff=20,
                         ref_genome="",
@@ -36,10 +36,8 @@ def process_masked_bam( rg_tag,
     rg_fc_bed = rg_bed.replace(".bed", ".targeted.bed")
     rg_nfc_bed = rg_bed.replace(".bed", ".counterparts_regions.targeted.bed")
 
-    cmd = f"cat {' '.join(rg_fc_beds)} | bedtools sort -i - | bedtools merge -i - > {rg_fc_bed}"
-    executeCmd(cmd, logger=logger)
-    cmd = f"cat {' '.join(rg_nfc_beds)} | bedtools sort -i - | bedtools merge -i - > {rg_nfc_bed}"
-    executeCmd(cmd, logger=logger)
+    rg_fc_bed = merge_bed_files(rg_fc_beds, output_bed=rg_fc_bed)
+    rg_nfc_bed = merge_bed_files(rg_nfc_beds, output_bed=rg_nfc_bed)
 
     raw_masked_vcf = raw_masked_bam.replace(".bam", ".vcf.gz")
 
@@ -84,7 +82,7 @@ def process_masked_bam( rg_tag,
         
         # Now perform the mapping
         cmd = f"bash {shell_utils} \
-			    independent_minimap2_masked \
+                independent_minimap2_masked \
                 -a {masked_genome} \
                 -s {sample_ID} \
                 -f {sd_freads} \

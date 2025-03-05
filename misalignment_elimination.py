@@ -57,7 +57,7 @@ def eliminate_misalignments(input_bam,
                             mapq_cutoff = 20,
                             basequal_median_cutoff = 15,
                             edge_weight_cutoff = 0.201,
-                            cache_dir = None,
+                            cache_dir = "/tmp",
                             logger = logger):
 
     self_path = os.path.abspath(__file__)
@@ -74,12 +74,14 @@ def eliminate_misalignments(input_bam,
                                                         delimiter_size=int(np.ceil(2*avg_frag_size)), 
                                                         logger = logger, 
                                                         threads = threads,
-                                                        ref_genome = ref_genome)
+                                                        ref_genome = ref_genome,
+                                                        tmp_dir = cache_dir)
         splitted_intrin_bams, _ = split_bam_by_cov( intrinsic_bam, 
                                                     beds = splitted_beds, 
                                                     logger = logger, 
                                                     threads = threads,
-                                                    ref_genome = ref_genome )
+                                                    ref_genome = ref_genome,
+                                                    tmp_dir = cache_dir)
         
         # There is a possiblity that the splitted_intrin_bams might be empty, so we need to check it
         # Sort the list for load balancing

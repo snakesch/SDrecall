@@ -156,10 +156,11 @@ def prepare_recall_regions( paths: SDrecallPaths,
 
     # Step 5. Pool all SD nodes and the corresponding paralogous regions from the SD + PO graph
     final_graph_path = paths.annotated_graph_path()
-    sd_paralog_pairs, connected_qnode_components = extract_SD_paralog_pairs_from_graph( query_nodes, 
+    sd_paralog_pairs, connected_qnode_graph = extract_SD_paralog_pairs_from_graph( query_nodes, 
                                                                                         graph, 
                                                                                         graph_path = final_graph_path, 
                                                                                         reference_fasta = ref_genome,
+                                                                                        tmp_dir = paths.tmp_dir,
                                                                                         avg_frag_size = avg_frag_size, 
                                                                                         std_frag_size = std_frag_size, 
                                                                                         threads=threads )
@@ -167,7 +168,7 @@ def prepare_recall_regions( paths: SDrecallPaths,
     
     # Step 6: Collapse qnodes by identifying qnodes that can be put in the same masked genome
     grouped_qnode_cnodes = query_connected_nodes(sd_paralog_pairs, 
-                                                 connected_qnode_components)
+                                                 connected_qnode_graph)
 
     '''
     (Debug code) Enumerate qnodes and cnodes in the graph. (FC -> qnode; NFC -> cnode)

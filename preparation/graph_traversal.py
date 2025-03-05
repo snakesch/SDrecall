@@ -78,6 +78,7 @@ def compare_homologous_sequences(
     ori_qnode: tuple,
     cnode: HOMOSEQ_REGION,
     reference_fasta: str,
+    tmp_dir: str = "/tmp",
     min_similarity: float = 0.95,
     logger: logging.Logger = logger) -> Tuple[bool, float]:
     """
@@ -98,20 +99,20 @@ def compare_homologous_sequences(
     qnode_rela_start, qnode_rela_end = cnode.qnode_relative_region(ori_qnode.data, logger=logger)
     qnode_region = f"{ori_qnode[0]}:{ori_qnode[1] + qnode_rela_start}-{ori_qnode[1] + qnode_rela_end}"
     qnode_strand = ori_qnode[3]
-    logger.info(f"The query node {ori_qnode} has relative coordinates {qnode_rela_start} and {qnode_rela_end} and the region is {qnode_region} at strand {qnode_strand}")
+    logger.debug(f"The query node {ori_qnode} has relative coordinates {qnode_rela_start} and {qnode_rela_end} and the region is {qnode_region} at strand {qnode_strand}")
 
     cnode_region_tup = tuple([str(field) for field in cnode])
     cnode_region = f"{cnode_region_tup[0]}:{cnode_region_tup[1]}-{cnode_region_tup[2]}"
     cnode_strand = cnode_region_tup[3]
-    logger.info(f"The counterpart node {cnode.data} has relative coordinates {cnode.ups_rela_start} and {cnode.ups_rela_end} and the region is {cnode_region} at strand {cnode_strand}")
+    logger.debug(f"The counterpart node {cnode.data} has relative coordinates {cnode.ups_rela_start} and {cnode.ups_rela_end} and the region is {cnode_region} at strand {cnode_strand}")
 
     if qnode_rela_start == "NaN" or qnode_rela_end == "NaN":
         logger.warning(f"Invalid relative coordinates for {cnode.data}")
         return False, 0.0
 
     # Create temporary FASTA files for the regions
-    tmp_q = prepare_tmp_file(suffix=".fasta")
-    tmp_c = prepare_tmp_file(suffix=".fasta")
+    tmp_q = prepare_tmp_file(suffix=".fasta", tmp_dir=tmp_dir)
+    tmp_c = prepare_tmp_file(suffix=".fasta", tmp_dir=tmp_dir)
     
     try:
         # Extract query sequence
@@ -134,8 +135,8 @@ def compare_homologous_sequences(
         tmp_c.close()
 
         # Run minimap2 for alignment
-        tmp_paf = prepare_tmp_file(suffix=".paf")
-        cmd_map = f"minimap2 -x asm5 --eqx --cs -c {tmp_q.name} {tmp_c.name} > {tmp_paf.name}"
+        tmp_paf = prepare_tmp_file(suffix=".paf", tmp_dir=tmp_dir)
+        cmd_map = f"minimap2 -x asm5 --eqx --cs -c {tmp_q.name} {tmp_c.name} > {tmp_paf.name} && rm {tmp_q.name} {tmp_c.name}"
         executeCmd(cmd_map, logger=logger)
 
         # Parse PAF file to calculate similarity
@@ -154,9 +155,9 @@ def compare_homologous_sequences(
                 similarity = matches / aln_len if aln_len > 0 else 0
                 
                 # Check if similarity meets threshold
-                is_similar = similarity >= min_similarity
+                is_similar = similarity > min_similarity
                 
-                logger.info(f"Sequence similarity between qnode {qnode_region} and cnode {cnode_region}: {similarity:.3f}")
+                logger.debug(f"Sequence similarity between qnode {qnode_region} and cnode {cnode_region}: {similarity:.3f}")
                 return is_similar, similarity
 
         # If no alignment found
@@ -179,6 +180,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
                                           subgraph_label,
                                           all_qnode_vertices,
                                           reference_fasta,
+                                          tmp_dir = "/tmp",
                                           avg_frag_size = 500, 
                                           std_frag_size = 150,
                                           logger = logger):
@@ -226,6 +228,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
             is_similar, similarity = compare_homologous_sequences(ori_qnode, 
                                                                   cnode, 
                                                                   reference_fasta, 
+                                                                  tmp_dir = tmp_dir,
                                                                   min_similarity = 0.95, 
                                                                   logger = logger )
         else:
@@ -233,7 +236,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
             similarity = 0.0
         
         if is_similar:
-            logger.info(f"Found a new counterparts node {cnode} for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes. The similarity is {similarity}. The traverse route is {cnode.traverse_route} \n")
+            logger.debug(f"Found a new counterparts node {cnode} for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes. The similarity is {similarity}. The traverse route is {cnode.traverse_route} \n")
             counter_nodes.append(cnode)
 
     if len(counter_nodes) == 0:
@@ -243,11 +246,13 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
         logger.debug(f"Found {len(counter_nodes)} new cnodes for qnode {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes, (one of the node is {HOMOSEQ_REGION(shortest_path_verts[-1], graph)})")
         return counter_nodes, [c for c in counter_nodes if c.vertex in all_qnode_vertices]
 
+
 @log_command
 def traverse_network_to_get_homology_counterparts(qnode, 
                                                   directed_graph, 
                                                   all_qnode_vertices,
                                                   reference_fasta,
+                                                  tmp_dir = "/tmp",
                                                   avg_frag_size=500, 
                                                   std_frag_size=150,
                                                   logger = logger):
@@ -279,8 +284,9 @@ def traverse_network_to_get_homology_counterparts(qnode,
                                                                             uniq_comp_labels[i],
                                                                             all_qnode_vertices, 
                                                                             reference_fasta,
-                                                                            avg_frag_size, 
-                                                                            std_frag_size,
+                                                                            tmp_dir = tmp_dir,
+                                                                            avg_frag_size = avg_frag_size, 
+                                                                            std_frag_size = std_frag_size,
                                                                             logger = logger)
         counterparts_nodes += cnodes
         total_query_counter_nodes += query_counter_nodes
