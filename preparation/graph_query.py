@@ -277,8 +277,6 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
         # Save the annotated graph to a graphml file
         if graph_path:
             nx.write_graphml(unfiltered_graph, graph_path)
-        
-        logger.info(f"The connected qnode graph has {gt.label_components(connected_qnodes_gt)[0].max() + 1} subgraphs.")
         return sd_paralog_pairs, connected_qnodes_gt
 
 
@@ -347,10 +345,13 @@ def optimal_node_grouping(g, min_distance=6):
         List of node groups
     """
     # Step 1: Identify components
-    component_labels = gt.label_components(g)[0].a
+    component_labels, _ = gt.label_components(g)
     components = defaultdict(list)
+    
+    # Fix: Access component_labels with vertex object directly
     for v in g.vertices():
-        components[component_labels[v]].append(int(v))
+        comp_id = component_labels[v]  # Use vertex object directly
+        components[comp_id].append(int(v))
     
     # Step 2: Build conflict graph (nodes that can't be in the same group)
     conflict_graph = gt.Graph(directed=False)
@@ -370,8 +371,8 @@ def optimal_node_grouping(g, min_distance=6):
         for i, v1 in enumerate(vertices):
             for v2 in vertices[i+1:]:
                 # Find shortest path distance
-                dist_map = gt.shortest_distance(g, v1, v2)
-                dist = dist_map[v2]
+                dist_map = gt.shortest_distance(g, g.vertex(v1), g.vertex(v2))
+                dist = dist_map[g.vertex(v2)]
                 
                 # If distance is less than minimum, add conflict edge
                 if 0 < dist < min_distance:
@@ -384,7 +385,8 @@ def optimal_node_grouping(g, min_distance=6):
     groups = defaultdict(list)
     for v in g.vertices():
         v_int = int(v)
-        color = colors[vertex_map[v_int]]
+        conflict_v = vertex_map[v_int]
+        color = colors[conflict_v]
         groups[color].append(v_int)
     
     return list(groups.values())
