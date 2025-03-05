@@ -136,7 +136,7 @@ def compare_homologous_sequences(
 
         # Run minimap2 for alignment
         tmp_paf = prepare_tmp_file(suffix=".paf", tmp_dir=tmp_dir)
-        cmd_map = f"minimap2 -x asm5 --eqx --cs -c {tmp_q.name} {tmp_c.name} > {tmp_paf.name} && rm {tmp_q.name} {tmp_c.name}"
+        cmd_map = f"minimap2 -x asm5 -t 1 --eqx --cs -c {tmp_q.name} {tmp_c.name} > {tmp_paf.name} && rm {tmp_q.name} {tmp_c.name}"
         executeCmd(cmd_map, logger=logger)
 
         # Parse PAF file to calculate similarity
