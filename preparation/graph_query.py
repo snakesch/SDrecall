@@ -144,7 +144,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
     '''
     Returns:
     sd_paralog_pairs: dict = {(qnode): (cnode1, cnode2, ...), ...}
-    qnode_components: List[List[node]]
+    connected_qnodes_gt: graph-tool Graph object
     '''
     # query_nodes: pd.DataFrame (columns = chr, start, end, strand)
     query_nodes = list(zip(query_nodes["chr"], query_nodes["start"], query_nodes["end"], query_nodes["strand"]))
@@ -213,10 +213,24 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                                               repeat(avg_frag_size), 
                                               repeat(std_frag_size)))
 
-        # Identify the paralogous regions (counterparts) associated with each SD (qnode) and annotate them on the directed graph
+        # Instead of creating a NetworkX graph, create a graph-tool graph directly
+        connected_qnodes_gt = gt.Graph(directed=False)
+        
+        # Create vertex property to store node data
+        v_prop = connected_qnodes_gt.new_vertex_property("object")
+        connected_qnodes_gt.vertex_properties["node_data"] = v_prop
+        
+        # Create a mapping between qnodes and vertices in the graph-tool graph
+        node_to_vertex = {}
+        
+        # Add all qnodes as vertices
+        for qnode in sorted_query_nodes:
+            v = connected_qnodes_gt.add_vertex()
+            v_prop[v] = qnode
+            node_to_vertex[qnode] = v
+        
         i = 0
         sd_paralog_pairs = {}
-        connected_qnodes_graph = nx.Graph()
         for success, tup, logs in hom_results:
             logger.debug(f"*********************************** {i}_subprocess_start_for_traverse_network ***************************************")
             if not success:
@@ -242,27 +256,30 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                     i+=1
                     continue
                 
-                # Add edges between qnode and its counterparts in the connected qnodes graph
-                connected_qnodes_graph.add_node(qnode)
+                # Add edges between qnode and its counterparts in the graph-tool graph
                 for cnode in query_counter_nodes:
                     # cnode: HOMOSEQ_REGION object
-                    connected_qnodes_graph.add_edge(qnode, cnode.data)
-                # qnode: tuple = (tuple_node, [list of nodes in self-defined class HOMOSEQ_REG])
-                assert isinstance(qnode, tuple)
+                    cnode_data = cnode.data
+                    
+                    # Add vertex for cnode if it doesn't exist yet
+                    if cnode_data not in node_to_vertex:
+                        v = connected_qnodes_gt.add_vertex()
+                        v_prop[v] = cnode_data
+                        node_to_vertex[cnode_data] = v
+                    
+                    # Add edge between qnode and cnode
+                    connected_qnodes_gt.add_edge(node_to_vertex[qnode], node_to_vertex[cnode_data])
                 
             logger.debug(logs)
             logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************")
             i+=1
-   
-    # Save the annotated graph to a graphml file
-    if graph_path:
-        nx.write_graphml(unfiltered_graph, graph_path)
         
-    # Identify the qnodes that are in the same graph component in the new connected_qnodes_graph
-    qnode_components = list(nx.connected_components(connected_qnodes_graph))
-    
-    logger.info(f"The connected qnode graph has {len(qnode_components)} subgraphs. One component has {len(qnode_components[0])} nodes:\n{qnode_components[0]}")
-    return sd_paralog_pairs, connected_qnodes_graph
+        # Save the annotated graph to a graphml file
+        if graph_path:
+            nx.write_graphml(unfiltered_graph, graph_path)
+        
+        logger.info(f"The connected qnode graph has {gt.label_components(connected_qnodes_gt)[0].max() + 1} subgraphs.")
+        return sd_paralog_pairs, connected_qnodes_gt
 
 
 def pick_from_each_group(qnode_groups):
@@ -277,23 +294,34 @@ def pick_from_each_group(qnode_groups):
 
 
 def query_connected_nodes(sd_paralog_pairs, 
-                          connected_qnode_graph):
+                          connected_qnodes_gt):
     """
     Inputs:
     sd_paralog_pairs: dict = {(qnode): (cnode1, cnode2, ...), ...}
-    qnode_components: List[List[node]]
+    connected_qnodes_gt: graph-tool Graph
 
     Note: A query node can also be a cnode of another qnode.
     """
+    # Now connected_qnodes_gt is already a graph-tool graph
     # Identify qnodes that can be put into the same masked genome
-    unique_qnodes = optimal_node_grouping(connected_qnode_graph)
-    logger.info("{} groups of qnodes (splitted via graph coloring) can be put into the same masked genome: \n{}".format(len(unique_qnodes), "\n".join(str(g) for g in unique_qnodes)))
+    unique_qnodes = optimal_node_grouping(connected_qnodes_gt)
+    
+    # Get the original node data from graph-tool vertices
+    v_prop = connected_qnodes_gt.vertex_properties["node_data"]
+    node_groups = []
+    for group in unique_qnodes:
+        # Convert vertex indices back to node data
+        node_group = [v_prop[connected_qnodes_gt.vertex(v_idx)] for v_idx in group]
+        node_groups.append(node_group)
+    
+    logger.debug("{} groups of qnodes (splitted via graph coloring) can be put into the same masked genome: \n{}".format(
+        len(node_groups), "\n".join(str(g) for g in node_groups)))
     
     grouped_results = []
-    for group in unique_qnodes:
+    for group in node_groups:
         sd_counterparts = [cnode for qnode in group for cnode in sd_paralog_pairs.get(qnode, [])]
         if len(group) == 0:
-            logger.warning(f"Empty group in the unique_qnodes: {unique_qnodes}")
+            logger.warning(f"Empty group in the unique_qnodes: {node_groups}")
         elif len(sd_counterparts) == 0:
             logger.warning(f"No SD counterparts in group {group}. Please check sd_paralog_pairs: {sd_paralog_pairs}.")
         else:
