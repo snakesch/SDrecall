@@ -2,10 +2,7 @@ import networkx as nx
 import graph_tool.all as gt
 
 from multiprocessing import Pool
-import numpy as np
-import pandas as pd
 import sys
-import logging
 from itertools import repeat
 from collections import defaultdict
 
@@ -101,6 +98,7 @@ def convert_networkx_to_graphtool(nx_graph):
         gt_graph.edge_properties[attr] = prop
 
     return gt_graph
+
 
 def sort_query_nodes(query_nodes, graph):
     """
@@ -371,11 +369,10 @@ def optimal_node_grouping(g, min_distance=6):
         for i, v1 in enumerate(vertices):
             for v2 in vertices[i+1:]:
                 # Find shortest path distance
-                dist_map = gt.shortest_distance(g, g.vertex(v1), g.vertex(v2))
-                dist = dist_map[g.vertex(v2)]
+                dist = gt.shortest_distance(g, source = g.vertex(v1), target = g.vertex(v2))
                 
                 # If distance is less than minimum, add conflict edge
-                if 0 < dist < min_distance:
+                if 0 < int(dist) < min_distance:
                     conflict_graph.add_edge(vertex_map[v1], vertex_map[v2])
     
     # Step 4: Color the conflict graph

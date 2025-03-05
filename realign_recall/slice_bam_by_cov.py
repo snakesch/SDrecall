@@ -29,7 +29,7 @@ def slice_bam_per_bed(bed, bam, ref_genome, threads = 4, tmp_dir = "/tmp", logge
         execute = False
 
     if execute:
-        tmp_index = prepare_tmp_file(suffix=".bai").name
+        tmp_index = prepare_tmp_file(suffix=".bai", tmp_dir = tmp_dir).name
         cmd = f"samtools index -b -o {tmp_index} {bam} && \
                 [[ -f {bam_index} ]] && \
                 [[ {bam_index} -nt {bam} ]] || \
@@ -37,8 +37,8 @@ def slice_bam_per_bed(bed, bam, ref_genome, threads = 4, tmp_dir = "/tmp", logge
         executeCmd(cmd, logger = logger)
         # We need to make sure the index update is atomic
 
-    cmd = f"sambamba view -q -t {threads} -f unpack -L {bed} {bam} | \
-            sambamba sort -q -t {threads} --tmpdir {tmp_dir} -o {cov_bam} /dev/stdin && \
+    cmd = f"samtools view -@ {threads} -O u -L {bed} {bam} | \
+            samtools sort -@ {threads} -T {tmp_dir}/{chunk_id}_{os.path.basename(cov_bam)} -o {cov_bam} -O bam - && \
             bash {shell_utils} modify_bam_sq_lines {cov_bam} {ref_genome} {cov_bam_header} && \
             samtools reheader {cov_bam_header} {cov_bam} > {cov_bam}.tmp && \
             mv {cov_bam}.tmp {cov_bam} && \
