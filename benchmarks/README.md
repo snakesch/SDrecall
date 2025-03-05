@@ -1,5 +1,4 @@
-# SDrecall Benchmark BAM Files
-
+# SDrecall TEST BAM Files
 ## Download Information
 
 The BAM files used for benchmarking SDrecall have been moved to Zenodo to reduce the repository size and improve distribution. These files contain aligned sequencing data needed for running the benchmarks.
@@ -9,7 +8,9 @@ The BAM files used for benchmarking SDrecall have been moved to Zenodo to reduce
 ## Available Files
 
 - HG002.SD.deduped.hg19.bam - Human Genome sample HG002 aligned to hg19 reference
+- HG002.SD.deduped.hg19.bam.bai - index to the above BAM file
 - HG002.SD.deduped.hg38.bam - Human Genome sample HG002 aligned to hg38 reference
+- HG002.SD.deduped.hg38.bam.bai - index to the above BAM file
 
 ## Download Instructions
 
@@ -91,3 +92,12 @@ If you use these datasets in your research, please cite both the SDrecall reposi
   url = {https://zenodo.org/records/14965091}
 }
 ```
+
+
+# SDrecall TEST target region
+To allow users to quickly test the integrity and validity of the SDrecall workflow, we offer a small target region targeting the coding segments of around 500 genes known to be causal to Primary ImmunoDeficiencies
+
+Files are offered in this github repository:
+- benchmarks/hg19.coding.pid.pad20.bed
+- benchmarks/hg38.coding.pid.pad20.bed
+
