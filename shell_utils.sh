@@ -451,7 +451,7 @@ function independent_minimap2_masked () {
     minimap2 -ax ${mode} --eqx --MD -F 1000 -t ${threads} -R "@RG\tID:${samp_ID}\tLB:SureSelectXT\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}" \
     ${masked_genome/.fasta/.mmi} ${forward_reads} ${reverse_reads} > ${mid_align} && \
     modify_masked_genome_coords ${mid_align} ${ref_contig_sizes} ${rg_index} | \
-    samtools view -S -b - | samtools sort -O bam -o ${output_align} && \
+    samtools view -S -u -@ ${threads} - | samtools sort -O bam -@ ${threads} -o ${output_align} && \
     samtools index ${output_align}
 
     if check_bam_validity ${output_align} 1; then

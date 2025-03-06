@@ -1,10 +1,10 @@
+import os
 from tempfile import NamedTemporaryFile
-
 from src.utils import executeCmd
 
-def getRawseq(bedf_path: str, fastq_path: str, ref_genome: str, padding = 0):
+def getRawseq(bedf_path: str, fastq_path: str, ref_genome: str, tmp_dir = "/tmp", padding = 0):
     if padding > 0:
-        with NamedTemporaryFile(dir = "/tmp") as tmp_bedf:
+        with NamedTemporaryFile(dir = tmp_dir, suffix = ".bed") as tmp_bedf:
             tmp_bedf_path = tmp_bedf.name
             cmd = f"bedtools slop -i {bedf_path} -g {ref_genome}.fai -b {padding} > {tmp_bedf_path}"
             executeCmd(cmd)

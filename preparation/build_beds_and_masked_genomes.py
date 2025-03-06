@@ -57,7 +57,8 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
             ),
             avg_frag_size,
             std_frag_size,
-            2  # threads per worker
+            1,  # threads per worker
+            sdrecall_paths.tmp_dir
         ))
     
     # Run in parallel
@@ -117,6 +118,7 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
                                   avg_frag_size = 400,
                                   std_frag_size = 140,
                                   threads = 2,
+                                  tmp_dir = "/tmp",
                                   logger = logger):
 
     """
@@ -196,5 +198,6 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
                                 rg_label = label,
                                 avg_frag_size = avg_frag_size,
                                 std_frag_size = std_frag_size,
+                                tmp_dir = tmp_dir,
                                 threads = threads )
     return bam_path

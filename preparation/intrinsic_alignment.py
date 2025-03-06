@@ -15,6 +15,7 @@ def getIntrinsicBam(rg_bed,
                     rg_label = None,
                     avg_frag_size = 400,
                     std_frag_size = 120,
+                    tmp_dir = "/tmp",
                     threads = 2):
     '''
     Generate an intrinsic VCF file from given genomic data.
@@ -40,7 +41,7 @@ def getIntrinsicBam(rg_bed,
     rg_label = rg_label or os.path.basename(rg_bed.replace(".bed",""))
         
     # Reference sequences of SD counterparts are extracted from reference genome
-    getRawseq(all_homo_regions_bed, intrinsic_fastq, ref_genome, padding = avg_frag_size + std_frag_size)
+    getRawseq(all_homo_regions_bed, intrinsic_fastq, ref_genome, tmp_dir = tmp_dir, padding = avg_frag_size + std_frag_size)
     logger.info(f"Reference sequences for intrinsic alignment from {rg_bed} are written to: {intrinsic_fastq}")
     
     # Retrieved counterpart sequences are mapped against masked genomes using minimap2
