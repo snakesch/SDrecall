@@ -164,7 +164,10 @@ def prepare_recall_regions( paths: SDrecallPaths,
                                                                                         avg_frag_size = avg_frag_size, 
                                                                                         std_frag_size = std_frag_size, 
                                                                                         threads=threads )
-    logger.info("{} SD-paralog pairs pooled from SD + PO graph".format(len(sd_paralog_pairs)))
+    # Save the connected qnodes graph (graph-tool graph) to a GRAPHML file
+    connected_qnodes_graph_path = paths.qnode_grouping_graph()
+    connected_qnode_graph.save(connected_qnodes_graph_path, fmt="graphml")
+    logger.info("{} SD-paralog pairs pooled from SD + PO graph. The graph recording similar query nodes is saved to {}".format(len(sd_paralog_pairs), connected_qnodes_graph_path))
     
     # Step 6: Collapse qnodes by identifying qnodes that can be put in the same masked genome
     grouped_qnode_cnodes = query_connected_nodes(sd_paralog_pairs, 

@@ -99,6 +99,7 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
 
     # Perform the realignment and recall
     num_jobs, threads_per_job = configure_parallelism(threads, 4)
+    logger.info(f"The number of jobs is {num_jobs} and the threads per job is {threads_per_job}, we have in total {threads} assigned to this running\n\n")
     pool = ctx.Pool(num_jobs, initializer=pool_init, initargs=(sdrecall_paths.tmp_dir,))
     results = pool.imap_unordered(imap_process_masked_bam, zip( uniq_rgs,
                                                                 rg_query_beds,

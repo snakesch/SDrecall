@@ -216,7 +216,10 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
         
         # Create vertex property to store node data
         v_prop = connected_qnodes_gt.new_vertex_property("object")
+        # Create edge property to store similarity
+        e_prop = connected_qnodes_gt.new_edge_property("double")
         connected_qnodes_gt.vertex_properties["node_data"] = v_prop
+        connected_qnodes_gt.edge_properties["similarity"] = e_prop
         
         # Create a mapping between qnodes and vertices in the graph-tool graph
         node_to_vertex = {}
@@ -255,7 +258,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                     continue
                 
                 # Add edges between qnode and its counterparts in the graph-tool graph
-                for cnode in query_counter_nodes:
+                for cnode, similarity in query_counter_nodes:
                     # cnode: HOMOSEQ_REGION object
                     cnode_data = cnode.data
                     
@@ -266,7 +269,8 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                         node_to_vertex[cnode_data] = v
                     
                     # Add edge between qnode and cnode
-                    connected_qnodes_gt.add_edge(node_to_vertex[qnode], node_to_vertex[cnode_data])
+                    new_edge = connected_qnodes_gt.add_edge(node_to_vertex[qnode], node_to_vertex[cnode_data])
+                    e_prop[new_edge] = similarity
                 
             logger.debug(logs)
             logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************")
@@ -329,7 +333,7 @@ def query_connected_nodes(sd_paralog_pairs,
     return grouped_results
 
 
-def optimal_node_grouping(g, min_distance=6):
+def optimal_node_grouping(g, min_distance=4, max_similarity=0.95):
     """
     Group nodes from a graph such that:
     1. Nodes from the same component must be at least min_distance edges apart
@@ -366,13 +370,25 @@ def optimal_node_grouping(g, min_distance=6):
             continue
             
         # For each component, compute all-pairs shortest paths
-        for i, v1 in enumerate(vertices):
-            for v2 in vertices[i+1:]:
+        for i, v1 in enumerate(vertices):  # v1 is the index
+            for v2 in vertices[i+1:]:  # v2 is the index
                 # Find shortest path distance
-                dist = gt.shortest_distance(g, source = g.vertex(v1), target = g.vertex(v2))
+                _, path_edges = gt.shortest_path(g, source = g.vertex(v1), target = g.vertex(v2))
                 
+                if not path_edges:
+                    continue
+                
+                dist = len(path_edges)
                 # If distance is less than minimum, add conflict edge
                 if 0 < int(dist) < min_distance:
+                    conflict_graph.add_edge(vertex_map[v1], vertex_map[v2])
+                    continue
+
+                accumulated_similarity = 1
+                for edge in path_edges:
+                    accumulated_similarity *= g.edge_properties["similarity"][edge]
+
+                if accumulated_similarity > max_similarity:
                     conflict_graph.add_edge(vertex_map[v1], vertex_map[v2])
     
     # Step 4: Color the conflict graph

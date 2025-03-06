@@ -315,6 +315,10 @@ class SDrecallPaths:
         """Get all registered realign groups"""
         return self.realign_groups
     
+    def qnode_grouping_graph(self) -> str:
+        """Get path for qnode grouping graph"""
+        return os.path.join(self.work_dir, f"{self.basename}_qnode_grouping.graphml")
+    
     # File path getter methods
     def multi_align_bed_path(self) -> str:
         """Path for multi-aligned regions BED file"""

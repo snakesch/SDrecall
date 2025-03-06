@@ -192,6 +192,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
     from operator import mul
 
     counter_nodes = []
+    cnode_similarities = []
 
     n = 0
     for v in subgraph.vertices():
@@ -238,13 +239,14 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
         if is_similar:
             logger.debug(f"Found a new counterparts node {cnode} for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes. The similarity is {similarity}. The traverse route is {cnode.traverse_route} \n")
             counter_nodes.append(cnode)
+            cnode_similarities.append(similarity)
 
     if len(counter_nodes) == 0:
         logger.debug(f"No cnodes found for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes, (one of the node is {HOMOSEQ_REGION(shortest_path_verts[-1], graph)}).")
         return [], []
     else:
         logger.debug(f"Found {len(counter_nodes)} new cnodes for qnode {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes, (one of the node is {HOMOSEQ_REGION(shortest_path_verts[-1], graph)})")
-        return counter_nodes, [c for c in counter_nodes if c.vertex in all_qnode_vertices]
+        return counter_nodes, [t for t in zip(counter_nodes, cnode_similarities) if t[0].vertex in all_qnode_vertices]
 
 
 @log_command
@@ -299,6 +301,6 @@ def traverse_network_to_get_homology_counterparts(qnode,
             sys.exit(2)
         counter_bed_str = "\n".join([str(cnode) for cnode in counterparts_nodes])
         precise_counter_bed_str = "\n".join(["\t".join([str(field) for field in cnode]) for cnode in counterparts_nodes])
-        logger.debug(f"This query node {qnode} has {len(counterparts_nodes)} counterpart nodes:\n{counter_bed_str}\nPrecise counterpart bed coordinates are:\n{precise_counter_bed_str}\n\n")
+        logger.debug(f"This query node {qnode} has {len(counterparts_nodes)} counterpart nodes and {len(total_query_counter_nodes)} of them are query nodes:\n{counter_bed_str}\nPrecise counterpart bed coordinates are:\n{precise_counter_bed_str}\n\n")
 
     return (qnode.data, tuple(counterparts_nodes), tuple(total_query_counter_nodes))  

@@ -67,14 +67,14 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
     i = 0
     intrinsic_bams = []
     for success, result, logs in results:
-        logger.debug(f"{i}th subprocess started")
+        logger.debug(f"****************************************************{i}th subprocess started*************************************************")
         if not success:
             error_mes, tb_str = result
             logger.error(f"An error occurred: {error_mes}\nTraceback: {tb_str}\n")
         else:
             intrinsic_bams.append(result)
         logger.debug(logs)
-        logger.debug(f"{i}th subprocess completed")
+        logger.debug(f"****************************************************{i}th subprocess completed***********************************************\n")
         i+=1
     
     pool.close()
