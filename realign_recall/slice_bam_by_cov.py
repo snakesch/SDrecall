@@ -37,7 +37,7 @@ def slice_bam_per_bed(bed, bam, ref_genome, threads = 4, tmp_dir = "/tmp", logge
         executeCmd(cmd, logger = logger)
         # We need to make sure the index update is atomic
 
-    cmd = f"samtools view -@ {threads} -O u -L {bed} {bam} | \
+    cmd = f"samtools view -@ {threads} -u -L {bed} {bam} | \
             samtools sort -@ {threads} -T {tmp_dir}/{chunk_id}_{os.path.basename(cov_bam)} -o {cov_bam} -O bam - && \
             bash {shell_utils} modify_bam_sq_lines {cov_bam} {ref_genome} {cov_bam_header} && \
             samtools reheader {cov_bam_header} {cov_bam} > {cov_bam}.tmp && \
