@@ -182,17 +182,20 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
     print("\n"*2, "*"*100, file=sys.stderr)
     logger.info(f"START PERFORMING MISALIGNMENT ELIMINATION FOR {sdrecall_paths.sample_id} on file {deduped_raw_bam}")
     print("*"*100, "\n"*2, file=sys.stderr)
+
+    target_region = sdrecall_paths.multi_align_bed_path()
     deduped_raw_bam, pooled_filtered_bam = eliminate_misalignments(deduped_raw_bam,
-                                                                  pooled_filtered_bam,
-                                                                  total_intrinsic_bam,
-                                                                  ref_genome,
-                                                                  avg_frag_size=avg_frag_size,
-                                                                  threads=threads,
-                                                                  numba_threads=numba_threads,
-                                                                  conf_level=conf_level,
-                                                                  mapq_cutoff=mq_cutoff,
-                                                                  cache_dir=sdrecall_paths.tmp_dir,
-                                                                  logger=logger)
+                                                                   pooled_filtered_bam,
+                                                                   total_intrinsic_bam,
+                                                                   ref_genome,
+                                                                   target_regions = target_region,
+                                                                   avg_frag_size=avg_frag_size,
+                                                                   threads=threads,
+                                                                   numba_threads=numba_threads,
+                                                                   conf_level=conf_level,
+                                                                   mapq_cutoff=mq_cutoff,
+                                                                   cache_dir=sdrecall_paths.tmp_dir,
+                                                                   logger=logger)
 
     # Call variants on the filtered BAM file after misalignment elimination
     pooled_filtered_vcf = sdrecall_paths.recall_filtered_vcf_path()

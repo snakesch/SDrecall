@@ -353,7 +353,7 @@ def optimal_node_grouping(g, min_distance=2, max_similarity=None):
     similarity_prop = g.edge_properties.get("similarity", None)
     
     # Optimization: For min_distance=2, we can directly color the graph
-    if min_distance == 2 and (similarity_prop is None or max_similarity >= 1.0 or max_similarity is None):
+    if min_distance == 2 and max_similarity is None:
         logger.info("Using direct graph coloring optimization for min_distance=2")
         colors = gt.sequential_vertex_coloring(g)
         
