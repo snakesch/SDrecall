@@ -139,6 +139,7 @@ def migrate_bam_to_ncls(bam_file,
                         mapq_filter = 25,
                         basequal_median_filter = 20,
                         paired = True,
+                        filter_noisy = True,
                         logger = logger):
     """
     Migrate BAM file data to NCLS (Nested Containment List) format for efficient interval querying.
@@ -220,7 +221,7 @@ def migrate_bam_to_ncls(bam_file,
             if read.query_name in noisy_qnames:
                 continue
 
-            if is_read_noisy(read, paired, mapq_filter, basequal_median_filter):
+            if is_read_noisy(read, paired, mapq_filter, basequal_median_filter) and filter_noisy:
                 logger.warning(f"This qname {read.query_name} is noisy. Skip it.")
                 noisy_qnames.add(read.query_name)
                 continue

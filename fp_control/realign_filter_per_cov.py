@@ -53,6 +53,10 @@ def imap_filter_out(args, log_dir=""):
         )
         
         # If successful, return result with comma-separated fields and log file path
+        if phased_graph is None:
+            subprocess_logger.warning(f"Cannot filter {raw_bam} because the phased graph cannot be built")
+            return f"{raw_bam},NaN,{log_file}"
+            
         subprocess_logger.info(f"Successfully processed {raw_bam}")
         return f"{raw_bam},{output_bam},{log_file}"
         
@@ -135,6 +139,7 @@ def realign_filter_per_cov(bam,
                                           mapq_filter = 0,
                                           basequal_median_filter = 0,
                                           paired = False,
+                                          filter_noisy = False,
                                           logger=logger)
     # Since intrinsic BAM reads are reference sequences, therefore there are no low quality reads
     intrin_bam_ncls = intrin_bam_ncls[:-1]
@@ -154,7 +159,7 @@ def realign_filter_per_cov(bam,
                                                                                                               mean_read_length,
                                                                                                               logger = logger)
     if phased_graph is None:
-        return None
+        return None, None
 
     logger.info(f"Now succesfully built the phasing graph with {phased_graph.num_vertices()} vertices and {phased_graph.num_edges()} edges. Save it to {bam_graph}\n\n")
     # Now we need to extract the components in the phased graph

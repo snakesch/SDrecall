@@ -218,6 +218,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
         v_prop = connected_qnodes_gt.new_vertex_property("object")
         # Create edge property to store similarity
         e_prop = connected_qnodes_gt.new_edge_property("double")
+
         connected_qnodes_gt.vertex_properties["node_data"] = v_prop
         connected_qnodes_gt.edge_properties["similarity"] = e_prop
         
@@ -333,19 +334,39 @@ def query_connected_nodes(sd_paralog_pairs,
     return grouped_results
 
 
-def optimal_node_grouping(g, min_distance=4, max_similarity=0.95):
+def optimal_node_grouping(g, min_distance=2, max_similarity=None):
     """
     Group nodes from a graph such that:
     1. Nodes from the same component must be at least min_distance edges apart
-    2. Minimize the number of groups
+    2. Nodes connected by a path with accumulated similarity > max_similarity can't be in same group
+    3. Minimize the number of groups
     
     Args:
         g: A graph-tool Graph
         min_distance: Minimum distance between nodes in same component (default: 6)
+        max_similarity: Maximum allowed accumulated similarity along path (default: 0.95)
         
     Returns:
         List of node groups
     """
+    # Get the similarity property from the graph
+    similarity_prop = g.edge_properties.get("similarity", None)
+    
+    # Optimization: For min_distance=2, we can directly color the graph
+    if min_distance == 2 and (similarity_prop is None or max_similarity >= 1.0 or max_similarity is None):
+        logger.info("Using direct graph coloring optimization for min_distance=2")
+        colors = gt.sequential_vertex_coloring(g)
+        
+        # Group vertices by color
+        groups = defaultdict(list)
+        for v in g.vertices():
+            v_int = int(v)
+            color = colors[v]
+            groups[color].append(v_int)
+        
+        return list(groups.values())
+    
+    # Regular case: need to build conflict graph
     # Step 1: Identify components
     component_labels, _ = gt.label_components(g)
     components = defaultdict(list)
@@ -364,7 +385,7 @@ def optimal_node_grouping(g, min_distance=4, max_similarity=0.95):
         for v in vertices:
             vertex_map[v] = conflict_graph.add_vertex()
     
-    # Step 3: Add edges for conflicts (distance < min_distance)
+    # Step 3: Add edges for conflicts (distance < min_distance or high similarity)
     for comp_id, vertices in components.items():
         if len(vertices) <= 1:
             continue
@@ -373,7 +394,7 @@ def optimal_node_grouping(g, min_distance=4, max_similarity=0.95):
         for i, v1 in enumerate(vertices):  # v1 is the index
             for v2 in vertices[i+1:]:  # v2 is the index
                 # Find shortest path distance
-                _, path_edges = gt.shortest_path(g, source = g.vertex(v1), target = g.vertex(v2))
+                _, path_edges = gt.shortest_path(g, source=g.vertex(v1), target=g.vertex(v2))
                 
                 if not path_edges:
                     continue
@@ -384,12 +405,14 @@ def optimal_node_grouping(g, min_distance=4, max_similarity=0.95):
                     conflict_graph.add_edge(vertex_map[v1], vertex_map[v2])
                     continue
 
-                accumulated_similarity = 1
-                for edge in path_edges:
-                    accumulated_similarity *= g.edge_properties["similarity"][edge]
+                # Check similarity if property exists
+                if similarity_prop is not None:
+                    accumulated_similarity = 1
+                    for edge in path_edges:
+                        accumulated_similarity *= similarity_prop[edge]
 
-                if accumulated_similarity > max_similarity:
-                    conflict_graph.add_edge(vertex_map[v1], vertex_map[v2])
+                    if accumulated_similarity > max_similarity:
+                        conflict_graph.add_edge(vertex_map[v1], vertex_map[v2])
     
     # Step 4: Color the conflict graph
     colors = gt.sequential_vertex_coloring(conflict_graph)
@@ -403,3 +426,5 @@ def optimal_node_grouping(g, min_distance=4, max_similarity=0.95):
         groups[color].append(v_int)
     
     return list(groups.values())
+
+

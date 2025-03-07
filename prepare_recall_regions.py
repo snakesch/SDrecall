@@ -14,6 +14,44 @@ from src.utils import is_file_up_to_date, executeCmd
 
 from src.const import SDrecallPaths
 
+
+def save_connected_qnodes_to_graphml(g, output_path):
+    """
+    Save connected qnodes graph to GraphML with readable node properties
+    
+    Args:
+        g: graph-tool Graph object with node_data property
+        output_path: path to save GraphML file
+    """
+    # Create separate properties for each component of the node_data tuple
+    v_chr = g.new_vertex_property("string")
+    v_start = g.new_vertex_property("int")
+    v_end = g.new_vertex_property("int")
+    v_strand = g.new_vertex_property("string")
+    
+    # Extract components from node_data property
+    node_data_prop = g.vertex_properties["node_data"]
+    for v in g.vertices():
+        node_tuple = node_data_prop[v]
+        if node_tuple:
+            chr_val, start_val, end_val, strand_val = node_tuple
+            v_chr[v] = str(chr_val)
+            v_start[v] = int(start_val)
+            v_end[v] = int(end_val)
+            v_strand[v] = str(strand_val)
+    
+    # Add the new properties to the graph
+    g.vertex_properties["chr"] = v_chr
+    g.vertex_properties["start"] = v_start
+    g.vertex_properties["end"] = v_end
+    g.vertex_properties["strand"] = v_strand
+    
+    # Write the graph to GraphML file
+    # Include the original node_data property for compatibility
+    g.save(output_path, fmt="graphml")
+    return output_path
+
+
 def prepare_recall_regions( paths: SDrecallPaths,
                             mq_threshold=41,
                             high_quality_depth=10,
@@ -166,7 +204,7 @@ def prepare_recall_regions( paths: SDrecallPaths,
                                                                                         threads=threads )
     # Save the connected qnodes graph (graph-tool graph) to a GRAPHML file
     connected_qnodes_graph_path = paths.qnode_grouping_graph()
-    connected_qnode_graph.save(connected_qnodes_graph_path, fmt="graphml")
+    save_connected_qnodes_to_graphml(connected_qnode_graph, connected_qnodes_graph_path)
     logger.info("{} SD-paralog pairs pooled from SD + PO graph. The graph recording similar query nodes is saved to {}".format(len(sd_paralog_pairs), connected_qnodes_graph_path))
     
     # Step 6: Collapse qnodes by identifying qnodes that can be put in the same masked genome
