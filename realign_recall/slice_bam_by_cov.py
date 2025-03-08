@@ -196,7 +196,7 @@ def process_target_regions_with_coverage(target_bed,
             # cov_island is too large, just let pad the overlapping small intervals by delimiter_size and merge
             cov_small_regions = df[["chrom_target", "start_target", "end_target"]]
             cov_small_regions = pb.BedTool.from_dataframe(cov_small_regions)
-            cov_small_regions = cov_small_regions.sort().slop(b = delimiter_size, g = ref_genome).merge(d = delimiter_size)
+            cov_small_regions = cov_small_regions.sort().slop(b = delimiter_size, g = f"{ref_genome}.fai").merge(d = delimiter_size)
             for region in cov_small_regions:
                 processed_intervals.append((region.chrom, region.start, region.end))
             

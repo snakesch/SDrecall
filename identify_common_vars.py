@@ -410,7 +410,7 @@ def annotate_inhouse_common(query_vcf = "",
                                                                     qv_tag,
                                                                     cv_tag,
                                                                     inhouse_common_cutoff,
-                                                                    conf_level) for region in regions])
+                                                                    conf_level) for region in regions if re.match(r"^chr[0-9MTXY]+$", region)])
 
         with pysam.VariantFile(tmp_output_vcf, 'w', header=bcf_query.header) as bcf_output:
             i=0
