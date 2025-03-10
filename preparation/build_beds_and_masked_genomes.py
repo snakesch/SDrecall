@@ -91,8 +91,9 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
     executeCmd(cmd, logger=logger)
 
     intrinsic_bam_list = total_intrinsic_bam.replace(".bam", ".bams.list.txt")
+    raw_intrinsic_bam = sdrecall_paths.raw_intrinsic_bam_path()
     with open(intrinsic_bam_list, "w") as f:
-        f.write("\n".join(intrinsic_bams))
+        f.write("\n".join(intrinsic_bams + [raw_intrinsic_bam]))
 
     cmd = f"samtools merge -@ {nthreads} -h {intrinsic_bam_header} -b {intrinsic_bam_list} -o - | \
             samtools sort -T {sdrecall_paths.tmp_dir} -O bam -o {total_intrinsic_bam} && \
@@ -189,7 +190,7 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
                                             logger=logger, 
                                             path=masked_genome_path)
     
-    # Call intrinsic variants
+    # Perform intrinsic alignment
     bam_path = getIntrinsicBam( rg_bed = paths["Query_bed"], 
                                 all_homo_regions_bed = paths["All_region_bed"], 
                                 rg_masked = masked_genome,

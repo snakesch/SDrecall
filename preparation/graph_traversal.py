@@ -79,7 +79,7 @@ def compare_homologous_sequences(
     cnode: HOMOSEQ_REGION,
     reference_fasta: str,
     tmp_dir: str = "/tmp",
-    min_similarity: float = 0.95,
+    min_similarity: float = 0.9,
     logger: logging.Logger = logger) -> Tuple[bool, float]:
     """
     Compare genomic sequences between original query node and counterpart node.
@@ -88,7 +88,7 @@ def compare_homologous_sequences(
         ori_qnode: Original query node
         cnode: Counterpart node
         reference_fasta: Path to reference genome fasta
-        min_similarity: Minimum sequence similarity threshold (default: 0.95)
+        min_similarity: Minimum sequence similarity threshold (default: 0.9)
         tmp_dir: Directory for temporary files
         logger: Logger instance
     
@@ -136,7 +136,7 @@ def compare_homologous_sequences(
 
         # Run minimap2 for alignment
         tmp_paf = prepare_tmp_file(suffix=".paf", tmp_dir=tmp_dir)
-        cmd_map = f"minimap2 -x asm5 -t 1 --eqx --cs -c {tmp_q.name} {tmp_c.name} > {tmp_paf.name} && rm {tmp_q.name} {tmp_c.name}"
+        cmd_map = f"minimap2 -x asm10 -t 1 --eqx --cs -c {tmp_q.name} {tmp_c.name} > {tmp_paf.name} && rm {tmp_q.name} {tmp_c.name}"
         executeCmd(cmd_map, logger=logger)
 
         # Parse PAF file to calculate similarity
@@ -214,7 +214,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
         # Skip the current path in case of adjacent PO edges
         if len([i for i in range(0, len(shortest_path_edges) - 1) if graph.ep["overlap"][shortest_path_edges[i]] == "True" and graph.ep["overlap"][shortest_path_edges[i+1]] == "True"]) > 1:
             continue
-        if reduce(mul, [1 - graph.ep["weight"][e] for e in shortest_path_edges if graph.ep["type"][e] == "segmental_duplication"]) <= 0.95:
+        if reduce(mul, [1 - graph.ep["weight"][e] for e in shortest_path_edges if graph.ep["type"][e] == "segmental_duplication"]) <= 0.9:
             continue
         
         # If the last edge is segmental duplication, then check if the region is considerably large
@@ -230,7 +230,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
                                                                   cnode, 
                                                                   reference_fasta, 
                                                                   tmp_dir = tmp_dir,
-                                                                  min_similarity = 0.95, 
+                                                                  min_similarity = 0.9, 
                                                                   logger = logger )
         else:
             is_similar = False
@@ -246,7 +246,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
         return [], []
     else:
         logger.debug(f"Found {len(counter_nodes)} new cnodes for qnode {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes, (one of the node is {HOMOSEQ_REGION(shortest_path_verts[-1], graph)})")
-        return counter_nodes, [t for t in zip(counter_nodes, cnode_similarities) if t[0].vertex in all_qnode_vertices]
+        return zip(counter_nodes, cnode_similarities), [t for t in zip(counter_nodes, cnode_similarities) if t[0].vertex in all_qnode_vertices]
 
 
 @log_command
@@ -290,8 +290,8 @@ def traverse_network_to_get_homology_counterparts(qnode,
                                                                             avg_frag_size = avg_frag_size, 
                                                                             std_frag_size = std_frag_size,
                                                                             logger = logger)
-        counterparts_nodes += cnodes
-        total_query_counter_nodes += query_counter_nodes
+        counterparts_nodes += [t[0] for t in cnodes if t[1] >= 0.95]
+        total_query_counter_nodes += query_counter_nodes  # Use loosen similarity threshold to include more query nodes, improving graph coloring for better partitioning the realign groups
     
     if len(counterparts_nodes) == 0:
         logger.warning(f"Query node {qnode} is not associated with any cnodes.")

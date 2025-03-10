@@ -92,6 +92,7 @@ class SDrecallPaths:
         self.reference_sd_map = os.path.abspath(reference_sd_map)
         self.target_bed = os.path.abspath(target_bed) if target_bed else ""
         self.output_dir = os.path.abspath(output_dir)
+        self.repo_dir = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
         
         # Extract assembly version primarily from reference_sd_map path
         self.assembly = self._extract_assembly_version(reference_sd_map, ref_genome)
@@ -410,6 +411,16 @@ class SDrecallPaths:
     def total_intrinsic_bam_path(self) -> str:
         """Path for total intrinsic alignment BAM"""
         return os.path.join(self.work_dir, f"total_intrinsic_alignments.bam")
+    
+    def raw_intrinsic_bam_path(self) -> str:
+        """Path for raw intrinsic alignment BAM"""
+        raw_intrin_bam = os.path.join(self.repo_dir, "data", self.assembly, "raw_intrin_align", f"assembly_intrinsic_align.WGAC.{self.assembly}.reformat.bam")
+        if not os.path.exists(raw_intrin_bam):
+            raise FileNotFoundError(f"Raw intrinsic alignment BAM file not found at {raw_intrin_bam}, please check the input assembly tag.")
+        elif os.path.getsize(raw_intrin_bam) < 10000:
+            raise FileExistsError(f"Raw intrinsic alignment BAM seems not properly downloaded at {raw_intrin_bam}, please check the git lfs status to see if the big BAM file is properly downloaded to the local file system.")
+        else:
+            return raw_intrin_bam
     
     def intrinsic_bam_path(self, rg_label_or_index) -> str:
         """Path for intrinsic alignment SAM"""

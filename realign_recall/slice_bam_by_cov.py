@@ -39,7 +39,7 @@ def slice_bam_per_bed(bed, bam, ref_genome, chunk_id, threads = 4, tmp_dir = "/t
 
     if os.path.exists(bed):
         # Coordinates in bed file are 0-indexed and half-open
-        cmd = f"samtools view -@ {threads} -u -L {bed} {bam} | \
+        cmd = f"samtools view -@ {threads} -u -P -L {bed} {bam} | \
                 samtools sort -@ {threads} -T {tmp_dir}/{chunk_id}_{os.path.basename(cov_bam)} -o {cov_bam} -O bam - && \
                 bash {shell_utils} modify_bam_sq_lines {cov_bam} {ref_genome} {cov_bam_header} && \
                 samtools reheader {cov_bam_header} {cov_bam} > {cov_bam}.tmp && \
@@ -47,7 +47,7 @@ def slice_bam_per_bed(bed, bam, ref_genome, chunk_id, threads = 4, tmp_dir = "/t
                 samtools index {cov_bam}"
     elif re.match(r"^chr.*\d+$", bed):
         region = bed # When input the region str, both start and end are 1-indexed and inclusive
-        cmd = f"samtools view -@ {threads} -u {bam} {region} | \
+        cmd = f"samtools view -@ {threads} -u -P {bam} {region} | \
                 samtools sort -@ {threads} -T {tmp_dir}/{chunk_id}_{os.path.basename(cov_bam)} -o {cov_bam} -O bam - && \
                 bash {shell_utils} modify_bam_sq_lines {cov_bam} {ref_genome} {cov_bam_header} && \
                 samtools reheader {cov_bam_header} {cov_bam} > {cov_bam}.tmp && \
@@ -207,7 +207,7 @@ def process_target_regions_with_coverage(target_bed,
 
 def split_bam_by_cov(bam, 
                      target_bed = None,
-                     min_depth = 1,
+                     min_depth = 3,
                      min_interval = 2000,
                      max_interval = 10000,
                      delimiter_size = 1000,

@@ -1,7 +1,7 @@
 import multiprocessing as mp
 from pybedtools import BedTool
 from src.log import logger
-from .inferred_depths import calculate_inferred_coverage
+from preparation.inferred_depths import calculate_inferred_coverage
 
 
 def pick_multialigned_regions(input_bam, 
@@ -61,3 +61,32 @@ def pick_multialigned_regions(input_bam,
         return output_bed
     
     return bed_obj
+
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Pick multialigned regions from BAM file")
+    parser.add_argument("--input_bam", type=str, required=True, help="Input BAM file")
+    parser.add_argument("--output_bed", type=str, required=True, help="Output BED file")
+    parser.add_argument("--MQ_threshold", type=int, default=41, help="MQ threshold for high-quality reads")
+    parser.add_argument("--high_quality_depth", type=int, default=10, help="High-quality depth threshold")
+    parser.add_argument("--minimum_depth", type=int, default=3, help="Minimum depth threshold")
+    parser.add_argument("--multialign_frac", type=float, default=0.5, help="Multialign fraction threshold")
+    parser.add_argument("--target_region", type=str, help="Target region BED file")
+    parser.add_argument("--target_tag", type=str, default="exome", help="Target tag")
+    parser.add_argument("--threads", type=int, default=4, help="Number of threads")
+    parser.add_argument("--genome_file", type=str, required=True, help="Genome file")
+
+    args = parser.parse_args()
+
+    output_bed = pick_multialigned_regions( args.input_bam, 
+                                            args.output_bed, 
+                                            args.MQ_threshold, 
+                                            args.high_quality_depth, 
+                                            args.minimum_depth, 
+                                            args.multialign_frac, 
+                                            args.target_region, 
+                                            args.target_tag, 
+                                            args.threads, 
+                                            args.genome_file )

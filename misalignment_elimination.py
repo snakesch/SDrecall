@@ -73,7 +73,7 @@ def eliminate_misalignments(input_bam,
         logger.info(f"Start to post process the bam file {input_bam}")
         splitted_bams, splitted_beds = split_bam_by_cov(input_bam, 
                                                         target_bed = target_regions,
-                                                        delimiter_size=int(np.ceil(avg_frag_size)), 
+                                                        delimiter_size=int(np.ceil(avg_frag_size * 1.5)), 
                                                         logger = logger, 
                                                         threads = threads,
                                                         ref_genome = ref_genome,

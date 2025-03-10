@@ -317,5 +317,4 @@ function batch_perform_benchmarking () {
 	-r ${recall_region} \
 	-o ${original_bam} \
 	-m ${result_meta_file} ::: "HG002" ::: ${assemblies[@]} ::: ${caller_tags[@]}
-
 }
