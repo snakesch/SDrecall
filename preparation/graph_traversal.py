@@ -200,7 +200,7 @@ def get_overlap_neighbors(g, vertex):
         neighbor = g.vertex(neighbor)
         neighbor_data = data_prop[neighbor]
         if min(neighbor_data[2], vertex_data[2]) - max(vertex_data[1], neighbor_data[1]) > 200:
-            overlap_neighbors.append(neighbor)
+            overlap_neighbors.append(neighbor_data)
 
     return overlap_neighbors
 
@@ -290,7 +290,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
             cnode_similarities.append(similarity)
             if cnode.vertex in all_qnode_vertices:
                 # Grab the overlapping query nodes with the current cnode and add them to the counter_qnodes list
-                counter_qnodes.append(cnode)
+                counter_qnodes.append(cnode.data)
                 counter_qnodes += get_overlap_neighbors(query_nodes_view, cnode.vertex)
                 
     if len(counter_nodes) == 0:

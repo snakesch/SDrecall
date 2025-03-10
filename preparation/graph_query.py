@@ -259,10 +259,8 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                     continue
                 
                 # Add edges between qnode and its counterparts in the graph-tool graph
-                for cnode in query_counter_nodes:
-                    # cnode: HOMOSEQ_REGION object
-                    cnode_data = cnode.data
-                    
+                for cnode_data in query_counter_nodes:
+                    # cnode_data: tuple (chrom, start, end, strand)
                     # Add vertex for cnode if it doesn't exist yet
                     if cnode_data not in data_to_vertex:
                         v = connected_qnodes_gt.add_vertex()
