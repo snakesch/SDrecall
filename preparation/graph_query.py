@@ -217,10 +217,10 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
         # Create vertex property to store node data
         v_prop = connected_qnodes_gt.new_vertex_property("object")
         # Create edge property to store similarity
-        e_prop = connected_qnodes_gt.new_edge_property("double")
+        # e_prop = connected_qnodes_gt.new_edge_property("double")
 
         connected_qnodes_gt.vertex_properties["node_data"] = v_prop
-        connected_qnodes_gt.edge_properties["similarity"] = e_prop
+        # connected_qnodes_gt.edge_properties["similarity"] = e_prop
         
         # Create a mapping between qnodes and vertices in the graph-tool graph
         node_to_vertex = {}
@@ -259,7 +259,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                     continue
                 
                 # Add edges between qnode and its counterparts in the graph-tool graph
-                for cnode, similarity in query_counter_nodes:
+                for cnode in query_counter_nodes:
                     # cnode: HOMOSEQ_REGION object
                     cnode_data = cnode.data
                     
@@ -271,7 +271,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                     
                     # Add edge between qnode and cnode
                     new_edge = connected_qnodes_gt.add_edge(node_to_vertex[qnode], node_to_vertex[cnode_data])
-                    e_prop[new_edge] = similarity
+                    # e_prop[new_edge] = similarity
                 
             logger.debug(logs)
             logger.debug(f"*********************************** {i}_subprocess_end_for_traverse_network ***************************************")

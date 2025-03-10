@@ -174,6 +174,39 @@ def compare_homologous_sequences(
     return False, 0.0
 
 
+
+def get_overlap_neighbors(g, vertex):
+    """
+    Directly inspect edges for the overlap property
+    
+    Args:
+        g: graph-tool Graph object
+        vertex: vertex object or index
+        
+    Returns:
+        List of vertex objects connected via "True" overlap edges
+    """
+    # Convert vertex index to vertex object if needed
+    if isinstance(vertex, int):
+        vertex = g.vertex(vertex)
+    
+    overlap_prop = g.edge_properties["overlap"]
+    overlap_neighbors = []
+    
+    # Check out-edges
+    for e in vertex.out_edges():
+        if overlap_prop[e] == "True":
+            overlap_neighbors.append(e.target())
+    
+    # Check in-edges
+    for e in vertex.in_edges():
+        if overlap_prop[e] == "True":
+            overlap_neighbors.append(e.source())
+    
+    return overlap_neighbors
+
+
+
 def summarize_shortest_paths_per_subgraph(ori_qnode, 
                                           subgraph, 
                                           graph, 
@@ -193,6 +226,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
 
     counter_nodes = []
     cnode_similarities = []
+    counter_qnodes = []
 
     n = 0
     for v in subgraph.vertices():
@@ -240,13 +274,17 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
             logger.debug(f"Found a new counterparts node {cnode} for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes. The similarity is {similarity}. The traverse route is {cnode.traverse_route} \n")
             counter_nodes.append(cnode)
             cnode_similarities.append(similarity)
-
+            if cnode.vertex in all_qnode_vertices:
+                # Grab the overlapping query nodes with the current cnode and add them to the counter_qnodes list
+                counter_qnodes.append(cnode)
+                counter_qnodes.extend(get_overlap_neighbors(graph, cnode.vertex))
+                
     if len(counter_nodes) == 0:
         logger.debug(f"No cnodes found for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes, (one of the node is {HOMOSEQ_REGION(shortest_path_verts[-1], graph)}).")
         return [], []
     else:
         logger.debug(f"Found {len(counter_nodes)} new cnodes for qnode {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes, (one of the node is {HOMOSEQ_REGION(shortest_path_verts[-1], graph)})")
-        return zip(counter_nodes, cnode_similarities), [t for t in zip(counter_nodes, cnode_similarities) if t[0].vertex in all_qnode_vertices]
+        return zip(counter_nodes, cnode_similarities), counter_qnodes
 
 
 @log_command
@@ -279,6 +317,7 @@ def traverse_network_to_get_homology_counterparts(qnode,
     
     counterparts_nodes = []
     total_query_counter_nodes = []
+    logger.info(f"Traversing the network to find homology counterparts for {qnode} in {len(uniq_comp_labels)} components")
     for i in range(len(uniq_comp_labels)):
         cnodes, query_counter_nodes = summarize_shortest_paths_per_subgraph(qnode, 
                                                                             subgraphs[i], 

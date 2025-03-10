@@ -215,22 +215,17 @@ def calculate_coefficient(arr2d):
 
 
 
-def sweep_region_inspection(input_bam,
-                            output_bed = None,
-                            depth_cutoff = 5,
-                            window_size = 120,
-                            step_size = 30,
-                            logger = logger):
+def sweep_region_inspection(hap_cov_beds,
+                            output_bed = None):
 
     if output_bed is None:
         output_bed = prepare_tmp_file(suffix = ".bed").name
 
-    cmd = f"samtools depth {input_bam} | \
-            mawk -F '\\t' '$3 >= {depth_cutoff}{{printf \"%s\\t%s\\t%s\\n\", $1, $2-1, $2;}}' | \
-            bedtools merge -i stdin | \
-            bedtools makewindows -b stdin -w {window_size} -s {step_size} > {output_bed}"
-
-    executeCmd(cmd, logger = logger)
+    hap_ids, hap_id_beds = zip(*hap_cov_beds.items())
+    x = pb.BedTool()
+    sweep_regions = x.multi_intersect(hap_id_beds, names=hap_ids).to_dataframe(disable_auto_names = True, names = ["chrom", "start", "end", "hap_no", "hap_ids", "unknown", "unknown2"])
+    sweep_regions = sweep_regions.loc[sweep_regions["hap_no"].astype(int) >= 3, :]
+    sweep_regions.to_csv(output_bed, sep = "\t", index = False)
 
     op_bed_obj = pb.BedTool(output_bed)
     return op_bed_obj
@@ -659,6 +654,7 @@ def inspect_by_haplotypes(input_bam,
                           read_ref_pos_dict,
                           compare_haplotype_meta_tab = "",
                           mean_read_length = 150,
+                          tmp_dir = "/tmp",
                           logger = logger):
     _, read_dict, _, qname_idx_dict, _ = bam_ncls
     record_dfs = []
@@ -667,10 +663,12 @@ def inspect_by_haplotypes(input_bam,
     hid_var_count = defaultdict(int) # Initialize a dictionary to store the variant count of the haplotype
     scatter_hid_dict = defaultdict(bool) # Initialize a dictionary to store if the haplotype is scattered
     logger.info("All the haplotype IDs are :\n{}\n".format(list(hap_qname_info.keys())))
+    hid_cov_beds = {}
 
     # Iterate over all the haplotypes
     for hid, qnames in hap_qname_info.items():
         logger.info(f"The haplotype {hid} contains {len(qnames)} read pairs in total.")
+        hid_cov_bed = prepare_tmp_file(suffix = f".haplotype_{hid}.cov.bed", tmp_dir = tmp_dir)
 
         # Extract all the qname indices and all the reads belonged to the iterating haplotype
         qname_indices = [qname_idx_dict[qname] for qname in qnames]
@@ -678,6 +676,11 @@ def inspect_by_haplotypes(input_bam,
 
         # Extract all the continuous regions covered by the iterating haplotype
         conregion_dict = extract_continuous_regions_dict(reads)
+        # Write the continuous regions to the temporary file
+        with open(hid_cov_bed, "w") as f:
+            for span, reads in conregion_dict.items():
+                f.write(f"{reads[0].reference_name}\t{span[0]}\t{span[1]}\n")
+        hid_cov_beds[hid] = hid_cov_bed
 
         # If only one read pair is in the iterating haplotype, it is a scattered haplotype
         if len(qnames) < 2:
@@ -744,7 +747,7 @@ def inspect_by_haplotypes(input_bam,
     logger.info(f"Final ref sequence similarities for all the haplotypes are {hap_max_sim_scores}")
 
     sweep_region_bed = input_bam.replace(".bam", ".sweep.bed")
-    sweep_regions = sweep_region_inspection(input_bam, sweep_region_bed, logger = logger)
+    sweep_regions = sweep_region_inspection(hid_cov_beds, sweep_region_bed, logger = logger)
     logger.info(f"Now the sweep regions are saved to {sweep_region_bed}.")
 
     '''

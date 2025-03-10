@@ -198,6 +198,7 @@ def realign_filter_per_cov(bam,
                                                           read_ref_pos_dict,
                                                           compare_haplotype_meta_tab = compare_haplotype_meta_tab,
                                                           mean_read_length = mean_read_length,
+                                                          tmp_dir = tmp_dir,
                                                           logger = logger )
 
     assert len(correct_qnames & mismap_qnames) == 0, f"The correct_qnames and mismap_qnames have overlap: {correct_qnames & mismap_qnames}"
