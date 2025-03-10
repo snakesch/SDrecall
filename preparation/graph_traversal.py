@@ -222,7 +222,6 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
     '''
     from functools import reduce
     from operator import mul
-    import graph_tool.all as gt
 
     # Create a boolean vertex property to mark query nodes
     is_query_node = subgraph.new_vertex_property("bool")
