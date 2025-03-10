@@ -190,19 +190,18 @@ def get_overlap_neighbors(g, vertex):
     if isinstance(vertex, int):
         vertex = g.vertex(vertex)
     
-    overlap_prop = g.edge_properties["overlap"]
+    data_prop = g.vertex_properties["node_index"]
+    vertex_data = data_prop[vertex]  # Tuple with 4 items (chrom, start, end, strand)
+
     overlap_neighbors = []
     
     # Check out-edges
-    for e in vertex.out_edges():
-        if overlap_prop[e] == "True":
-            overlap_neighbors.append(e.target())
-    
-    # Check in-edges
-    for e in vertex.in_edges():
-        if overlap_prop[e] == "True":
-            overlap_neighbors.append(e.source())
-    
+    for neighbor in g.get_all_neighbors(vertex):
+        neighbor = g.vertex(neighbor)
+        neighbor_data = data_prop[neighbor]
+        if min(neighbor_data[2], vertex_data[2]) - max(vertex_data[1], neighbor_data[1]) > 200:
+            overlap_neighbors.append(neighbor)
+
     return overlap_neighbors
 
 
@@ -223,6 +222,21 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
     '''
     from functools import reduce
     from operator import mul
+    import graph_tool.all as gt
+
+    # Create a boolean vertex property to mark query nodes
+    is_query_node = subgraph.new_vertex_property("bool")
+    
+    # Set the property to True for vertices that are query nodes
+    for v in subgraph.vertices():
+        v_int = int(v)
+        is_query_node[v] = v_int in all_qnode_vertices
+    
+    # Create a filtered view of the subgraph containing only query nodes
+    query_nodes_view = gt.GraphView(subgraph, vfilt=is_query_node, efilt = lambda e: subgraph.ep["overlap"][e] == "True")
+    
+    # Store the property in the subgraph for future use
+    subgraph.vertex_properties["is_query_node"] = is_query_node
 
     counter_nodes = []
     cnode_similarities = []
@@ -277,7 +291,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
             if cnode.vertex in all_qnode_vertices:
                 # Grab the overlapping query nodes with the current cnode and add them to the counter_qnodes list
                 counter_qnodes.append(cnode)
-                counter_qnodes.extend(get_overlap_neighbors(graph, cnode.vertex))
+                counter_qnodes += get_overlap_neighbors(query_nodes_view, cnode.vertex)
                 
     if len(counter_nodes) == 0:
         logger.debug(f"No cnodes found for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes, (one of the node is {HOMOSEQ_REGION(shortest_path_verts[-1], graph)}).")
@@ -289,7 +303,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
 
 @log_command
 def traverse_network_to_get_homology_counterparts(qnode, 
-                                                  directed_graph, 
+                                                  component_graph, 
                                                   all_qnode_vertices,
                                                   reference_fasta,
                                                   tmp_dir = "/tmp",
@@ -302,26 +316,26 @@ def traverse_network_to_get_homology_counterparts(qnode,
     import numpy as np
 
     all_qnode_vertices = set(all_qnode_vertices)
-    prop_map = directed_graph.vertex_properties["node_index"]
-    node_to_vertex = {prop_map[v]: v for v in directed_graph.vertices()}
+    prop_map = component_graph.vertex_properties["node_index"]
+    node_to_vertex = {prop_map[v]: v for v in component_graph.vertices()}
     
     if isinstance(qnode, tuple):
-        qnode = HOMOSEQ_REGION(node_to_vertex[qnode], directed_graph)
+        qnode = HOMOSEQ_REGION(node_to_vertex[qnode], component_graph)
 
     # First identify subgraphs only connected by overlap edges
-    overlap_graph = gt.GraphView(directed_graph, efilt = lambda e: directed_graph.ep["overlap"][e] == "True")
+    overlap_graph = gt.GraphView(component_graph, efilt = lambda e: component_graph.ep["overlap"][e] == "True")
     overlap_components, hist = gt.label_components(overlap_graph, directed = False)
     
     uniq_comp_labels = np.unique(overlap_components.a)
-    subgraphs = [gt.GraphView(directed_graph, directed = False, vfilt = lambda v: overlap_components[v] == comp_label) for comp_label in uniq_comp_labels]
+    subgraphs = [gt.GraphView(component_graph, directed = False, vfilt = lambda v: overlap_components[v] == comp_label) for comp_label in uniq_comp_labels]
     
     counterparts_nodes = []
     total_query_counter_nodes = []
-    logger.info(f"Traversing the network to find homology counterparts for {qnode} in {len(uniq_comp_labels)} components")
+    logger.debug(f"Traversing the network to find homology counterparts for {qnode} in {len(uniq_comp_labels)} components")
     for i in range(len(uniq_comp_labels)):
         cnodes, query_counter_nodes = summarize_shortest_paths_per_subgraph(qnode, 
                                                                             subgraphs[i], 
-                                                                            directed_graph, 
+                                                                            component_graph, 
                                                                             uniq_comp_labels[i],
                                                                             all_qnode_vertices, 
                                                                             reference_fasta,

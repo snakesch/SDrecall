@@ -195,9 +195,9 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
     
     # Identify all subgraphs associated with each query_node
     prop_map = gt_graph.vertex_properties["node_index"]
-    node_to_vertex = {prop_map[v]: v for v in gt_graph.vertices()}
+    data_to_vertex = {prop_map[v]: v for v in gt_graph.vertices()}
     components, _ = gt.label_components(gt_graph, directed = False) # Only use the returned components as a VertexPropertyMap object (mapping from vertices to properties, here the property is the label of the components)
-    qnode_vertices = [node_to_vertex[qnode] for qnode in sorted_query_nodes]
+    qnode_vertices = [data_to_vertex[qnode] for qnode in sorted_query_nodes]
     qnode_components = [gt.GraphView(gt_graph, directed = False, vfilt = lambda v: components[v] == components[vertex]) for vertex in qnode_vertices ]
     gt.openmp_set_num_threads(threads)
 
@@ -223,13 +223,13 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
         # connected_qnodes_gt.edge_properties["similarity"] = e_prop
         
         # Create a mapping between qnodes and vertices in the graph-tool graph
-        node_to_vertex = {}
+        data_to_vertex = {}
         
         # Add all qnodes as vertices
         for qnode in sorted_query_nodes:
             v = connected_qnodes_gt.add_vertex()
             v_prop[v] = qnode
-            node_to_vertex[qnode] = v
+            data_to_vertex[qnode] = v
         
         i = 0
         sd_paralog_pairs = {}
@@ -250,7 +250,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                 if len(counterparts_nodes) > 0:
                     assert isinstance(qnode, tuple)
                     assert isinstance(counterparts_nodes[0], HOMOSEQ_REGION)
-                    sd_paralog_pairs[tup[0]] = tup[1]
+                    sd_paralog_pairs[qnode] = counterparts_nodes
                 else:
                     logger.warning(f"No counterparts nodes are found for query node {qnode}, skipping current query node")
                     print(logs, file = sys.stderr)
@@ -264,13 +264,13 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                     cnode_data = cnode.data
                     
                     # Add vertex for cnode if it doesn't exist yet
-                    if cnode_data not in node_to_vertex:
+                    if cnode_data not in data_to_vertex:
                         v = connected_qnodes_gt.add_vertex()
                         v_prop[v] = cnode_data
-                        node_to_vertex[cnode_data] = v
+                        data_to_vertex[cnode_data] = v
                     
                     # Add edge between qnode and cnode
-                    new_edge = connected_qnodes_gt.add_edge(node_to_vertex[qnode], node_to_vertex[cnode_data])
+                    new_edge = connected_qnodes_gt.add_edge(data_to_vertex[qnode], data_to_vertex[cnode_data])
                     # e_prop[new_edge] = similarity
                 
             logger.debug(logs)
