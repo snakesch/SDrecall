@@ -133,7 +133,7 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger = logger):
                     output_bam.write(sec_read)
                     sec_to_pri_qnames.add(qname)
 
-            logger.info(f"Filtered out {len(primary_align_origin_qnames)} of {total_reads} reads where reference position matches qname start from {bam_file}")
+            logger.info(f"Filtered out {len(primary_align_origin_qnames)} of {total_reads} reads where reference position matches qname start from {bam_file}, converted {len(sec_to_pri_qnames)} secondary alignments to primary alignments")
     
     # Index the output BAM
     if output_file is None:
