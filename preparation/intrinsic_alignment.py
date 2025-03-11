@@ -84,11 +84,34 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger = logger):
     with pysam.AlignmentFile(bam_file, "rb") as input_bam:
         with pysam.AlignmentFile(tmp_output, "wb", header=input_bam.header) as output_bam:
             total_reads = 0
-            filtered_reads = 0
-            
+            primary_align_origin_qnames = set([])
+            primary_align_origin_qnames_sup = {}
+            sec_to_pri_qnames = {}
+            buffer_sec_aligns = {}
+            buffer_sup_aligns = {}
+
             for read in input_bam:
                 total_reads += 1
-                
+                qname = read.query_name
+                if qname in primary_align_origin_qnames:
+                    if read.is_supplementary and qname not in sec_to_pri_qnames:
+                        primary_align_origin_qnames_sup[qname] = read
+                        continue
+                    elif read.is_supplementary:
+                        continue
+                    elif read.is_secondary:
+                        sec_to_pri_qnames.add(qname)
+                        # Set the read's flag to primary alignment
+                        read.flag = 0
+                        output_bam.write(read)
+                        continue
+                elif read.is_supplementary:
+                    buffer_sup_aligns[qname] = read
+                    continue
+                elif read.is_secondary:
+                    buffer_sec_aligns[qname] = read
+                    continue
+                    
                 # Extract start position from qname (format: chr:start-end)
                 match = qname_regex.match(read.query_name)
                 if match:
@@ -98,12 +121,35 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger = logger):
                     if qname_start != read.reference_start + 1:  # pysam.read.reference_start is 0-based
                         output_bam.write(read)
                     else:
-                        filtered_reads += 1
+                        filtered_qnames.add(read.query_name)
                 else:
                     # If qname doesn't match the expected format, keep the read
                     output_bam.write(read)
-            
-            logger.info(f"Filtered out {filtered_reads} of {total_reads} reads where reference position matches qname start from {bam_file}")
+
+            # After the loop we take a look at how many primary alignments aligned to original genomic locations are unhandled
+            primary_align_origin_qnames = primary_align_origin_qnames - sec_to_pri_qnames
+
+            # Deal with unhandled secondary alignments
+            for qname in primary_align_origin_qnames:
+                if qname in buffer_sec_aligns:
+                    sec_read = buffer_sec_aligns[qname]
+                    sec_read.flag = 0
+                    output_bam.write(sec_read)
+                    sec_to_pri_qnames.add(qname)
+                    primary_align_origin_qnames_sup.pop(qname, None)
+
+            # Deal with unhandled supplementary alignments
+            for qname in primary_align_origin_qnames:
+                if qname in buffer_sup_aligns:
+                    sup_read = buffer_sup_aligns[qname]
+                    sup_read.flag = 0
+                    output_bam.write(sup_read)
+                elif qname in primary_align_origin_qnames_sup:
+                    sup_read = primary_align_origin_qnames_sup[qname]
+                    sup_read.flag = 0
+                    output_bam.write(sup_read)
+
+            logger.info(f"Filtered out {len(filtered_qnames)} of {total_reads} reads where reference position matches qname start from {bam_file}")
     
     # Index the output BAM
     if output_file is None:

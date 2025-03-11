@@ -156,7 +156,7 @@ def combine_vcfs(*vcfs, output=None, threads=4):
 
 
 def configure_parallelism(total_threads: int,
-                              threads_per_job: int = 4) -> Tuple[int, int]:
+                          threads_per_job: float = 4.0) -> Tuple[int, int]:
     """
     Configures parallelisation for a given number of total threads and threads per job.
     

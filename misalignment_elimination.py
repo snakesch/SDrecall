@@ -117,7 +117,7 @@ def eliminate_misalignments(input_bam,
 
         with ctx.Pool(job_num, initializer=gt_filter_init, initargs=(numba_threads, cache_dir)) as pool:
             # Pass the log_dir parameter to the function
-            result_records = pool.starmap(
+            result_records = pool.imap_unordered(
                 imap_filter_out, 
                 [(
                     (raw_bam, 
