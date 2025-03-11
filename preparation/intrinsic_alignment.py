@@ -86,7 +86,7 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger = logger):
             total_reads = 0
             primary_align_origin_qnames = set([])
             primary_align_origin_qnames_sup = {}
-            sec_to_pri_qnames = {}
+            sec_to_pri_qnames = set([]) 
             buffer_sec_aligns = {}
             buffer_sup_aligns = {}
 
@@ -94,10 +94,7 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger = logger):
                 total_reads += 1
                 qname = read.query_name
                 if qname in primary_align_origin_qnames:
-                    if read.is_supplementary and qname not in sec_to_pri_qnames:
-                        primary_align_origin_qnames_sup[qname] = read
-                        continue
-                    elif read.is_supplementary:
+                    if read.is_supplementary:
                         continue
                     elif read.is_secondary:
                         sec_to_pri_qnames.add(qname)
@@ -106,7 +103,6 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger = logger):
                         output_bam.write(read)
                         continue
                 elif read.is_supplementary:
-                    buffer_sup_aligns[qname] = read
                     continue
                 elif read.is_secondary:
                     buffer_sec_aligns[qname] = read
@@ -136,18 +132,6 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger = logger):
                     sec_read.flag = 0
                     output_bam.write(sec_read)
                     sec_to_pri_qnames.add(qname)
-                    primary_align_origin_qnames_sup.pop(qname, None)
-
-            # Deal with unhandled supplementary alignments
-            for qname in primary_align_origin_qnames:
-                if qname in buffer_sup_aligns:
-                    sup_read = buffer_sup_aligns[qname]
-                    sup_read.flag = 0
-                    output_bam.write(sup_read)
-                elif qname in primary_align_origin_qnames_sup:
-                    sup_read = primary_align_origin_qnames_sup[qname]
-                    sup_read.flag = 0
-                    output_bam.write(sup_read)
 
             logger.info(f"Filtered out {len(primary_align_origin_qnames)} of {total_reads} reads where reference position matches qname start from {bam_file}")
     
