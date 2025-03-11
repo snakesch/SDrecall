@@ -199,8 +199,7 @@ def get_overlap_neighbors(g, vertex):
     for neighbor in g.get_all_neighbors(vertex):
         neighbor = g.vertex(neighbor)
         neighbor_data = data_prop[neighbor]
-        if min(neighbor_data[2], vertex_data[2]) - max(vertex_data[1], neighbor_data[1]) > 200:
-            overlap_neighbors.append(neighbor_data)
+        overlap_neighbors.append(neighbor_data)
 
     return overlap_neighbors
 
