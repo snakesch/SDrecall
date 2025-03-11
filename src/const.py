@@ -203,6 +203,8 @@ class SDrecallPaths:
                     self._clean_directory(dir_path, file_only=True)
                 else:
                     self._clean_directory(dir_path, file_only=False)
+            elif dir_name == "recall_results":
+                self._clean_directory(dir_path, file_only=True)
 
         if not clean_dirs:
             self._discover_and_register_realign_groups()
