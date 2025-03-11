@@ -30,8 +30,8 @@ def stat_ad_to_dict(bam_file, logger = logger):
         logger.warning(f"Look at the two dataframes now: \n{alt_expanded.to_string(index=False)}\n{ad_expanded.to_string(index=False)}\n")
         return None
 
-    logger.info("\n{}\n{}\n".format(ad_expanded.loc[~ad_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False),
-                                    alt_expanded.loc[~alt_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False)))
+    logger.debug("The AD expanded table looks like: \n{}\nThe ALT expanded table looks like: \n{}\n".format(ad_expanded.loc[~ad_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False),
+                                                                                                            alt_expanded.loc[~alt_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False)))
 
     # Initialize the nested dictionary
     nested_ad_dict = {chrom: {} for chrom in ad_table["chrom"].unique()}
@@ -58,7 +58,7 @@ def stat_ad_to_dict(bam_file, logger = logger):
         # Initialize the inner dictionary if the outer key is not present
         if outer_key not in nested_ad_dict[chrom]:
             nested_ad_dict[chrom][outer_key] = Dict.empty(key_type=types.int8,
-                                                       value_type=types.int16)
+                                                          value_type=types.int16)
         # Add the first pair of inner key-value
         nested_ad_dict[chrom][outer_key][inner_key] = value
 

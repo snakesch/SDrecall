@@ -110,20 +110,26 @@ def calculate_mean_read_length(bam_file_path, sample_size=100000):
 def is_read_noisy(read, paired, mapq_filter, basequal_median_filter):
     """Helper function to determine if a read is noisy based on various criteria."""
     if paired:
-        return (read.is_secondary or
-                read.is_supplementary or
-                read.mapping_quality < mapq_filter or
-                read.is_qcfail or
-                read.reference_end is None or
-                read.reference_end - read.reference_start < 80 or
-                read.reference_name != read.next_reference_name or
-                not read.is_proper_pair or
-                fast_median(np.array(read.query_qualities, dtype=np.uint8)) <= basequal_median_filter or
-                numba_sum(np.array(read.query_qualities, dtype=np.uint8) < basequal_median_filter) >= 50)
+        # Use short circuit evaluation to speed up the function
+        if read.is_secondary or \
+           read.is_supplementary or \
+           read.mapping_quality < mapq_filter or \
+           read.is_qcfail or \
+           read.is_unmapped or \
+           read.reference_end is None or \
+           read.reference_end - read.reference_start < 80 or \
+           read.reference_name != read.next_reference_name or \
+           not read.is_proper_pair:
+            return True
+        
+        if read.query_qualities is not None:
+            return (fast_median(np.array(read.query_qualities, dtype=np.uint8)) <= basequal_median_filter or
+                    numba_sum(np.array(read.query_qualities, dtype=np.uint8) < basequal_median_filter) >= 50)
     else:
         if read.is_secondary or \
            read.is_supplementary or \
            read.is_duplicate or \
+           read.is_unmapped or \
            read.mapping_quality < mapq_filter or \
            read.is_qcfail or \
            read.reference_end is None:
@@ -222,7 +228,7 @@ def migrate_bam_to_ncls(bam_file,
                 continue
 
             if is_read_noisy(read, paired, mapq_filter, basequal_median_filter) and filter_noisy:
-                logger.warning(f"This qname {read.query_name} is noisy. Skip it.")
+                logger.debug(f"This qname {read.query_name} is noisy. Skip it.")
                 noisy_qnames.add(read.query_name)
                 continue
 
