@@ -48,6 +48,7 @@ def gt_filter_init(threads, cache_dir=None):
 def eliminate_misalignments(input_bam,
                             output_bam,
                             intrinsic_bam,
+                            original_bam,
                             ref_genome,
                             target_regions,
                             avg_frag_size = 400,
@@ -108,7 +109,7 @@ def eliminate_misalignments(input_bam,
         
         # Filter out the misaligned_reads per chromosome
         job_num, _ = configure_parallelism(threads, numba_threads)
-        nm_cutoff, _ = calculate_NM_distribution_poisson(input_bam, conf_level, stat_sample_size, logger=logger)
+        nm_cutoff, _ = calculate_NM_distribution_poisson(original_bam, conf_level, stat_sample_size, logger=logger)
 
         # Create a dedicated log directory
         log_dir = os.path.dirname(output_bam)
