@@ -203,7 +203,7 @@ class SDrecallPaths:
                     self._clean_directory(dir_path, file_only=True)
                 else:
                     self._clean_directory(dir_path, file_only=False)
-            elif dir_name == "recall_results":
+            elif dir_name == "recall_results" or dir_name == "intermediates":
                 self._clean_directory(dir_path, file_only=True)
 
         if not clean_dirs:
