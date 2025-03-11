@@ -145,7 +145,7 @@ def process_target_regions_with_coverage(target_bed,
         
         # Case 1: Large interval that needs potential splitting
         if region_size > max_interval:
-            logger.debug(f"Large region found: {region.chrom}:{region.start}-{region.end} ({region_size}bp)")
+            logger.debug(f"Large target region found: {region.chrom}:{region.start}-{region.end} ({region_size}bp)")
             
             # tmp_bed = prepare_tmp_file(suffix=".bed", tmp_dir = tmp_dir).name
             # Create a single-region BED for this large region
@@ -159,9 +159,13 @@ def process_target_regions_with_coverage(target_bed,
                 logger.debug(f"  - Split into {len(covered_subregions)} covered subregions")
                 for subregion in covered_subregions:
                     processed_intervals.append(subregion)
+            elif len(covered_subregions) == 1:
+                for subregion in covered_subregions:
+                    processed_intervals.append(subregion)
+                    logger.debug(f"  - There is only one interval {subregion.chrom}:{subregion.start}-{subregion.end} is covered by reads")
             else:
                 # No coverage data - keep original but log warning
-                logger.debug(f"  - No coverage data for large region {region.chrom}:{region.start}-{region.end}")
+                logger.warning(f"  - No coverage data for large target region {region.chrom}:{region.start}-{region.end}")
                 processed_intervals.append(region)
         
         # Case 2: Small interval that might need merging
