@@ -121,7 +121,7 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger = logger):
                     if qname_start != read.reference_start + 1:  # pysam.read.reference_start is 0-based
                         output_bam.write(read)
                     else:
-                        filtered_qnames.add(read.query_name)
+                        primary_align_origin_qnames.add(read.query_name)
                 else:
                     # If qname doesn't match the expected format, keep the read
                     output_bam.write(read)
@@ -149,7 +149,7 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger = logger):
                     sup_read.flag = 0
                     output_bam.write(sup_read)
 
-            logger.info(f"Filtered out {len(filtered_qnames)} of {total_reads} reads where reference position matches qname start from {bam_file}")
+            logger.info(f"Filtered out {len(primary_align_origin_qnames)} of {total_reads} reads where reference position matches qname start from {bam_file}")
     
     # Index the output BAM
     if output_file is None:
