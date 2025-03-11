@@ -223,7 +223,7 @@ def sweep_region_inspection(hap_cov_beds,
 
     hap_ids, hap_id_beds = zip(*hap_cov_beds.items())
     x = pb.BedTool()
-    sweep_regions = x.multi_intersect(hap_id_beds, names=hap_ids).to_dataframe(disable_auto_names = True, names = ["chrom", "start", "end", "hap_no", "hap_ids", "unknown", "unknown2"])
+    sweep_regions = x.multi_intersect(hap_id_beds, names=[str(h) for h in hap_ids]).to_dataframe(disable_auto_names = True, names = ["chrom", "start", "end", "hap_no", "hap_ids", "unknown", "unknown2"])
     sweep_regions = sweep_regions.loc[sweep_regions["hap_no"].astype(int) >= 3, :]
     sweep_regions.to_csv(output_bed, sep = "\t", index = False)
 
