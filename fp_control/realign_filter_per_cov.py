@@ -8,10 +8,11 @@ from src.const import shell_utils
 from src.log import logger
 
 
-def imap_filter_out(args, log_dir=""):
+def imap_filter_out(args):
     import sys
     """Worker function that processes a single region and returns results with log file path"""
     # Unpack arguments
+    args, log_dir = args
     raw_bam, output_bam, intrinsic_bam, bam_region_bed, max_varno, mapq_cutoff, basequal_median_cutoff, edge_weight_cutoff, numba_threads, tmp_dir, job_id = args
     import numba
     numba.set_num_threads(numba_threads)
