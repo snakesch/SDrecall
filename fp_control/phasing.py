@@ -173,12 +173,12 @@ def find_components_inside_filtered_cliques(final_cliques,
             c_index = component_labels[v]
             components_dict[c_index].add(int(v))
 
-        logger.info(f"Found {len(components_dict)} components in the clique {clique}")
+        logger.debug(f"Found {len(components_dict)} components in the clique {clique}")
         for c_index, vs in components_dict.items():
             for v in vs:
                 final_components[v] = haplotype_idx
             qnames = "\n".join([graph.vertex_properties['qname'][graph.vertex(v)] for v in vs])
-            logger.info(f"Assigning \n{qnames}\nto the component group {haplotype_idx}")
+            logger.debug(f"Assigning \n{qnames}\nto the haplotype group {haplotype_idx}")
             haplotype_idx += 1
 
     # logger.info(f"This is the final components: {final_components}")

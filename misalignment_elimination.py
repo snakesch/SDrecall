@@ -20,6 +20,7 @@ from realign_recall.slice_bam_by_cov import split_bam_by_cov
 from fp_control.realign_filter_per_cov import imap_filter_out
 from realign_recall.cal_edge_NM_values import calculate_NM_distribution_poisson
 
+
 def gt_filter_init(threads, cache_dir=None):
     # Set thread count for all common numerical libraries
     # Ensure threading layer is configured before any numba call
@@ -108,7 +109,7 @@ def eliminate_misalignments(input_bam,
         clean_bams = [ re.sub(r"\.raw\.", ".", cb) for cb in raw_bams]
         
         # Filter out the misaligned_reads per chromosome
-        job_num, _ = configure_parallelism(threads, numba_threads/2)
+        job_num, _ = configure_parallelism(threads, numba_threads/3)
         nm_cutoff, _ = calculate_NM_distribution_poisson(original_bam, conf_level, stat_sample_size, logger=logger)
 
         # Create a dedicated log directory
