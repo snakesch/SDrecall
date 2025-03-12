@@ -223,7 +223,7 @@ def sweep_region_inspection(hap_cov_beds,
 
     hap_ids, hap_id_beds = zip(*hap_cov_beds.items())
     x = pb.BedTool()
-    sweep_regions = x.multi_intersect(hap_id_beds, names=[str(h) for h in hap_ids]).to_dataframe(disable_auto_names = True, names = ["chrom", "start", "end", "hap_no", "hap_ids", "unknown", "unknown2"])
+    sweep_regions = x.multi_intersect(i=hap_id_beds).to_dataframe(disable_auto_names = True, names = ["chrom", "start", "end", "hap_no", "hap_ids", "unknown", "unknown2"])
     sweep_regions = sweep_regions.loc[sweep_regions["hap_no"].astype(int) >= 3, :]
     sweep_regions.to_csv(output_bed, sep = "\t", index = False)
 
@@ -677,9 +677,11 @@ def inspect_by_haplotypes(input_bam,
         # Extract all the continuous regions covered by the iterating haplotype
         conregion_dict = extract_continuous_regions_dict(reads)
         # Write the continuous regions to the temporary file
-        with open(hid_cov_bed, "w") as f:
-            for span, reads in conregion_dict.items():
-                f.write(f"{reads[0].reference_name}\t{span[0]}\t{span[1]}\n")
+        region_str = ""
+        for span, reads in conregion_dict.items():
+            region_str += f"{reads[0].reference_name}\t{span[0]}\t{span[1]}\n"
+
+        pb.BedTool(region_str, from_string = True).sort().merge().saveas(hid_cov_bed)
         hid_cov_beds[hid] = hid_cov_bed
 
         # If only one read pair is in the iterating haplotype, it is a scattered haplotype
