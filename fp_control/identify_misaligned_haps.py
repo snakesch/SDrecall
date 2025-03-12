@@ -224,8 +224,7 @@ def sweep_region_inspection(hap_cov_beds,
 
     hap_ids, hap_id_beds = zip(*hap_cov_beds.items())
     x = pb.BedTool()
-    sweep_regions = x.multi_intersect(i=hap_id_beds).to_dataframe(disable_auto_names = True, names = ["chrom", "start", "end", "hap_no", "hap_ids", "unknown", "unknown2"])
-    
+    sweep_regions = x.multi_intersect(i=hap_id_beds).to_dataframe(disable_auto_names = True, names = ["chrom", "start", "end", "hap_no", "hap_ids"] + [f"unknown_{i}" for i in range(len(hap_id_beds))]).iloc[:, :4]
     multi_haps_regions = sweep_regions.loc[sweep_regions["hap_no"].astype(int) >= 3, :]
     if len(multi_haps_regions) == 0:
         logger.warning(f"No sweep regions are found. Return None. The original sweep regions are:\n{sweep_regions.to_string(index=False)}")
