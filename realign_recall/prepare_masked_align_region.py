@@ -175,7 +175,7 @@ def prepare_masked_align_region_per_RG( rg_label: str,
 
     records = []
     for subgroup_id in rg_subids:
-        logger.info("Start to fetch the masked align region for NFC regions for PC {} subgroup {}".format(rg_label, subgroup_id))
+        logger.debug("Start to fetch the masked align region for NFC regions for PC {} subgroup {}".format(rg_label, subgroup_id))
         nfc_region_bedf = whole_region_bedf.loc[whole_region_bedf["tag"] == f"NFC:{rg_label}_{subgroup_id}", :]
         fc_region_bedf = whole_region_bedf.loc[whole_region_bedf["tag"] == f"FC:{rg_label}_{subgroup_id}", :]
         record = prepare_masked_align_region_per_RG_subgroup(fc_region_bedf,
@@ -189,7 +189,7 @@ def prepare_masked_align_region_per_RG( rg_label: str,
                                                              logger = logger)
         record = record.replace("target_fc_region_bed", f"{targeted_fc_region_bed}")
         record = record.replace("target_fc_region_size", f"{target_fc_size}")
-        logger.info(f"The returned record for {rg_label} subgroup {subgroup_id} is {record}")
+        logger.debug(f"The returned record for {rg_label} subgroup {subgroup_id} is {record}")
         records.append(record)
 
     return tuple(records)

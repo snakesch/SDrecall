@@ -23,11 +23,11 @@ def imap_filter_out(args):
     
     # Configure file logger
     file_handler = logging.FileHandler(log_file)
-    file_handler.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] [%(pathname)s:%(funcName)s:%(lineno)d] %(message)s"))
+    file_handler.setFormatter(logger.formatter)  # Use formatter from src/log.py logger
     
     # Create logger that writes to file
     subprocess_logger = logging.getLogger(f"SubProcess-{job_id}")
-    subprocess_logger.setLevel(logging.DEBUG)
+    subprocess_logger.setLevel(logger.level)  # Use logger level from src/log.py logger
     subprocess_logger.addHandler(file_handler)
     subprocess_logger.propagate = False  # Don't send logs to parent loggers
     
