@@ -23,7 +23,18 @@ def imap_filter_out(args):
     
     # Configure file logger
     file_handler = logging.FileHandler(log_file)
-    file_handler.setFormatter(logger.formatter)  # Use formatter from src/log.py logger
+    # Try to get formatter from existing handlers
+    parent_formatter = None
+    if logger.handlers:
+        for handler in logger.handlers:
+            if handler.formatter:
+                parent_formatter = handler.formatter
+                break
+            
+    if parent_formatter:
+        file_handler.setFormatter(parent_formatter)
+    else:
+        file_handler.setFormatter(logging.Formatter("[%(asctime)s] [%(levelname)s] [%(pathname)s:%(funcName)s:%(lineno)d] %(message)s"))
     
     # Create logger that writes to file
     subprocess_logger = logging.getLogger(f"SubProcess-{job_id}")
