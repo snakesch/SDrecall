@@ -26,10 +26,9 @@ class HOMOSEQ_REGION:
         # overlapping node (vertex) -> (rela_start, rela_end)
         # traverse_route looks like [(node, edge_type), (node, edge_type), (node, edge_type)]
         self.traverse_route = []
-        self.logger = logger
 
     def __hash__(self):
-        return hash(self.data)
+        return hash(self.data) + hash(self.vertex) + hash(self.ups_rela_start) + hash(self.ups_rela_end) + hash(self.down_rela_start) + hash(self.down_rela_end) + hash(self.rela_start) + hash(self.rela_end)
 
     def __repr__(self):
         return ", ".join(str(x) for x in [self.chrom, self.start, self.end, self.strand, self.size])

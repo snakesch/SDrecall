@@ -8,10 +8,11 @@ from src.const import shell_utils
 from src.log import logger
 
 
-def imap_filter_out(args, log_dir=""):
+def imap_filter_out(args):
     import sys
     """Worker function that processes a single region and returns results with log file path"""
     # Unpack arguments
+    args, log_dir = args
     raw_bam, output_bam, intrinsic_bam, bam_region_bed, max_varno, mapq_cutoff, basequal_median_cutoff, edge_weight_cutoff, numba_threads, tmp_dir, job_id = args
     import numba
     numba.set_num_threads(numba_threads)
@@ -198,6 +199,7 @@ def realign_filter_per_cov(bam,
                                                           read_ref_pos_dict,
                                                           compare_haplotype_meta_tab = compare_haplotype_meta_tab,
                                                           mean_read_length = mean_read_length,
+                                                          tmp_dir = tmp_dir,
                                                           logger = logger )
 
     assert len(correct_qnames & mismap_qnames) == 0, f"The correct_qnames and mismap_qnames have overlap: {correct_qnames & mismap_qnames}"

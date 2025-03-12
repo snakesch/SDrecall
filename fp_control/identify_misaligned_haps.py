@@ -12,12 +12,12 @@ from fp_control.numba_operators import numba_sum
 from src.log import logger
 from src.utils import executeCmd, prepare_tmp_file
 from fp_control.pairwise_read_inspection import get_hapvector_from_cigar, \
-												get_errorvector_from_cigar, \
-												get_read_id, \
-												count_var, \
-												count_continuous_blocks, \
-												count_continuous_indel_blocks, \
-												extract_read_qseqs
+                                                get_errorvector_from_cigar, \
+                                                get_read_id, \
+                                                count_var, \
+                                                count_continuous_blocks, \
+                                                count_continuous_indel_blocks, \
+                                                extract_read_qseqs
 
 
 
@@ -215,22 +215,17 @@ def calculate_coefficient(arr2d):
 
 
 
-def sweep_region_inspection(input_bam,
-                            output_bed = None,
-                            depth_cutoff = 5,
-                            window_size = 120,
-                            step_size = 30,
-                            logger = logger):
+def sweep_region_inspection(hap_cov_beds,
+                            output_bed = None):
 
     if output_bed is None:
         output_bed = prepare_tmp_file(suffix = ".bed").name
 
-    cmd = f"samtools depth {input_bam} | \
-            mawk -F '\\t' '$3 >= {depth_cutoff}{{printf \"%s\\t%s\\t%s\\n\", $1, $2-1, $2;}}' | \
-            bedtools merge -i stdin | \
-            bedtools makewindows -b stdin -w {window_size} -s {step_size} > {output_bed}"
-
-    executeCmd(cmd, logger = logger)
+    hap_ids, hap_id_beds = zip(*hap_cov_beds.items())
+    x = pb.BedTool()
+    sweep_regions = x.multi_intersect(i=hap_id_beds).to_dataframe(disable_auto_names = True, names = ["chrom", "start", "end", "hap_no", "hap_ids", "unknown", "unknown2"])
+    sweep_regions = sweep_regions.loc[sweep_regions["hap_no"].astype(int) >= 3, :]
+    sweep_regions.to_csv(output_bed, sep = "\t", index = False)
 
     op_bed_obj = pb.BedTool(output_bed)
     return op_bed_obj
@@ -549,21 +544,20 @@ def stat_refseq_similarity(intrin_bam_ncls,
                            consensus_sequence,
                            total_genomic_haps,
                            read_ref_pos_dict,
+                           varcounts_among_refseqs,
                            logger = logger):
     '''
     For each haplotype covered region (continuous region),
     We have a consensus sequence of the haplotype assembled by reads realigned here from some the homologous regions.
     We also have reference sequences aligned to the query region.
 
-    If we want to measure if the haplotype is correctly aligned here, we would compare
-      1. the similarity (variant count) between the haplotype and the reference sequence
-      with
-      2. the similarity (variant count) between the haplotype and the homologous counterparts.
+    If we want to measure if the haplotype is correctly aligned here, we could compare the below 2 metrics:
+      1. the similarity (reversely indicated by variant count) between the haplotype and the reference sequence
+      2. the similarity (reversely indicated by variant count) between the haplotype and the homologous counterparts.
 
     if 2 is much larger than 1, it definitely increase the likelihood that the haplotype is misaligned.
     '''
 
-    varcounts_among_refseqs = defaultdict(dict)
     intrin_ncls_dict, intrin_read_dict, _, _ = intrin_bam_ncls
     for homo_refseq in overlapping_reads_iterator(intrin_ncls_dict, intrin_read_dict, chrom, span[0], span[1]):
         homo_refseq_start = homo_refseq.reference_start
@@ -659,6 +653,7 @@ def inspect_by_haplotypes(input_bam,
                           read_ref_pos_dict,
                           compare_haplotype_meta_tab = "",
                           mean_read_length = 150,
+                          tmp_dir = "/tmp",
                           logger = logger):
     _, read_dict, _, qname_idx_dict, _ = bam_ncls
     record_dfs = []
@@ -667,10 +662,13 @@ def inspect_by_haplotypes(input_bam,
     hid_var_count = defaultdict(int) # Initialize a dictionary to store the variant count of the haplotype
     scatter_hid_dict = defaultdict(bool) # Initialize a dictionary to store if the haplotype is scattered
     logger.info("All the haplotype IDs are :\n{}\n".format(list(hap_qname_info.keys())))
+    varcounts_among_refseqs = defaultdict(dict)
+    hid_cov_beds = {}
 
     # Iterate over all the haplotypes
     for hid, qnames in hap_qname_info.items():
         logger.info(f"The haplotype {hid} contains {len(qnames)} read pairs in total.")
+        hid_cov_bed = prepare_tmp_file(suffix = f".haplotype_{hid}.cov.bed", tmp_dir = tmp_dir).name
 
         # Extract all the qname indices and all the reads belonged to the iterating haplotype
         qname_indices = [qname_idx_dict[qname] for qname in qnames]
@@ -678,6 +676,13 @@ def inspect_by_haplotypes(input_bam,
 
         # Extract all the continuous regions covered by the iterating haplotype
         conregion_dict = extract_continuous_regions_dict(reads)
+        # Write the continuous regions to the temporary file
+        region_str = ""
+        for span, reads in conregion_dict.items():
+            region_str += f"{reads[0].reference_name}\t{span[0]}\t{span[1]}\n"
+
+        pb.BedTool(region_str, from_string = True).sort().merge().saveas(hid_cov_bed)
+        hid_cov_beds[hid] = hid_cov_bed
 
         # If only one read pair is in the iterating haplotype, it is a scattered haplotype
         if len(qnames) < 2:
@@ -727,11 +732,8 @@ def inspect_by_haplotypes(input_bam,
                                                                                 consensus_sequence,
                                                                                 total_genomic_haps,
                                                                                 read_ref_pos_dict,
+                                                                                varcounts_among_refseqs,
                                                                                 logger = logger)
-
-    # Log the reference genome similarities for all the haplotypes
-    ref_genome_str = '\n'.join([f"{k}: {v}" for k,v in varcounts_among_refseqs.items()])
-    logger.info(f"ref genome similarities: {ref_genome_str}")
     # Log the extreme variant density haplotypes
     logger.info(f"extreme variant density haplotypes: {hid_extreme_vard}")
     # Log the scattered haplotypes
@@ -744,7 +746,7 @@ def inspect_by_haplotypes(input_bam,
     logger.info(f"Final ref sequence similarities for all the haplotypes are {hap_max_sim_scores}")
 
     sweep_region_bed = input_bam.replace(".bam", ".sweep.bed")
-    sweep_regions = sweep_region_inspection(input_bam, sweep_region_bed, logger = logger)
+    sweep_regions = sweep_region_inspection(hid_cov_beds, sweep_region_bed)
     logger.info(f"Now the sweep regions are saved to {sweep_region_bed}.")
 
     '''
@@ -791,7 +793,7 @@ def inspect_by_haplotypes(input_bam,
         total_record_df = total_record_df.loc[np.logical_not(total_record_df["extreme_vard"]) & \
                                               np.logical_not(total_record_df["scatter_hap"]) & \
                                               (total_record_df["total_depth"] >= 5) & \
-                                              (total_record_df["hap_max_sim_scores"] <= 5), :]
+                                              (total_record_df["hap_max_sim_scores"] <= 10), :]
         # total_record_df.loc[:, "coefficient"] = np.clip(total_record_df["coefficient"] + total_record_df["hap_max_sim_scores"], 10e-3, None)
         if total_record_df.shape[0] == 0:
             failed_lp = True
@@ -816,7 +818,7 @@ def inspect_by_haplotypes(input_bam,
 
     if not failed_lp:
         mismap_hids.update(set([hid for hid in hid_extreme_vard if hid_extreme_vard[hid]]))
-        mismap_hids.update(set([hid for hid in hap_max_sim_scores if hap_max_sim_scores[hid] > 5]))
+        mismap_hids.update(set([hid for hid in hap_max_sim_scores if hap_max_sim_scores[hid] > 10]))
         mismap_hids.update(set([hid for hid in scatter_hid_dict if scatter_hid_dict[hid] and hid_var_count[hid] > 1]))
         correct_map_hids = correct_map_hids - mismap_hids
 
@@ -830,7 +832,7 @@ def inspect_by_haplotypes(input_bam,
     if failed_lp:
         mismap_hids = set([hid for hid in hid_extreme_vard if hid_extreme_vard[hid]])
         mismap_hids.update(set([hid for hid in scatter_hid_dict if scatter_hid_dict[hid] and hid_var_count[hid] > 1]))
-        mismap_hids.update(set([hid for hid in hap_max_sim_scores if hap_max_sim_scores[hid] > 5]))
+        mismap_hids.update(set([hid for hid in hap_max_sim_scores if hap_max_sim_scores[hid] > 10]))
         mismap_qnames = set([qname for hid in mismap_hids for qname in hap_qname_info[hid]])
         total_qnames = set([qname for qnames in hap_qname_info.values() for qname in qnames])
         correct_map_qnames = total_qnames - mismap_qnames

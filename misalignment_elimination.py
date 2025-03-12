@@ -48,6 +48,7 @@ def gt_filter_init(threads, cache_dir=None):
 def eliminate_misalignments(input_bam,
                             output_bam,
                             intrinsic_bam,
+                            original_bam,
                             ref_genome,
                             target_regions,
                             avg_frag_size = 400,
@@ -107,8 +108,8 @@ def eliminate_misalignments(input_bam,
         clean_bams = [ re.sub(r"\.raw\.", ".", cb) for cb in raw_bams]
         
         # Filter out the misaligned_reads per chromosome
-        job_num, _ = configure_parallelism(threads, numba_threads)
-        nm_cutoff, _ = calculate_NM_distribution_poisson(input_bam, conf_level, stat_sample_size, logger=logger)
+        job_num, _ = configure_parallelism(threads, numba_threads/2)
+        nm_cutoff, _ = calculate_NM_distribution_poisson(original_bam, conf_level, stat_sample_size, logger=logger)
 
         # Create a dedicated log directory
         log_dir = os.path.dirname(output_bam)
@@ -116,7 +117,7 @@ def eliminate_misalignments(input_bam,
 
         with ctx.Pool(job_num, initializer=gt_filter_init, initargs=(numba_threads, cache_dir)) as pool:
             # Pass the log_dir parameter to the function
-            result_records = pool.starmap(
+            result_records = pool.imap_unordered(
                 imap_filter_out, 
                 [(
                     (raw_bam, 
@@ -129,7 +130,7 @@ def eliminate_misalignments(input_bam,
                      edge_weight_cutoff,
                      numba_threads,
                      cache_dir,
-                     i), 
+                     i+1), 
                     log_dir
                 ) for i, (raw_bam, clean_bam, intrinsic_bam, raw_bam_region) in enumerate(zip(raw_bams, clean_bams, intrinsic_bams, raw_bam_regions))]
             )
