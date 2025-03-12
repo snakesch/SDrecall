@@ -216,7 +216,8 @@ def calculate_coefficient(arr2d):
 
 
 def sweep_region_inspection(hap_cov_beds,
-                            output_bed = None):
+                            output_bed = None,
+                            logger = logger):
 
     if output_bed is None:
         output_bed = prepare_tmp_file(suffix = ".bed").name
@@ -224,8 +225,12 @@ def sweep_region_inspection(hap_cov_beds,
     hap_ids, hap_id_beds = zip(*hap_cov_beds.items())
     x = pb.BedTool()
     sweep_regions = x.multi_intersect(i=hap_id_beds).to_dataframe(disable_auto_names = True, names = ["chrom", "start", "end", "hap_no", "hap_ids", "unknown", "unknown2"])
-    sweep_regions = sweep_regions.loc[sweep_regions["hap_no"].astype(int) >= 3, :]
-    sweep_regions.to_csv(output_bed, sep = "\t", index = False)
+    
+    multi_haps_regions = sweep_regions.loc[sweep_regions["hap_no"].astype(int) >= 3, :]
+    if len(multi_haps_regions) == 0:
+        logger.warning(f"No sweep regions are found. Return None. The original sweep regions are:\n{sweep_regions.to_string(index=False)}")
+        return None
+    multi_haps_regions.to_csv(output_bed, sep = "\t", index = False, header = False)
 
     op_bed_obj = pb.BedTool(output_bed)
     return op_bed_obj
@@ -746,7 +751,7 @@ def inspect_by_haplotypes(input_bam,
     logger.info(f"Final ref sequence similarities for all the haplotypes are {hap_max_sim_scores}")
 
     sweep_region_bed = input_bam.replace(".bam", ".sweep.bed")
-    sweep_regions = sweep_region_inspection(hid_cov_beds, sweep_region_bed)
+    sweep_regions = sweep_region_inspection(hid_cov_beds, sweep_region_bed, logger = logger)
     logger.info(f"Now the sweep regions are saved to {sweep_region_bed}.")
 
     '''
