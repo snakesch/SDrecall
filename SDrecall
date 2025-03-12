@@ -154,7 +154,6 @@ def run_full_pipeline(args):
         sdrecall_paths=paths,
         threads=args.threads,
         numba_threads=args.numba_threads,
-        mq_cutoff=args.mq_cutoff,
         conf_level=args.conf_level
     )
     
@@ -255,7 +254,6 @@ def run_realign_only(args):
         sdrecall_paths=paths,
         threads=args.threads,
         numba_threads=args.numba_threads,
-        mq_cutoff=args.mq_cutoff,
         conf_level=args.conf_level
     )
     

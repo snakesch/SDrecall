@@ -13,7 +13,7 @@ def imap_filter_out(args):
     """Worker function that processes a single region and returns results with log file path"""
     # Unpack arguments
     args, log_dir = args
-    raw_bam, output_bam, intrinsic_bam, bam_region_bed, max_varno, mapq_cutoff, basequal_median_cutoff, edge_weight_cutoff, numba_threads, tmp_dir, job_id = args
+    raw_bam, output_bam, intrinsic_bam, bam_region_bed, max_varno, recall_mq_cutoff, basequal_median_cutoff, edge_weight_cutoff, numba_threads, tmp_dir, job_id = args
     import numba
     numba.set_num_threads(numba_threads)
     numba.config.THREADING_LAYER = 'omp'
@@ -36,7 +36,7 @@ def imap_filter_out(args):
         subprocess_logger.info(f"Processing region in {raw_bam}")
         subprocess_logger.info(f"Parameters: output_bam={output_bam}, intrinsic_bam={intrinsic_bam}, "
                                f"bam_region_bed={bam_region_bed}, max_varno={max_varno}, "
-                               f"mapq_cutoff={mapq_cutoff}, basequal_median_cutoff={basequal_median_cutoff}, "
+                               f"recall_mq_cutoff={recall_mq_cutoff}, basequal_median_cutoff={basequal_median_cutoff}, "
                                f"edge_weight_cutoff={edge_weight_cutoff}")
         
         # Call the main processing function
@@ -46,7 +46,7 @@ def imap_filter_out(args):
             intrinsic_bam=intrinsic_bam,
             bam_region_bed=bam_region_bed,
             max_varno=max_varno,
-            mapq_cutoff=mapq_cutoff,
+            recall_mq_cutoff=recall_mq_cutoff,
             basequal_median_cutoff=basequal_median_cutoff,
             edge_weight_cutoff=edge_weight_cutoff,
             tmp_dir=tmp_dir,
@@ -74,7 +74,7 @@ def realign_filter_per_cov(bam,
                            intrinsic_bam = None,
                            bam_region_bed = None,
                            max_varno = 5,
-                           mapq_cutoff = 20,
+                           recall_mq_cutoff = 10,
                            basequal_median_cutoff = 15,
                            edge_weight_cutoff = 0.201,
                            threads = 4,
@@ -97,7 +97,7 @@ def realign_filter_per_cov(bam,
     - raw_vcf (str): Path to the raw VCF file, the variants detected in the raw pooled alignments.
     - bam_region_bed (str, optional): Path to the BED file defining covered regions of the processing bam file, if not specified, bam_region_bed will be generated with a name after the input bam with .coverage.bed suffix
     - max_varno (float): Maximum variant number allowed
-    - mapq_cutoff (int): Mapping quality cutoff to be included in the analysis
+    - recall_mq_cutoff (int): Mapping quality cutoff to be included in the analysis
     - basequal_median_cutoff (int): Base quality median cutoff to be included in the analysis (if the median BQ of a read is lower than this cutoff, we will discard this read because it is too noisy)
     - edge_weight_cutoff (float): Edge weight cutoff separating two rounds of BK clique searches
     - logger (Logger object): Logger for output messages
@@ -127,7 +127,7 @@ def realign_filter_per_cov(bam,
     total_num = 0
 
     bam_ncls = migrate_bam_to_ncls(bam,
-                                   mapq_filter = mapq_cutoff,
+                                   mapq_filter = recall_mq_cutoff,
                                    basequal_median_filter = basequal_median_cutoff,
                                    logger=logger)
 
@@ -145,7 +145,7 @@ def realign_filter_per_cov(bam,
     # Since intrinsic BAM reads are reference sequences, therefore there are no low quality reads
     intrin_bam_ncls = intrin_bam_ncls[:-1]
     logger.info(f"Successfully migrated the intrinsic BAM file {intrinsic_bam} to NCLS format\n")
-    logger.info(f"Containing {len(intrin_bam_ncls[1])} reads in total.\n\n")
+    logger.info(f"Intrinsic BAM contains {len(intrin_bam_ncls[1])} reads in total.\n\n")
     bam_graph = bam.replace(".bam", ".phased.graphml")
 
     # Calculate the mean read length of the input bam file, which can be used for read pair similarity calculation
@@ -186,21 +186,25 @@ def realign_filter_per_cov(bam,
     total_readerr_vector = {}
     compare_haplotype_meta_tab = bam.replace(".bam", ".haplotype_meta.tsv")
 
-    correct_qnames, mismap_qnames = inspect_by_haplotypes(bam,
-                                                          hap_qname_info,
-                                                          qname_hap_info,
-                                                          bam_ncls,
-                                                          intrin_bam_ncls,
-                                                          qname_to_node,
-                                                          total_lowqual_qnames,
-                                                          total_readhap_vector,
-                                                          total_readerr_vector,
-                                                          total_genomic_haps,
-                                                          read_ref_pos_dict,
-                                                          compare_haplotype_meta_tab = compare_haplotype_meta_tab,
-                                                          mean_read_length = mean_read_length,
-                                                          tmp_dir = tmp_dir,
-                                                          logger = logger )
+    if len(hap_qname_info) <= 2:
+        logger.warning(f"Only {len(hap_qname_info)} haplotype clusters are found for bam {bam}. Do not need to choose 2 haplotypes, Skip this region.\n")
+        correct_qnames, mismap_qnames = set(list(hap_qname_info.keys())), set([])
+    else:
+        correct_qnames, mismap_qnames = inspect_by_haplotypes(bam,
+                                                              hap_qname_info,
+                                                              qname_hap_info,
+                                                              bam_ncls,
+                                                              intrin_bam_ncls,
+                                                              qname_to_node,
+                                                              total_lowqual_qnames,
+                                                              total_readhap_vector,
+                                                              total_readerr_vector,
+                                                              total_genomic_haps,
+                                                              read_ref_pos_dict,
+                                                              compare_haplotype_meta_tab = compare_haplotype_meta_tab,
+                                                              mean_read_length = mean_read_length,
+                                                              tmp_dir = tmp_dir,
+                                                              logger = logger )
 
     assert len(correct_qnames & mismap_qnames) == 0, f"The correct_qnames and mismap_qnames have overlap: {correct_qnames & mismap_qnames}"
 

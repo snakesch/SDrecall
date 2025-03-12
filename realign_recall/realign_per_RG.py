@@ -23,13 +23,10 @@ def process_masked_bam( rg_tag,
                         sd_freads,
                         sd_rreads,
                         threads=1,
-                        mq_cutoff=20,
                         ref_genome="",
                         logger = logger ):
 
-    # First merge the FC and NFC regions and masked genomes
-    mq_cutoff = int(mq_cutoff)
-    
+    # First merge the FC and NFC regions and masked genomes  
     rg_fc_beds = list(dict.fromkeys(rg_fc_beds))
     rg_nfc_beds = list(dict.fromkeys(rg_nfc_beds))
 
