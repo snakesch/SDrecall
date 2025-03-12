@@ -403,8 +403,8 @@ function modify_masked_genome_coords () {
 
 
 function independent_minimap2_masked () {
-    local OPTIND f r s g o p t z m i a
-    while getopts f::r::s::g::o::t::z::m::i::a:: args
+    local OPTIND f r s g o p t z m i a k
+    while getopts f::r::s::g::o::t::z::m::i::a::k:: args
     do
         case ${args} in
             f) local forward_reads=$OPTARG ;;
@@ -417,6 +417,7 @@ function independent_minimap2_masked () {
             z) local ref_contig_sizes=$OPTARG ;;
             m) local mode=$OPTARG ;;
             i) local rg_index=$OPTARG ;;
+            k) local kwargs=$OPTARG ;;
             *) echo "No argument passed. Pls at least specify -r (ref fasta path) or -b (bed_file path)." ;;
         esac
     done
@@ -448,7 +449,7 @@ function independent_minimap2_masked () {
     log "Running minimap2 --eqx --MD -F 1000 -ax ${mode} -t ${threads} \
     -R \"@RG\tID:${samp_ID}\tLB:SureSelectXT Library Prep Kit\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}\" \
     ${masked_genome/.fasta/.mmi} ${forward_reads} ${reverse_reads}" && \
-    minimap2 -ax ${mode} --eqx --MD -F 1000 -t ${threads} -R "@RG\tID:${samp_ID}\tLB:SureSelectXT\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}" \
+    minimap2 -ax ${mode} --eqx --MD -F 1000 -t ${threads} ${kwargs} -R "@RG\tID:${samp_ID}\tLB:SureSelectXT\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}" \
     ${masked_genome/.fasta/.mmi} ${forward_reads} ${reverse_reads} > ${mid_align} && \
     modify_masked_genome_coords ${mid_align} ${ref_contig_sizes} ${rg_index} | \
     samtools view -S -u -@ ${threads} - | samtools sort -O bam -@ ${threads} -o ${output_align} && \

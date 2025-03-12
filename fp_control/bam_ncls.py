@@ -119,7 +119,8 @@ def is_read_noisy(read, paired, mapq_filter, basequal_median_filter, filter_nois
            read.reference_end is None or \
            read.reference_end - read.reference_start < 75 or \
            read.reference_name != read.next_reference_name or \
-           not read.is_proper_pair:
+           not read.is_proper_pair or \
+           read.query_sequence is None:
             return True
         
         if read.query_qualities is not None:
@@ -132,7 +133,8 @@ def is_read_noisy(read, paired, mapq_filter, basequal_median_filter, filter_nois
            read.is_unmapped or \
            read.mapping_quality < mapq_filter or \
            read.is_qcfail or \
-           read.reference_end is None:
+           read.reference_end is None or \
+           read.query_sequence is None:
             return True
         if read.query_qualities is not None:
             return (fast_median(np.array(read.query_qualities, dtype=np.uint8)) <= basequal_median_filter or
@@ -224,18 +226,18 @@ def migrate_bam_to_ncls(bam_file,
         noisy_qnames = set()
 
         for read in bam:
-            if read.query_name in noisy_qnames:
+            qname = read.query_name
+            if qname in noisy_qnames:
                 continue
 
             if is_read_noisy(read, paired, mapq_filter, basequal_median_filter, filter_noisy):
-                logger.debug(f"This qname {read.query_name} is noisy. Skip it.")
-                noisy_qnames.add(read.query_name)
+                logger.debug(f"This qname {qname} is noisy. Skip it.")
+                noisy_qnames.add(qname)
                 continue
 
             chrom = read.reference_name
             start = read.reference_start
             end = read.reference_end
-            qname = read.query_name
 
             if qname in qname_idx_dict:
                 qname_idx = qname_idx_dict[qname]

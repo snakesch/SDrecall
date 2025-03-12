@@ -1,5 +1,4 @@
 import os
-import logging
 
 from preparation.seq import getRawseq
 from src.utils import executeCmd, is_file_up_to_date, prepare_tmp_file
@@ -55,7 +54,8 @@ def getIntrinsicBam(rg_bed,
                 -t {threads} \
                 -i {rg_label} \
                 -m asm20 \
-                -g {ref_genome}"
+                -g {ref_genome} \
+                -k \"--secondary yes\""
         executeCmd(cmd, logger=logger)
         intrinsic_bam = filter_intrinsic_alignments(intrinsic_bam, logger=logger)
 
@@ -85,14 +85,17 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger = logger):
         with pysam.AlignmentFile(tmp_output, "wb", header=input_bam.header) as output_bam:
             total_reads = 0
             primary_align_origin_qnames = set([])
-            primary_align_origin_qnames_sup = {}
             sec_to_pri_qnames = set([]) 
             buffer_sec_aligns = {}
-            buffer_sup_aligns = {}
 
             for read in input_bam:
                 total_reads += 1
                 qname = read.query_name
+                # First filter out unmapped and None query sequence reads
+                if read.is_unmapped:
+                    continue
+                if read.query_sequence is None:
+                    continue
                 if qname in primary_align_origin_qnames:
                     if read.is_supplementary:
                         continue
