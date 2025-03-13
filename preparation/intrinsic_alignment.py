@@ -54,8 +54,7 @@ def getIntrinsicBam(rg_bed,
                 -t {threads} \
                 -i {rg_label} \
                 -m asm20 \
-                -g {ref_genome} \
-                -k \"--secondary yes\""
+                -g {ref_genome}"
         executeCmd(cmd, logger=logger)
         intrinsic_bam = filter_intrinsic_alignments(intrinsic_bam, logger=logger)
 

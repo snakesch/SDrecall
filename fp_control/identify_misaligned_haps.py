@@ -264,8 +264,8 @@ def extract_continuous_regions_dict(reads):
     current_end = None
 
     for read in reads:
-        read_start = read.reference_start
-        read_end = read.reference_end
+        read_start = read.reference_start # 0 indexed
+        read_end = read.reference_end  # 0 indexed and refers to the one past the last aligned base
 
         if current_start is None:
             # Initialize the first region
@@ -273,8 +273,9 @@ def extract_continuous_regions_dict(reads):
             current_end = read_end
             current_region_reads.append(read)
         else:
-            if read_start <= current_end:
-                # Extend the current region
+            if read_start <= current_end and read_end >= current_start:
+                # Extend the current region if the iterating read overlaps with it.
+                current_start = min(current_start, read_start)
                 current_end = max(current_end, read_end)
                 current_region_reads.append(read)
             else:
@@ -484,7 +485,7 @@ def identify_misalignment_per_region(region,
 
     # logger.info(f"The Final haplotype dict looks like this \n{final_clusters}\n")
     if len(final_clusters) <= 2:
-        logger.info(f"Only {len(final_clusters)} haplotype clusters are found for region {region_str}. Do not need to choose 2 haplotypes, Skip this region.\n")
+        logger.warning(f"Only {len(final_clusters)} haplotype clusters are found for region {region_str}. Do not need to choose 2 haplotypes, Skip this region.\n")
         return None, total_hapvectors, total_errvectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx, read_ref_pos_dict
 
     record_2d_arr = record_haplotype_rank( final_clusters, mean_read_length = mean_read_length )
@@ -688,8 +689,8 @@ def inspect_by_haplotypes(input_bam,
         pb.BedTool(region_str, from_string = True).sort().merge().saveas(hid_cov_bed)
         hid_cov_beds[hid] = hid_cov_bed
 
-        # If only one read pair is in the iterating haplotype, it is a scattered haplotype
-        if len(qnames) < 2:
+        # If only one read pair is in the iterating haplotype, it is a scattered haplotype, unless the total involving read pairs are small
+        if len(qnames) < 2 and len(read_dict) > 20:
             scatter_hid_dict[hid] = True
 
         # Iterate over all the continuous regions covered by the iterating haplotype
