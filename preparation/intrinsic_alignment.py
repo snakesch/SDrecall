@@ -1,4 +1,9 @@
 import os
+import re
+import pysam
+import intervaltree
+
+from collections import defaultdict
 
 from preparation.seq import getRawseq
 from src.utils import executeCmd, is_file_up_to_date, prepare_tmp_file
@@ -62,46 +67,117 @@ def getIntrinsicBam(rg_bed,
 
 
 
-def filter_intrinsic_alignments(bam_file, output_file=None, logger = logger):
+def compute_interval_status(bam_file, logger):
     """
-    Filter out alignments where the start position in the read name
-    matches the alignment position in the reference. Meaning the reference sequence is mapped to its original genomic location
+    Computes allowed status for each distinct interval extracted from the qname.
+    An interval is represented as a tuple (chrom, start, end). If an interval 
+    is enclosed by a larger interval on the same chromosome, it is marked False.
+    For identical intervals, only one copy will be considered allowed.
+    """
+    # Updated regex: the :label part is optional.
+    qname_regex = re.compile(r'(.*):(\d+)-(\d+)(?::(.*))?')
+    intervals_by_chr = defaultdict(set)
+    
+    with pysam.AlignmentFile(bam_file, "rb") as bam:
+        for read in bam:
+            # Only consider reads with a query sequence and mapped
+            if read.is_unmapped or read.query_sequence is None:
+                continue
+            m = qname_regex.match(read.query_name)
+            if m:
+                chrom = m.group(1)
+                start_val = int(m.group(2))
+                end_val = int(m.group(3))
+                intervals_by_chr[chrom].add((start_val, end_val))
+    
+    allowed_status = {}
+    # Process intervals per chromosome
+    for chrom, intervals in intervals_by_chr.items():
+        # Sort by start ascending; for equal starts, sort by end descending.
+        sorted_intervals = sorted(list(intervals), key=lambda x: (x[0], -x[1]))
+        max_end = -1
+        for i, (s, e) in enumerate(sorted_intervals):
+            # The first interval is always allowed.
+            if i == 0:
+                allowed_status[(chrom, s, e)] = True
+                max_end = e
+            else:
+                # If current interval's end is <= max_end, it is enclosed by a previous interval.
+                if e <= max_end:
+                    allowed_status[(chrom, s, e)] = False
+                else:
+                    allowed_status[(chrom, s, e)] = True
+                    max_end = e
+    logger.info(f"Computed interval allowed statuses for {bam_file}")
+    return allowed_status
+
+
+
+def filter_intrinsic_alignments(bam_file, output_file=None, logger=logger):
+    """
+    Filter out alignments where the start position in the read name matches 
+    the alignment position in the reference (i.e. mapping to its original 
+    genomic location) and now also filter out reads whose intervals (from the 
+    qname) are either enclosed by larger intervals or are duplicates.
+    
+    For reads with qnames matching the pattern: chr:start-end(:label)?,
+    only one copy per distinct interval (chr, start, end) will be kept 
+    if that interval is not enclosed by a larger one.
     
     Parameters:
     -----------
     bam_file : str
         Path to input BAM file
-    output_file : str
+    output_file : str, optional
         Path to output filtered BAM file
     """
-    import pysam
-    import re
-    
-    qname_regex = re.compile(r'(.*):(\d+)-(\d+)(.*)')
+    # Updated regex: the :label part is optional.
+    qname_regex = re.compile(r'(.*):(\d+)-(\d+)(?::(.*))?')
     tmp_output = prepare_tmp_file(suffix=".bam").name
+    
+    # Compute allowed status for each distinct interval.
+    allowed_status = compute_interval_status(bam_file, logger)
+    seen_intervals = set()  # To track intervals already allowed (one copy per distinct interval)
     
     with pysam.AlignmentFile(bam_file, "rb") as input_bam:
         with pysam.AlignmentFile(tmp_output, "wb", header=input_bam.header) as output_bam:
             total_reads = 0
-            primary_align_origin_qnames = set([])
-            sec_to_pri_qnames = set([]) 
+            primary_align_origin_qnames = set()
+            sec_to_pri_qnames = set() 
             buffer_sec_aligns = {}
-
+            
             for read in input_bam:
                 total_reads += 1
+                
+                # Skip unmapped or reads with no query sequence.
+                if read.is_unmapped or read.query_sequence is None:
+                    continue
+                
                 qname = read.query_name
-                # First filter out unmapped and None query sequence reads
-                if read.is_unmapped:
-                    continue
-                if read.query_sequence is None:
-                    continue
+                # Check the interval filtering only if the qname matches the expected pattern.
+                m = qname_regex.match(qname)
+                if m:
+                    chrom = m.group(1)
+                    start_val = int(m.group(2))
+                    end_val = int(m.group(3))
+                    interval = (chrom, start_val, end_val)
+                    # If the interval is in our computed dictionary and is enclosed, skip.
+                    if not allowed_status.get(interval, True):
+                        continue
+                    # If the interval has already been seen, skip duplicate.
+                    if interval in seen_intervals:
+                        continue
+                    # Otherwise, mark this interval as seen.
+                    seen_intervals.add(interval)
+                
+                # Now follow the original intrinsic alignment filtering.
                 if qname in primary_align_origin_qnames:
                     if read.is_supplementary:
                         continue
                     elif read.is_secondary:
                         sec_to_pri_qnames.add(qname)
-                        # Set the read's flag to primary alignment
-                        read.flag = 0
+                        # Remove the secondary alignment flag (256)
+                        read.flag = read.flag - 256
                         output_bam.write(read)
                         continue
                 elif read.is_supplementary:
@@ -110,34 +186,36 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger = logger):
                     buffer_sec_aligns[qname] = read
                     continue
                     
-                # Extract start position from qname (format: chr:start-end)
-                match = qname_regex.match(read.query_name)
+                # Extract the qname start position (format: chr:start-end(:label)?)
+                match = qname_regex.match(qname)
                 if match:
                     qname_start = int(match.group(2))
-                    
-                    # Compare with alignment position
-                    if qname_start != read.reference_start + 1:  # pysam.read.reference_start is 0-based
+                    # Compare with alignment position (pysam.read.reference_start is 0-based)
+                    if qname_start != read.reference_start + 1:
                         output_bam.write(read)
                     else:
-                        primary_align_origin_qnames.add(read.query_name)
+                        primary_align_origin_qnames.add(qname)
                 else:
-                    # If qname doesn't match the expected format, keep the read
+                    # If qname doesn't match the expected pattern, keep the read.
                     output_bam.write(read)
-
-            # After the loop we take a look at how many primary alignments aligned to original genomic locations are unhandled
+            
+            # Process buffered secondary alignments that have a primary counterpart.
             primary_align_origin_qnames = primary_align_origin_qnames - sec_to_pri_qnames
-
-            # Deal with unhandled secondary alignments
             for qname in primary_align_origin_qnames:
                 if qname in buffer_sec_aligns:
                     sec_read = buffer_sec_aligns[qname]
-                    sec_read.flag = 0
+                    sec_read.flag = sec_read.flag - 256
                     output_bam.write(sec_read)
                     sec_to_pri_qnames.add(qname)
 
-            logger.info(f"Filtered out {len(primary_align_origin_qnames)} of {total_reads} reads where reference position matches qname start from {bam_file}, converted {len(sec_to_pri_qnames)} secondary alignments to primary alignments")
+            logger.info(
+                f"Filtered out {len(primary_align_origin_qnames)} reads (intrinsic alignments) "
+                f"and duplicates/enclosed intervals (duplicate intervals: {len(seen_intervals)} kept) "
+                f"out of {total_reads} reads in {bam_file}. "
+                f"Converted {len(sec_to_pri_qnames)} secondary alignments to primary alignments."
+            )
     
-    # Index the output BAM
+    # Index the output BAM.
     if output_file is None:
         cmd = f"mv {tmp_output} {bam_file} && samtools index {bam_file}"
         executeCmd(cmd, logger=logger)
@@ -146,3 +224,4 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger = logger):
         cmd = f"mv {tmp_output} {output_file} && samtools index {output_file}"
         executeCmd(cmd, logger=logger)
         return output_file
+

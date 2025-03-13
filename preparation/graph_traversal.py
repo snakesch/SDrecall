@@ -49,8 +49,8 @@ def inspect_cnode_along_route(graph,
             qnode.rela_start = qnode_overlap_start
             qnode.rela_end = qnode_overlap_end
             
-            if qnode_overlap_size <= max(avg_frag_size - std_frag_size, 140):
-                # 0.4 quantile in insert size distribution
+            if qnode_overlap_size <= max(avg_frag_size - 2 * std_frag_size, 140):
+                # 0.05 quantile in insert size distribution
                 logger.debug(f"The overlapping region for (cnode is {cnode}) query node {qnode}, ({qnode.chrom}:{qnode.start + qnode_overlap_start}-{qnode.start + qnode_overlap_end}) is too small, the traverse route ends here: {list(qnode.traverse_route) + [(qnode, 'overlap')]}")
                 return None
             else:
@@ -63,7 +63,7 @@ def inspect_cnode_along_route(graph,
                 cnode.rela_start = cnode_rela_start
                 cnode.rela_end = cnode_rela_end
 
-                if cnode_rela_end - cnode_rela_start <= max(avg_frag_size - std_frag_size, 140):
+                if cnode_rela_end - cnode_rela_start <= max(avg_frag_size - 2 * std_frag_size, 140):
                     logger.debug(f"The cnode segment ({cnode}) is too small. Skipping ... ")
                     return None
                     
@@ -195,7 +195,7 @@ def get_overlap_neighbors(g, vertex):
 
     overlap_neighbors = []
     
-    # Check out-edges
+    # Check all neighbors
     for neighbor in g.get_all_neighbors(vertex):
         neighbor = g.vertex(neighbor)
         neighbor_data = data_prop[neighbor]
@@ -260,7 +260,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
         # Skip the current path in case of adjacent PO edges
         if len([i for i in range(0, len(shortest_path_edges) - 1) if graph.ep["overlap"][shortest_path_edges[i]] == "True" and graph.ep["overlap"][shortest_path_edges[i+1]] == "True"]) > 1:
             continue
-        if reduce(mul, [1 - graph.ep["weight"][e] for e in shortest_path_edges if graph.ep["type"][e] == "segmental_duplication"]) <= 0.9:
+        if reduce(mul, [1 - graph.ep["weight"][e] for e in shortest_path_edges if graph.ep["type"][e] == "segmental_duplication"]) <= 0.8:
             continue
         
         # If the last edge is segmental duplication, then check if the region is considerably large
@@ -292,7 +292,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
                 counter_qnodes += get_overlap_neighbors(query_nodes_view, cnode.vertex)
                 
     if len(counter_nodes) == 0:
-        logger.debug(f"No cnodes found for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes, (one of the node is {HOMOSEQ_REGION(shortest_path_verts[-1], graph)}).")
+        logger.info(f"No cnodes found for query node {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes, (one of the node is {HOMOSEQ_REGION(shortest_path_verts[-1], graph)}).")
         return [], []
     else:
         logger.debug(f"Found {len(counter_nodes)} new cnodes for qnode {ori_qnode} in the subgraph {subgraph_label} containing {n} nodes, (one of the node is {HOMOSEQ_REGION(shortest_path_verts[-1], graph)})")
