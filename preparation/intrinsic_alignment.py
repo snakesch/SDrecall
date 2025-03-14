@@ -75,7 +75,7 @@ def compute_interval_status(bam_file, logger):
     For identical intervals, only one copy will be considered allowed.
     """
     # Updated regex: the :label part is optional.
-    qname_regex = re.compile(r'(.*):(\d+)-(\d+)(?::(.*))?')
+    qname_regex = re.compile(r'(.*):(\d+)-(\d+):(.+)')
     intervals_by_chr = defaultdict(set)
     
     with pysam.AlignmentFile(bam_file, "rb") as bam:
@@ -131,8 +131,8 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger=logger):
     output_file : str, optional
         Path to output filtered BAM file
     """
-    # Updated regex: the :label part is optional.
-    qname_regex = re.compile(r'(.*):(\d+)-(\d+)(?::(.*))?')
+    # Updated regex: the :label part is not required.
+    qname_regex = re.compile(r'(.*):(\d+)-(\d+):(.+)')
     tmp_output = prepare_tmp_file(suffix=".bam").name
     
     # Compute allowed status for each distinct interval.
@@ -170,28 +170,23 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger=logger):
                     # Otherwise, mark this interval as seen.
                     seen_intervals.add(interval)
                 
-                # Now follow the original intrinsic alignment filtering.
-                if qname in primary_align_origin_qnames:
-                    if read.is_supplementary:
+                    # Now follow the original intrinsic alignment filtering.
+                    if qname in primary_align_origin_qnames:
+                        if read.is_supplementary:
+                            continue
+                        elif read.is_secondary:
+                            sec_to_pri_qnames.add(qname)
+                            # Remove the secondary alignment flag (256)
+                            read.flag = read.flag - 256
+                            output_bam.write(read)
+                            continue
+                    elif read.is_supplementary:
                         continue
                     elif read.is_secondary:
-                        sec_to_pri_qnames.add(qname)
-                        # Remove the secondary alignment flag (256)
-                        read.flag = read.flag - 256
-                        output_bam.write(read)
+                        buffer_sec_aligns[qname] = read
                         continue
-                elif read.is_supplementary:
-                    continue
-                elif read.is_secondary:
-                    buffer_sec_aligns[qname] = read
-                    continue
-                    
-                # Extract the qname start position (format: chr:start-end(:label)?)
-                match = qname_regex.match(qname)
-                if match:
-                    qname_start = int(match.group(2))
                     # Compare with alignment position (pysam.read.reference_start is 0-based)
-                    if qname_start != read.reference_start + 1:
+                    if start_val != read.reference_start + 1:
                         output_bam.write(read)
                     else:
                         primary_align_origin_qnames.add(qname)
