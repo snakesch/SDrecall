@@ -3,7 +3,7 @@ from multiprocessing import Pool
 from pybedtools import BedTool
 from pybedtools import helpers
 
-from src.utils import executeCmd, sortBed_and_merge, merge_bed_files
+from src.utils import executeCmd, sortBed_and_merge, merge_bed_files, prepare_tmp_file
 from src.const import shell_utils, SDrecallPaths
 from src.log import log_command, logger
 from preparation.homoseq_region import HOMOSEQ_REGION
@@ -66,13 +66,16 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
     results = pool.imap_unordered(imap_establish, worker_args)
     i = 0
     intrinsic_bams = []
+    target_recall_beds = []
     for success, result, logs in results:
         logger.debug(f"****************************************************{i}th subprocess started*************************************************")
         if not success:
             error_mes, tb_str = result
             logger.error(f"An error occurred: {error_mes}\nTraceback: {tb_str}\n")
         else:
-            intrinsic_bams.append(result)
+            intrinsic_bam, target_recall_bed = result
+            intrinsic_bams.append(intrinsic_bam)
+            target_recall_beds.append(target_recall_bed)
         logger.debug(logs)
         logger.debug(f"****************************************************{i}th subprocess completed***********************************************\n")
         i+=1
@@ -80,6 +83,13 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
     pool.close()
     if not all([t[0] for t in results]):
         raise RuntimeError("Error occurred during the parallel execution of establish_beds_per_RG_cluster. Exit.")
+
+    # Merge the target recall beds
+    merge_bed_files(target_recall_beds, sdrecall_paths.total_recall_SD_region_bed_path())
+    # Intersect and merge with the multi-aligned regions to get the final target recall SD regions
+    tmp_bed = prepare_tmp_file(suffix=".bed", tmp_dir=sdrecall_paths.tmp_dir).name
+    BedTool(sdrecall_paths.total_recall_SD_region_bed_path()).intersect(BedTool(sdrecall_paths.multi_align_bed_path())).sort().merge().saveas(tmp_bed)
+    executeCmd(f"mv {tmp_bed} {sdrecall_paths.total_recall_SD_region_bed_path()}", logger=logger)
 
     ## total_intrinsic_alignments.bam is a merged alignment file for BILC model.
     intrinsic_bams = [ sdrecall_paths.intrinsic_bam_path(label) for label in labels ]
@@ -201,4 +211,4 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
                                 std_frag_size = std_frag_size,
                                 tmp_dir = tmp_dir,
                                 threads = threads )
-    return bam_path
+    return bam_path, paths["Query_bed"]
