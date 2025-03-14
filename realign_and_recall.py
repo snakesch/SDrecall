@@ -10,7 +10,7 @@ import pandas as pd
 
 from itertools import repeat
 
-from src.utils import executeCmd, merge_bams, configure_parallelism
+from src.utils import executeCmd, merge_bams, configure_parallelism, prepare_tmp_file
 from src.const import SDrecallPaths, shell_utils
 from src.log import logger
 from src.merge_variants_with_priority import merge_with_priority
@@ -220,15 +220,24 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
                                          "HP", 
                                          logger = logger)
     
-    final_recall_vcf = sdrecall_paths.final_recall_vcf_path()
+    tmp_merged_vcf = prepare_tmp_file(suffix=".vcf.gz", tmp_dir=sdrecall_paths.tmp_dir).name
     merge_with_priority(query_vcf = pooled_raw_vcf, 
                         reference_vcf = pooled_filtered_vcf, 
-                        output_vcf = final_recall_vcf, 
+                        output_vcf = tmp_merged_vcf, 
                         added_filter = "MISALIGNED", 
                         qv_tag = "RAW", 
                         rv_tag = "CLEAN", 
                         ref_genome = ref_genome, 
                         threads = threads)
+    
+    # Only keep the variants within the target recall regions
+    final_recall_vcf = sdrecall_paths.final_recall_vcf_path()
+    target_recall_bed = sdrecall_paths.total_recall_SD_region_bed_path()
+    cmd = f"bcftools view -R {target_recall_bed} -Oz -o {final_recall_vcf} {tmp_merged_vcf} && \
+            tabix -f -p vcf {final_recall_vcf} && \
+            rm -f {tmp_merged_vcf} && \
+            ls -lh {final_recall_vcf}"
+    executeCmd(cmd, logger=logger)
 
     print("\n"*2, "*"*100, file=sys.stderr)
     logger.info(f"FINISHED PERFORMING REALIGNMENT AND RECALL FOR {sdrecall_paths.sample_id} based on the REALIGNMENT GROUP REGIONS in {sdrecall_paths.work_dir}, the final recall vcf is {final_recall_vcf}")
