@@ -7,7 +7,6 @@ source ${central_scripts}
 # This script is a showcase of how we performed the benchmarking for the SDrecall results.
 # Due to extended requirements of environments and dependency files, we cannot offer a fully portable benchmark workflow to reproduce the entire benchmarking process
 # This script is the main entry point of the benchmarking workflow, while the dependent scripts and functions are either stored in the same directory or defined in the same script. 
-
 function annotate_cadd() {
     local called_vcf=${1}
     local output_vcf=${2}
@@ -123,26 +122,27 @@ function bench_callset_per_sample() {
     local caller_tag=""
     local golden_vcf=""
     local bench_region=""
+    local bench_tag=""
     local called_vcf=""
     local called_bam=""
     local target_region=""
-    local recall_region=""
     local original_bam=""
     local result_meta_file=""
 
     # Parse command line arguments
-    while getopts "s:c:g:b:v:a:t:r:o:m:" opt; do
+    while getopts "s:c:g:b:v:a:t:r:o:m:z::" opt; do
         case ${opt} in
             s) sampID=${OPTARG} ;;
             c) caller_tag=${OPTARG} ;;
             g) golden_vcf=${OPTARG} ;;
             b) bench_region=${OPTARG} ;;
+            r) ref_genome=${OPTARG} ;;
             v) called_vcf=${OPTARG} ;;
             a) called_bam=${OPTARG} ;;
             t) target_region=${OPTARG} ;;
-            r) recall_region=${OPTARG} ;;
             o) original_bam=${OPTARG} ;;
             m) result_meta_file=${OPTARG} ;;
+            z) bench_tag=${OPTARG} ;;
             \?) echo "Invalid option: -${OPTARG}" >&2; return 1 ;;
         esac
     done
@@ -167,6 +167,10 @@ function bench_callset_per_sample() {
     if [[ -z "${bench_region}" ]]; then
         bench_region="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/vcfs/hg38/golden_vcfs/${sampID}_GRCh38_1_22_v4.2.1_benchmark.bed"
     fi
+
+    if [[ -z "${bench_tag}" ]]; then
+        bench_tag="bench"
+    fi
     
     if [[ -z "${called_vcf}" ]]; then
         called_vcf="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/vcfs/hg38/${sampID}.sdrecall.ref.${caller_tag}.merged.vcf.gz"
@@ -180,10 +184,6 @@ function bench_callset_per_sample() {
         target_region="/paedyl01/disk1/yangyxt/public_data/gene_annotation/GCF_000001405.40_GRCh38.p14_genomic.func.coding.sorted.pad20.bed"
     fi
     
-    if [[ -z "${recall_region}" ]]; then
-        recall_region="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/aligned_results/hg38/${sampID}_refSD_priority_component_pairs/all_PC_regions.bed"
-    fi
-    
     if [[ -z "${result_meta_file}" ]]; then
         result_meta_file="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/test_recall_precision/hg38/${sampID}.bench.${caller_tag}.meta.tsv"
     fi
@@ -195,33 +195,33 @@ function bench_callset_per_sample() {
         fi
     fi
 
+    local output_poor_bed=$(dirname $(dirname ${called_vcf}))/realign_groups/all_target_recall_SD_regions.bed
+    local targeted_golden=${golden_vcf/.vcf*/.${bench_tag}.vcf.gz}
+    local targeted_called=${called_vcf/.vcf*/.${bench_tag}.vcf.gz}
 
-    if [[ ! -f ${output_poor_bed/.bed/.bench.bed} ]] && \
-       [[ ${called_bam} -nt ${output_poor_bed/.bed/.bench.bed} ]] && \
-       [[ ${bench_region} -nt ${output_poor_bed/.bed/.bench.bed} ]]; then
-        local targeted_golden=${golden_vcf/.vcf*/.bench.vcf.gz}
-        local targeted_called=${called_vcf/.vcf*/.bench.vcf.gz}
-        local output_poor_bed=${called_bam/.bam/.multi_aligned.bed}
-        python3 ${central_scripts}/pick_multialign_region.py \
-        -f main_func_pick_region \
-        -a ${called_bam} \
-        -k "output_bed=${output_poor_bed};inferred_coverage=False;target_region=${target_region};target_tag=FCRs;MQ_threshold=41;depth_threshold=10;minimum_depth=3;multialign_frac=0.5;threads=4" && \
-        ls -lhtr ${output_poor_bed} && \
-        bedtools intersect -a ${output_poor_bed} -b ${recall_region} | \
-        bedtools intersect -a stdin -b ${bench_region} > ${output_poor_bed/.bed/.bench.bed} || \
+    if [[ ! -f ${output_poor_bed/.bed/.${bench_tag}.bed} ]] && \
+       [[ ${called_vcf} -nt ${output_poor_bed/.bed/.${bench_tag}.bed} ]] && \
+       [[ ${bench_region} -nt ${output_poor_bed/.bed/.${bench_tag}.bed} ]]; then    
+        bedtools intersect -a ${output_poor_bed} -b ${bench_region} > ${output_poor_bed/.bed/.${bench_tag}.bed} || \
         { log "Failed to generate benchmark region. Exit."; return 1; }
     else
-        log "The benchmark region ${output_poor_bed/.bed/.bench.bed} is already generated."
+        log "The benchmark region ${output_poor_bed/.bed/.${bench_tag}.bed} is already generated."
     fi
 
     log "Though specify the target region ${target_region}, we use it to overlap with poor cov region (Depth < 10 when MQ > 10) in ${called_bam}. Stored in ${output_poor_bed}" && \
-    display_table ${output_poor_bed/.bed/.bench.bed}
-    if [[ $(cat ${output_poor_bed/.bed/.bench.bed} | wc -l) -gt 0 ]] && \
-       [[ ${output_poor_bed/.bed/.bench.bed} -nt ${targeted_golden} ]] && \
-       [[ ${output_poor_bed/.bed/.bench.bed} -nt ${targeted_called} ]]; then
-        bcftools view -R ${output_poor_bed/.bed/.bench.bed} -Oz -o ${targeted_golden} ${golden_vcf} && \
+    display_table ${output_poor_bed/.bed/.${bench_tag}.bed}
+    if [[ $(cat ${output_poor_bed/.bed/.${bench_tag}.bed} | wc -l) -gt 0 ]] && \
+       [[ ${output_poor_bed/.bed/.${bench_tag}.bed} -nt ${targeted_golden} ]] && \
+       [[ ${output_poor_bed/.bed/.${bench_tag}.bed} -nt ${targeted_called} ]]; then
+        bcftools view -R ${output_poor_bed/.bed/.${bench_tag}.bed} -Ou ${golden_vcf} | \
+        bcftools norm -m -both -f ${ref_genome} --multi-overlaps 0 -a -Ou - | \
+        bcftools norm -d exact -Ou - | \
+        bcftools view -i 'ALT!="*"' -Oz -o ${targeted_golden} && \
         tabix -f -p vcf ${targeted_golden} && \
-        bcftools view -R ${output_poor_bed/.bed/.bench.bed} -Oz -o ${targeted_called} ${called_vcf} && \
+        bcftools view -R ${output_poor_bed/.bed/.${bench_tag}.bed} -Ou ${called_vcf} | \
+        bcftools norm -m -both -f ${ref_genome} --multi-overlaps 0 -a -Ou - | \
+        bcftools norm -d exact -Ou - | \
+        bcftools view -i 'ALT!="*"' -Oz -o ${targeted_called} && \
         tabix -f -p vcf ${targeted_called} && \
         display_table ${targeted_golden} && \
         display_table ${targeted_called}
@@ -276,45 +276,85 @@ function bench_callset_per_sample() {
 
 
 function batch_perform_benchmarking () {
-	local -a sample_IDs=( "HG002" "HG003" "HG004" "HG005" "HG006" "HG007" )
-	local -a caller_tags=( "GATK" "DeepVariant" )
-	local -a assemblies=( "hg38" "hg19" )
-	local bench_region_v421="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/vcfs/{2}/golden_vcfs/{1}_{2}_v4.2.1_benchmark.bed"
-	local target_region="/paedyl01/disk1/yangyxt/public_data/gene_annotation/{2}_genomic.func.coding.sorted.pad20.bed"
-	local result_meta_file="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/test_recall_precision/{1}/{2}.bench.{3}.meta.tsv"
-	local called_vcf="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/vcfs/{2}/{1}.sdrecall.ref.{3}.merged.vcf.gz"
-	local called_bam="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/aligned_results/{2}/{1}.SD.deduped.bam"
-	local original_bam="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/raw_data/download_data/{1}.{2}.300x.bam"
-	local golden_vcf_v421="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/vcfs/{2}/golden_vcfs/{1}_{2}_v4.2.1_benchmark.norm.vcf.gz"
-	
-	
-	parallel -j6 \
-	bench_callset_per_sample \
-	-s {1} \
-	-c {3} \
-	-g ${golden_vcf_v421} \
-	-b ${bench_region_v421} \
-	-v ${called_vcf} \
-	-a ${called_bam} \
-	-t ${target_region} \
-	-r ${recall_region} \
-	-o ${original_bam} \
-	-m ${result_meta_file} ::: ${sample_IDs[@]} ::: ${assemblies[@]} ::: ${caller_tags[@]}
+    local -a sample_IDs=( "HG002" "HG003" "HG004" "HG005" "HG006" "HG007" )
+    local -a caller_tags=( "DeepVariant" )
+    local -a assemblies=( "hg38" "hg19" )
+    local bench_region_v421="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/vcfs/{2}/golden_vcfs/{1}_{2}_v4.2.1_benchmark.bed"
+    local target_region="/paedyl01/disk1/yangyxt/public_data/gene_annotation/{2}_genomic.func.coding.sorted.pad20.bed"
+    local result_meta_file="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/test_recall_precision/{1}_{2}.bench.{3}.meta.tsv"
+    local called_vcf="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/vcfs/{2}/{1}.deepvariant.sdrecall.vcf.gz"
+    local called_bam="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/aligned_results/{2}/{1}.SD.deduped.bam"
+    local original_bam="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/raw_data/download_data/{1}.{2}.300x.bam"
+    local golden_vcf_v421="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/vcfs/{2}/golden_vcfs/{1}_{2}_v4.2.1_benchmark.vcf.gz"
+    local ref_genome="/paedyl01/disk1/yangyxt/indexed_genome/{2}/ucsc.{2}.fasta"
+    module load parallel
+
+    parallel -j12 --dry-run \
+    bash ${self_scripts} \
+    bench_callset_per_sample \
+    -s {1} \
+    -c {3} \
+    -z "bench" \
+    -g ${golden_vcf_v421} \
+    -b ${bench_region_v421} \
+    -r ${ref_genome} \
+    -v ${called_vcf} \
+    -a ${called_bam} \
+    -t ${target_region} \
+    -o ${original_bam} \
+    -m ${result_meta_file} '>' /paedyl01/disk1/yangyxt/wgs/GIAB_samples/test_recall_precision/{1}_{2}.bench.{3}.log '2>&1' ::: ${sample_IDs[@]} ::: ${assemblies[@]} ::: ${caller_tags[@]} && \
+    log "Parallel job log to /paedyl01/disk1/yangyxt/wgs/GIAB_samples/test_recall_precision/parallel_bench.deepvariant.log" && \
+    parallel -j12 --joblog /paedyl01/disk1/yangyxt/wgs/GIAB_samples/test_recall_precision/parallel_bench.deepvariant.log \
+    bash ${self_scripts} \
+    bench_callset_per_sample \
+    -s {1} \
+    -c {3} \
+    -z "bench" \
+    -g ${golden_vcf_v421} \
+    -b ${bench_region_v421} \
+    -r ${ref_genome} \
+    -v ${called_vcf} \
+    -a ${called_bam} \
+    -t ${target_region} \
+    -o ${original_bam} \
+    -m ${result_meta_file} '>' /paedyl01/disk1/yangyxt/wgs/GIAB_samples/test_recall_precision/{1}_{2}.bench.{3}.log '2>&1' ::: ${sample_IDs[@]} ::: ${assemblies[@]} ::: ${caller_tags[@]}
 
 
-	local golden_vcf_cmrg="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/vcfs/{1}/golden_vcfs/HG002_{1}_CMRG_smallvar_v1.00.norm.small.vcf.gz"
-	local bench_region_cmrg="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/vcfs/{1}/golden_vcfs/HG002_{1}_CMRG_smallvar_v1.00.norm.small.bed"
+    local golden_vcf_cmrg="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/vcfs/{2}/golden_vcfs/HG002_CMRG_smallvar_v1.00.norm.small.vcf.gz"
+    local bench_region_cmrg="/paedyl01/disk1/yangyxt/wgs/GIAB_samples/vcfs/{2}/golden_vcfs/HG002_CMRG_smallvar_v1.00.norm.small.bed"
 
-	parallel -j4 \
-	bench_callset_per_sample \
-	-s {1} \
-	-c {3} \
-	-g ${golden_vcf_cmrg} \
-	-b ${bench_region_cmrg} \
-	-v ${called_vcf} \
-	-a ${called_bam} \
-	-t ${target_region} \
-	-r ${recall_region} \
-	-o ${original_bam} \
-	-m ${result_meta_file} ::: "HG002" ::: ${assemblies[@]} ::: ${caller_tags[@]}
+    parallel -j4 --dry-run \
+    bash ${self_scripts} \
+    bench_callset_per_sample \
+    -s {1} \
+    -c {3} \
+    -z "cmrg" \
+    -g ${golden_vcf_cmrg} \
+    -b ${bench_region_cmrg} \
+    -r ${ref_genome} \
+    -v ${called_vcf} \
+    -a ${called_bam} \
+    -t ${target_region} \
+    -o ${original_bam} \
+    -m ${result_meta_file} '>' /paedyl01/disk1/yangyxt/wgs/GIAB_samples/test_recall_precision/{1}_{2}.cmrg.{3}.log '2>&1' ::: "HG002" ::: ${assemblies[@]} ::: ${caller_tags[@]} && \
+    log "Parallel job log to /paedyl01/disk1/yangyxt/wgs/GIAB_samples/test_recall_precision/parallel_cmrg.deepvariant.log" && \
+    parallel -j4 --joblog /paedyl01/disk1/yangyxt/wgs/GIAB_samples/test_recall_precision/parallel_cmrg.deepvariant.log \
+    bash ${self_scripts} \
+    bench_callset_per_sample \
+    -s {1} \
+    -c {3} \
+    -z "cmrg" \
+    -g ${golden_vcf_cmrg} \
+    -b ${bench_region_cmrg} \
+    -r ${ref_genome} \
+    -v ${called_vcf} \
+    -a ${called_bam} \
+    -t ${target_region} \
+    -o ${original_bam} \
+    -m ${result_meta_file} '>' /paedyl01/disk1/yangyxt/wgs/GIAB_samples/test_recall_precision/{1}_{2}.cmrg.{3}.log '2>&1' ::: "HG002" ::: ${assemblies[@]} ::: ${caller_tags[@]}
 }
+
+
+if [[ ${#BASH_SOURCE[@]} -eq 1 ]]; then
+    "$@"
+fi
