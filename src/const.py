@@ -434,6 +434,10 @@ class SDrecallPaths:
         """Get paths to all RG bed files"""
         return [self.rg_query_bed_path(rg) for rg in self.realign_groups]
     
+    def total_recall_SD_region_bed_path(self) -> str:
+        """Get the bed file path containing all the realign target regions"""
+        return os.path.join(self.realign_groups_dir, "all_target_recall_SD_regions.bed")
+    
     def all_masked_genome_paths(self) -> List[str]:
         """Get paths to all masked genome files"""
         return [self.masked_genome_path(rg) for rg in self.realign_groups]

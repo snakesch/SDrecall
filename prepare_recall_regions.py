@@ -15,7 +15,7 @@ from src.utils import is_file_up_to_date, executeCmd
 from src.const import SDrecallPaths
 
 
-def save_connected_qnodes_to_graphml(g, output_path):
+def save_connected_qnodes_to_graphml(g, output_path, logger = logger):
     """
     Save connected qnodes graph to GraphML with readable node properties
     
@@ -49,6 +49,7 @@ def save_connected_qnodes_to_graphml(g, output_path):
     # Write the graph to GraphML file
     # Include the original node_data property for compatibility
     g.save(output_path, fmt="graphml")
+    logger.info(f"Connected qnodes graph saved to {output_path}. It contains {g.num_vertices()} qnodes and {g.num_edges()} edges.")
     return output_path
 
 
@@ -195,16 +196,16 @@ def prepare_recall_regions( paths: SDrecallPaths,
     # Step 5. Pool all SD nodes and the corresponding paralogous regions from the SD + PO graph
     final_graph_path = paths.annotated_graph_path()
     sd_paralog_pairs, connected_qnode_graph = extract_SD_paralog_pairs_from_graph( query_nodes, 
-                                                                                        graph, 
-                                                                                        graph_path = final_graph_path, 
-                                                                                        reference_fasta = ref_genome,
-                                                                                        tmp_dir = paths.tmp_dir,
-                                                                                        avg_frag_size = avg_frag_size, 
-                                                                                        std_frag_size = std_frag_size, 
-                                                                                        threads=threads )
+                                                                                    graph, 
+                                                                                    graph_path = final_graph_path, 
+                                                                                    reference_fasta = ref_genome,
+                                                                                    tmp_dir = paths.tmp_dir,
+                                                                                    avg_frag_size = avg_frag_size, 
+                                                                                    std_frag_size = std_frag_size, 
+                                                                                    threads=threads )
     # Save the connected qnodes graph (graph-tool graph) to a GRAPHML file
     connected_qnodes_graph_path = paths.qnode_grouping_graph()
-    save_connected_qnodes_to_graphml(connected_qnode_graph, connected_qnodes_graph_path)
+    save_connected_qnodes_to_graphml(connected_qnode_graph, connected_qnodes_graph_path, logger = logger)
     logger.info("{} SD-paralog pairs pooled from SD + PO graph. The graph recording similar query nodes is saved to {}".format(len(sd_paralog_pairs), connected_qnodes_graph_path))
     
     # Step 6: Collapse qnodes by identifying qnodes that can be put in the same masked genome

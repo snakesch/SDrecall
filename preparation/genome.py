@@ -59,11 +59,9 @@ class Genome:
         return os.path.basename(bedf).split("_")[0] if "_related_homo_regions" in bedf else os.path.basename(bedf).split(".")[0]
 
     def _prepare_target_bed(self, bedf, avg_frag_size, std_frag_size, genome, logger):
-        target_bed = (BedTool(bedf)
-                      .sort()
-                      .merge(d=2 * int(avg_frag_size + 2 * std_frag_size))
+        target_bed = (BedTool(bedf).sort().merge()
                       .slop(b=int(avg_frag_size + 2 * std_frag_size + 1000), g=genome)
-                      .sort())
+                      .sort().merge())
         logger.debug(f"Target bed {bedf}, after padding: {target_bed.total_coverage()} bp covered.")
         return target_bed
 

@@ -222,7 +222,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
         connected_qnodes_gt.vertex_properties["node_data"] = v_prop
         # connected_qnodes_gt.edge_properties["similarity"] = e_prop
         
-        # Create a mapping between qnodes and vertices in the graph-tool graph
+        # Create a mapping between interval_data (tuple) and vertices in the pure qnode graph
         data_to_vertex = {}
         
         # Add all qnodes as vertices
