@@ -85,11 +85,12 @@ def build_beds_and_masked_genomes(grouped_qnode_cnodes: list,
         raise RuntimeError("Error occurred during the parallel execution of establish_beds_per_RG_cluster. Exit.")
 
     # Merge the target recall beds
-    merge_bed_files(target_recall_beds, sdrecall_paths.total_recall_SD_region_bed_path())
-    # Intersect and merge with the multi-aligned regions to get the final target recall SD regions
     tmp_bed = prepare_tmp_file(suffix=".bed", tmp_dir=sdrecall_paths.tmp_dir).name
-    BedTool(sdrecall_paths.total_recall_SD_region_bed_path()).intersect(BedTool(sdrecall_paths.multi_align_bed_path())).sort().merge().saveas(tmp_bed)
-    executeCmd(f"mv {tmp_bed} {sdrecall_paths.total_recall_SD_region_bed_path()}", logger=logger)
+    merge_bed_files(target_recall_beds, 
+                    tmp_dir = sdrecall_paths.tmp_dir, 
+                    output_bed = tmp_bed)
+    # Intersect and merge with the multi-aligned regions to get the final target recall SD regions
+    BedTool(tmp_bed).intersect(BedTool(sdrecall_paths.multi_align_bed_path())).sort().merge().saveas(sdrecall_paths.total_recall_SD_region_bed_path())
 
     ## total_intrinsic_alignments.bam is a merged alignment file for BILC model.
     intrinsic_bams = [ sdrecall_paths.intrinsic_bam_path(label) for label in labels ]
