@@ -158,23 +158,23 @@ def process_target_regions_with_coverage(target_bed,
                 # We found covered subregions - use these instead
                 logger.debug(f"  - Split into {len(covered_subregions)} covered subregions")
                 for subregion in covered_subregions:
-                    processed_intervals.append(subregion)
+                    # Pad by 2* delimiter_size
+                    processed_intervals.append((subregion.chrom, subregion.start, subregion.end))
             elif len(covered_subregions) == 1:
                 for subregion in covered_subregions:
-                    processed_intervals.append(subregion)
+                    processed_intervals.append((subregion.chrom, subregion.start, subregion.end))
                     logger.debug(f"  - There is only one interval {subregion.chrom}:{subregion.start}-{subregion.end} is covered by reads")
             else:
                 # No coverage data - keep original but log warning
                 logger.warning(f"  - No coverage data for large target region {region.chrom}:{region.start}-{region.end}")
-                processed_intervals.append(region)
         
         # Case 2: Small interval that might need merging
         elif region_size < min_interval:
             logger.debug(f"Small region found: {region.chrom}:{region.start}-{region.end} ({region_size}bp)")
-            small_intervals.append(region)
+            small_intervals.append((region.chrom, region.start, region.end))
         # Case 3: Medium interval that's already appropriate size
         else:
-            processed_intervals.append(region)
+            processed_intervals.append((region.chrom, region.start - delimiter_size, region.end + delimiter_size))
 
 
     # Deal with small intervals in batch
@@ -195,16 +195,16 @@ def process_target_regions_with_coverage(target_bed,
             processed_intervals.append((cov_island[0], cov_island[1], cov_island[2]))
         elif cov_island[2] - cov_island[1] < min_interval:
             # cov_island is too small, just let pad the overlapping small intervals by delimiter_size and merge
-            processed_intervals.append((cov_island[0], cov_island[1] - delimiter_size, cov_island[2] + delimiter_size))
+            processed_intervals.append((cov_island[0], cov_island[1], cov_island[2]))
         else:
             # cov_island is too large, just let pad the overlapping small intervals by delimiter_size and merge
             cov_small_regions = df[["chrom_target", "start_target", "end_target"]]
             cov_small_regions = pb.BedTool.from_dataframe(cov_small_regions)
-            cov_small_regions = cov_small_regions.sort().slop(b = delimiter_size, g = f"{ref_genome}.fai").merge(d = delimiter_size)
+            cov_small_regions = cov_small_regions.sort().merge(d = 2 * delimiter_size)
             for region in cov_small_regions:
-                processed_intervals.append((region.chrom, region.start, region.end))
+                processed_intervals.append((region.chrom, region.start - delimiter_size, region.end + delimiter_size))
             
-    result_bed = pb.BedTool(processed_intervals).sort().merge()
+    result_bed = pb.BedTool(processed_intervals).sort()
     
     return result_bed
 

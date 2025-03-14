@@ -1,6 +1,5 @@
 #! /usr/bin/env python3
 
-import logging
 import numba
 import numpy as np
 from highspy import Highs

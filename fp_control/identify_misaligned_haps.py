@@ -672,7 +672,7 @@ def inspect_by_haplotypes(input_bam,
 
     # Iterate over all the haplotypes
     for hid, qnames in hap_qname_info.items():
-        logger.info(f"The haplotype {hid} contains {len(qnames)} read pairs in total.")
+        logger.debug(f"The haplotype {hid} contains {len(qnames)} read pairs in total.")
         hid_cov_bed = prepare_tmp_file(suffix = f".haplotype_{hid}.cov.bed", tmp_dir = tmp_dir).name
 
         # Extract all the qname indices and all the reads belonged to the iterating haplotype
@@ -696,7 +696,7 @@ def inspect_by_haplotypes(input_bam,
         # Iterate over all the continuous regions covered by the iterating haplotype
         for span, reads in conregion_dict.items():
             # span end is exclusive
-            logger.info(f"The haplotype {hid} contains {len(reads)} reads in the continuous region {span}.")
+            logger.debug(f"The haplotype {hid} contains {len(reads)} reads in the continuous region {span}.")
             chrom = reads[0].reference_name
 
             # Iterate over all the reads overlapping with the iterating continuous region covered by the iterating haplotype
@@ -720,7 +720,7 @@ def inspect_by_haplotypes(input_bam,
             hid_var_count[hid] += var_count
 
             # Log the extreme variant density and the variant count of the iterating haplotype
-            logger.info(f"For haplotype {hid} at continuous region {span}, the consensus sequence is {consensus_sequence.tolist()}. The extreme variant density is {extreme_vard}.")
+            logger.debug(f"For haplotype {hid} at continuous region {span}, the consensus sequence is {consensus_sequence.tolist()}. The extreme variant density is {extreme_vard}.")
 
             # Update the extreme variant density of the iterating haplotype
             hid_extreme_vard[hid] = extreme_vard or hid_extreme_vard[hid]
@@ -751,6 +751,8 @@ def inspect_by_haplotypes(input_bam,
     logger.info(f"Final ref sequence similarities for all the haplotypes are {hap_max_sim_scores}")
 
     sweep_region_bed = input_bam.replace(".bam", ".sweep.bed")
+    # Remove the scattered haplotypes from the sweep regions
+    hid_cov_beds = {hid:bed for hid, bed in hid_cov_beds.items() if hid not in scatter_hid_dict}
     sweep_regions = sweep_region_inspection(hid_cov_beds, sweep_region_bed, logger = logger)
     logger.info(f"Now the sweep regions are saved to {sweep_region_bed}.")
 
@@ -758,6 +760,16 @@ def inspect_by_haplotypes(input_bam,
     The below iteration is to inspect haplotypes by each window decided by the sweep_region_inspection function.
     Within each window, we rank the enclosing haplotypes according to their similarity with the reference genomic sequence.
     '''
+    if sweep_regions is None:
+        mismap_hids = set([hid for hid in hid_extreme_vard if hid_extreme_vard[hid]])
+        mismap_qnames = set([qname for hid in mismap_hids for qname in hap_qname_info[hid]])
+        total_qnames = set([qname for qnames in hap_qname_info.values() for qname in qnames])
+        correct_map_qnames = total_qnames - mismap_qnames
+        logger.warning(f"No regions are found encompassed by more than 2 haplotypes. So we only filter out the haplotypes with extreme variant density. Filtered out {len(mismap_qnames)} read pairs and left {len(correct_map_qnames)} read pairs.")
+        logger.info(f"Here is the qnames seemed mismapped: \n{mismap_qnames}\nAnd the mismap haplotype IDs: \n{mismap_hids}\n")
+        return correct_map_qnames, mismap_qnames
+    
+    # Iterate over all the windows
     for interval in sweep_regions:
         region = (interval.chrom, interval.start, interval.end)
         logger.info(f"Inspecting the region {region}.")

@@ -234,16 +234,15 @@ def realign_filter_per_cov(bam,
                     total_num += 1
                     qname = read.query_name
                     hap_id = qname_hap_info.get(qname_to_node.get(qname, -1), "NA")
+
                     if qname in mismap_qnames:
                         hap_id = f"{hap_id}_HIGHVD"
+
                     if qname in total_lowqual_qnames:
                         hap_id = f"{hap_id}_LOWQUAL"
+
                     # Filter out reads with oddly high editing distance that breakthrough the cutoff
                     if read.is_mapped and read.mapping_quality > 10:
-                        gap_sizes = [t[1] for t in read.cigartuples if t[0] in [1,2] and t[1] > 1]
-                        max_gap_size = max(gap_sizes) if len(gap_sizes) > 0 else 0
-                        edit_dist = read.get_tag("NM")
-                        scatter_edit_dist = edit_dist - max_gap_size
                         if qname in total_lowqual_qnames:
                             pass
                         elif qname in noisy_qnames:
@@ -252,23 +251,25 @@ def realign_filter_per_cov(bam,
                         elif qname in mismap_qnames:
                             # logger.debug(f"Read {1 if read.is_read1 else 2} from pair {read.query_name} has an edit distance {scatter_edit_dist} which is significantly higher than other reads so it is considered as noisy and misaligned")
                             pass
-                        elif scatter_edit_dist > max_varno and qname not in correct_qnames:
+                        elif qname not in correct_qnames:
                             noisy_num += 1
-                            logger.info(f"Read {1 if read.is_read1 else 2} from pair {read.query_name} has an edit distance {scatter_edit_dist} which is so high that it is considered as noisy and misaligned")
+                            logger.info(f"Read {1 if read.is_read1 else 2} from pair {read.query_name} is not in correct_qnames nor mismap_qnames, so it is considered as noisy and misaligned")
                             noisy_qnames.add(qname)
                         elif not read.is_secondary and \
                             not read.is_supplementary and \
                             not read.is_duplicate and \
                             not read.is_qcfail:
                             # logger.debug(f"Read {1 if read.is_read1 else 2} from pair {read.query_name} has an edit distance {read.get_tag('NM')} which is considered as normal")
+                            read.set_tag('HP', f'HAP_{hap_id}')
                             qname_pair = norm_qnames.get(qname, set([]))
                             qname_pair.add(read)
                             norm_qnames[qname] = qname_pair
                     else:
-                        logger.info(f"Read {1 if read.is_read1 else 2} from pair {read.query_name} is not mapped or has low mapping quality {read.mapping_quality}, skip this read")
+                        logger.debug(f"Read {1 if read.is_read1 else 2} from pair {read.query_name} is not mapped or has low mapping quality {read.mapping_quality}, skip this read")
 
                     if qname in noisy_qnames:
                         hap_id = f"{hap_id}_HIGHVD"
+                        
                     read.set_tag('HP', f'HAP_{hap_id}')
                     tmp_handle.write(read)
 
