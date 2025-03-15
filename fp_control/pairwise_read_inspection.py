@@ -105,7 +105,7 @@ def prepare_ref_query_idx_map(qseq_ref_pos_arr, read_ref_start):
     query sequence: A,C,G,T,A,C,G,T (Both the 3rd and the 4th base are inserted comparing to the ref sequence)
     ref positions: 10, 11, -1, -1, 12, 13, 14, 15
     then the input array will be: [10, 11, -1, -1, 12, 13, 14, 15]
-    The output dict will be: {10: 0, 11: 1, 12: 4, 13: 5, 14: 6, 15: 7}
+    The output array will be: [0, 1, 4, 5, 6, 7]
 
     ri stands for reference index, qi stands for query index
     '''
@@ -503,6 +503,10 @@ def determine_same_haplotype(read, other_read,
     ref_positions, qseq_ref_positions, query_sequence_encoded, query_sequence_qualities, read_ref_pos_dict = extract_read_qseqs(read, read_ref_pos_dict)
     other_ref_positions, other_qseq_ref_positions, other_query_sequence_encoded, other_query_sequence_qualities, read_ref_pos_dict = extract_read_qseqs(other_read, read_ref_pos_dict)
 
+    # qseq_ref_positions is a numpy array mapping query sequence index to reference genome index, it looks like: [1000, 1001, 1002, 1003, -1, -1, 1004, 1005, 1007, 1008] for a CIGAR str 4=2I2=1D2=
+    # qseq_seq_encoded is just a numpy array of integers. A:0, C:1, G:2, T:3, N:4
+    # ref_positions is a numpy array mapping reference genome index back to query sequence index, it looks like: [0, 1, 2, 3, 6, 7, -1, 8, 9] for a CIGAR str 4=2I2=1D2=, all integers are the remains of index on ref genome subtracted by start ref pos.
+
     if read_id in read_hap_vectors:
         read_hap_vector = read_hap_vectors[read_id]
     else:
@@ -571,9 +575,15 @@ def determine_same_haplotype(read, other_read,
     overlap_span = overlap_span + mean_read_length * 3 * indel_num
 
     if total_match:
+        logger.debug(f"The two reads {read_id} and {other_read_id} are identical in the overlapping region. The overlap span is {read.reference_name}:{overlap_start}-{overlap_end}.")
+        logger.debug(f"The qseq_ref_positions of read {read_id} starting from {read.reference_start} is {qseq_ref_positions}, and the ref_positions is {ref_positions}")
+        logger.debug(f"The qseq_ref_positions of read {other_read_id} starting from {other_read.reference_start} is {other_qseq_ref_positions}, and the ref_positions is {other_ref_positions}")
         return True, read_ref_pos_dict, read_hap_vectors, overlap_span
     else:
         if len(read_seq) != len(other_seq) or interval_hap_vector.size != interval_other_hap_vector.size:
+            logger.debug(f"The two reads {read_id} and {other_read_id} are even aligned to the same reference span {read.reference_name}:{overlap_start}-{overlap_end} with different size of sequence.")
+            logger.debug(f"The qseq_ref_positions of read {read_id} starting from {read.reference_start} is {qseq_ref_positions}, and the ref_positions is {ref_positions}")
+            logger.debug(f"The qseq_ref_positions of read {other_read_id} starting from {other_read.reference_start} is {other_qseq_ref_positions}, and the ref_positions is {other_ref_positions}")
             return False, read_ref_pos_dict, read_hap_vectors, None
 
         # Here we know that there are only equal to or smaller than 2 mismatches between the two reads
@@ -584,8 +594,11 @@ def determine_same_haplotype(read, other_read,
         #     other_seq_arr = np.array(list(map(base_dict.get, other_seq)), dtype=np.int8)
 
         q_diff_indices = numba_diff_indices(read_seq, other_seq)
-        r_diff_indices = qr_idx_arr[q_diff_indices]
+        r_diff_indices = qseq_ref_positions[q_diff_indices]
         if numba_contain(r_diff_indices, np.int32(-1)):
+            logger.debug(f"Within in region {read.reference_name}:{overlap_start}-{overlap_end}, read {read_id} and read {other_read_id} have mismatches. But they should have the same length at this stage.")
+            logger.debug(f"The query sequence within this region for read {read_id} is {read_seq}, and the mismatch indices relative to the query sequence are {q_diff_indices}")
+            logger.debug(f"The query sequence within this region for read {other_read_id} is {other_seq}, and the mismatch indices relative to the reference genome are {r_diff_indices}")
             return False, read_ref_pos_dict, read_hap_vectors, None
         read_package = (np.int32(read.reference_start), query_sequence_encoded, query_sequence_qualities, ref_positions)
         other_read_package = (np.int32(other_read.reference_start), other_query_sequence_encoded, other_query_sequence_qualities, other_ref_positions)

@@ -145,6 +145,7 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger=logger):
             primary_align_origin_qnames = set()
             sec_to_pri_qnames = set() 
             buffer_sec_aligns = {}
+            written_qnames = set()
             
             for read in input_bam:
                 total_reads += 1
@@ -154,6 +155,10 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger=logger):
                     continue
                 
                 qname = read.query_name
+
+                if qname in written_qnames:
+                    continue
+
                 # Check the interval filtering only if the qname matches the expected pattern.
                 m = qname_regex.match(qname)
                 if m:
@@ -188,12 +193,13 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger=logger):
                     # Compare with alignment position (pysam.read.reference_start is 0-based)
                     if start_val != read.reference_start + 1:
                         output_bam.write(read)
+                        written_qnames.add(qname)
                     else:
                         primary_align_origin_qnames.add(qname)
                 else:
                     # If qname doesn't match the expected pattern, keep the read.
                     output_bam.write(read)
-            
+                    written_qnames.add(qname)
             # Process buffered secondary alignments that have a primary counterpart.
             primary_align_origin_qnames = primary_align_origin_qnames - sec_to_pri_qnames
             for qname in primary_align_origin_qnames:

@@ -672,7 +672,7 @@ def inspect_by_haplotypes(input_bam,
 
     # Iterate over all the haplotypes
     for hid, qnames in hap_qname_info.items():
-        logger.debug(f"The haplotype {hid} contains {len(qnames)} read pairs in total.")
+        logger.debug(f"The haplotype {hid} contains {len(qnames)} read pairs in total. And the qnames are: \n{qnames}\n")
         hid_cov_bed = prepare_tmp_file(suffix = f".haplotype_{hid}.cov.bed", tmp_dir = tmp_dir).name
 
         # Extract all the qname indices and all the reads belonged to the iterating haplotype

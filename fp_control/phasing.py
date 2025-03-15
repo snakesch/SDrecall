@@ -188,10 +188,10 @@ def find_components_inside_filtered_cliques(final_cliques,
 
 def phasing_realigned_reads(phased_graph, weight_matrix, edge_weight_cutoff, logger = logger):
     logger.info(f"Now start finding haplotypes in the setup weight matrix, the numba parallel threads are set to {get_num_threads()}")
-    total_cliques = find_cliques_in_components(phased_graph,
-                                                  weight_matrix,
-                                                  ew_cutoff = edge_weight_cutoff,
-                                                  logger = logger )
+    total_cliques = find_cliques_in_components( phased_graph,
+												weight_matrix,
+												ew_cutoff = edge_weight_cutoff,
+												logger = logger )
 
     total_cliques = list(total_cliques)
 

@@ -199,7 +199,7 @@ def realign_filter_per_cov(bam,
 
     if len(hap_qname_info) <= 2:
         logger.warning(f"Only {len(hap_qname_info)} haplotype clusters are found for bam {bam}. Do not need to choose 2 haplotypes, Skip this region.\n")
-        correct_qnames, mismap_qnames = set(list(hap_qname_info.keys())), set([])
+        correct_qnames, mismap_qnames = set(list(hap_qname_info.values())), set([])
     else:
         correct_qnames, mismap_qnames = inspect_by_haplotypes(bam,
                                                               hap_qname_info,

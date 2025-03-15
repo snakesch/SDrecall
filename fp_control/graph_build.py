@@ -242,12 +242,9 @@ def build_phasing_graph(bam_file,
     # Create an empty graph
     g = gt.Graph(directed = False)
     g.set_fast_edge_removal(fast = True)
-    # Create another empty graph to store reads as vertices (uniq identifier of reads are qname+":"+flag)
-    g_reads = gt.Graph()
 
     # Create a property map to store the query names for each node
     qname_prop = g.new_vertex_property("string")
-    read_prop = g_reads.new_vertex_property("string")
     weight = g.new_edge_property("float")
 
     # Create a dictionary to map query names to their corresponding nodes
