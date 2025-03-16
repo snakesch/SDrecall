@@ -259,6 +259,7 @@ def build_phasing_graph(bam_file,
     # Create a dictionary to store Allele Depth for each position
     nested_ad_dict = stat_ad_to_dict(bam_file, logger = logger)
     if nested_ad_dict is None:
+		logger.warning(f"No ALT allele found in this BAM file. Skip this entire script")
         return None, None, None, None, None
 
     qname_check_dict = {}
@@ -315,7 +316,7 @@ def build_phasing_graph(bam_file,
 
             # Inspect the overlap between the two pairs of reads
             overlap_intervals = get_overlap_intervals(paired_reads, other_reads)
-            # logger.info(f"Found these overlap intervals for the read pair {qname} and {other_qname}: {overlap_intervals}")
+            logger.debug(f"Found these overlap intervals between the read pair {qname} and {other_qname}: {overlap_intervals}")
 
             if len(overlap_intervals) == 0:
                 continue
@@ -331,7 +332,7 @@ def build_phasing_graph(bam_file,
             for (overlap_start, overlap_end), (read1, read2) in overlap_intervals.items():
                 uncovered_overlaps = find_uncovered_regions_numba(inspected_overlaps.starts[:inspected_overlaps.size], inspected_overlaps.ends[:inspected_overlaps.size], 
                                                                   overlap_start, overlap_end)
-                # logger.info(f"Found the uncovered regions {uncovered_overlaps} for the reads {read1.query_name} and {read2.query_name} in the overlap region ({overlap_start}-{overlap_end})")
+                logger.debug(f"Found the uncovered regions {uncovered_overlaps} for the reads {read1.query_name} and {read2.query_name} in the overlap region ({chrom}:{overlap_start}-{overlap_end})")
                 for row_ind in range(uncovered_overlaps.shape[0]):
                     uncovered_start, uncovered_end = uncovered_overlaps[row_ind, 0], uncovered_overlaps[row_ind, 1]
                     bool_res, read_ref_pos_dict, read_hap_vectors, read_weight = determine_same_haplotype(read1, read2,

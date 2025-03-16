@@ -38,7 +38,7 @@ def imap_filter_out(args):
     
     # Create logger that writes to file
     subprocess_logger = logging.getLogger(f"SubProcess-{job_id}")
-    subprocess_logger.setLevel(logger.level)  # Use logger level from src/log.py logger
+    subprocess_logger.setLevel(logging.DEBUG)  # Use logger level from src/log.py logger
     subprocess_logger.addHandler(file_handler)
     subprocess_logger.propagate = False  # Don't send logs to parent loggers
     
@@ -200,7 +200,7 @@ def realign_filter_per_cov(bam,
 
     if len(hap_qname_info) <= 2:
         logger.warning(f"Only {len(hap_qname_info)} haplotype clusters are found for bam {bam}. Do not need to choose 2 haplotypes, Skip this region.\n")
-        correct_qnames, mismap_qnames = set([qn for hs in hap_qname_info.values() for qn in hs]), set([])
+        correct_qnames, mismap_qnames = set([qn for hs in list(hap_qname_info.values()) for qn in hs]), set([])
     else:
         correct_qnames, mismap_qnames = inspect_by_haplotypes(bam,
                                                               hap_qname_info,
