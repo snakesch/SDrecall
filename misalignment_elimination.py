@@ -80,6 +80,9 @@ def eliminate_misalignments(input_bam,
                                                         threads = threads,
                                                         ref_genome = ref_genome,
                                                         tmp_dir = cache_dir)
+        # Pad the beds by 1000 bp on both sides, each interval follows the format of "chrom:start-end"
+        interval_regex = re.compile(r"^(\S+):(\d+)-(\d+)$")
+        splitted_beds = [interval_regex.sub(lambda m: f"{m.group(1)}:{int(m.group(2)) - 1000}-{int(m.group(3)) + 1000}", bed) for bed in splitted_beds]
         splitted_intrin_bams, _ = split_bam_by_cov( intrinsic_bam, 
                                                     target_bed = target_regions,
                                                     beds = splitted_beds, 

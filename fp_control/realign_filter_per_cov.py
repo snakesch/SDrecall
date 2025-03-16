@@ -44,6 +44,7 @@ def imap_filter_out(args):
     
     try:
         # Log the start of processing with all parameters for debugging
+        subprocess_logger.warning(f"Log level: {subprocess_logger.level}")
         subprocess_logger.info(f"Processing region in {raw_bam}")
         subprocess_logger.info(f"Parameters: output_bam={output_bam}, intrinsic_bam={intrinsic_bam}, "
                                f"bam_region_bed={bam_region_bed}, max_varno={max_varno}, "
@@ -282,6 +283,7 @@ def realign_filter_per_cov(bam,
                     if qname in mismap_qnames:
                         logger.debug(f"Read pair {qname} is in mismap_qnames, skip this pair of reads")
                         continue
+                    logger.debug(f"Write read pair {qname} to {output_bam}")
                     for read in pair:
                         output_handle.write(read)
 
@@ -294,11 +296,15 @@ def realign_filter_per_cov(bam,
                  [[ $(samtools view {bam} | wc -l) -ge 1 ]] && \
                  ls -lh {bam}", logger=logger)
     # Sort and index the output bam file
-    executeCmd(f"samtools sort -O bam -T {tmp_dir} -o {tmp_bam} {output_bam} && \
-                 mv {tmp_bam} {output_bam} && \
-                 samtools index {output_bam} && \
-                 [[ $(samtools view {output_bam} | wc -l) -ge 1 ]] && \
-                 ls -lh {output_bam}", logger=logger)
+    try:
+        executeCmd(f"samtools sort -O bam -T {tmp_dir} -o {tmp_bam} {output_bam} && \
+                     mv {tmp_bam} {output_bam} && \
+                     samtools index {output_bam} && \
+                     [[ $(samtools view {output_bam} | wc -l) -ge 1 ]] && \
+                     ls -lh {output_bam}", logger=logger)
+    except Exception as e:
+        logger.warning(f"Failed to sort and index the output bam file {output_bam}, because its empty")
+        return None, None
     return phased_graph, output_bam
 
 
