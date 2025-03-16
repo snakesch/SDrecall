@@ -199,7 +199,7 @@ def realign_filter_per_cov(bam,
 
     if len(hap_qname_info) <= 2:
         logger.warning(f"Only {len(hap_qname_info)} haplotype clusters are found for bam {bam}. Do not need to choose 2 haplotypes, Skip this region.\n")
-        correct_qnames, mismap_qnames = set(list(hap_qname_info.values())), set([])
+        correct_qnames, mismap_qnames = set([qn for hs in hap_qname_info.values() for qn in hs]), set([])
     else:
         correct_qnames, mismap_qnames = inspect_by_haplotypes(bam,
                                                               hap_qname_info,
@@ -244,6 +244,7 @@ def realign_filter_per_cov(bam,
                     # Filter out reads with oddly high editing distance that breakthrough the cutoff
                     if read.is_mapped and read.mapping_quality > 10:
                         if qname in total_lowqual_qnames:
+                            logger.debug(f"Read {1 if read.is_read1 else 2} from pair {read.query_name} is considered low base quality read, skip this pair of reads")
                             pass
                         elif qname in noisy_qnames:
                             # logger.debug(f"Read {1 if read.is_read1 else 2} from pair {read.query_name} has an edit distance {scatter_edit_dist} which is too high to be likely correctly mapped")
@@ -259,7 +260,7 @@ def realign_filter_per_cov(bam,
                             not read.is_supplementary and \
                             not read.is_duplicate and \
                             not read.is_qcfail:
-                            # logger.debug(f"Read {1 if read.is_read1 else 2} from pair {read.query_name} has an edit distance {read.get_tag('NM')} which is considered as normal")
+                            logger.debug(f"Read {1 if read.is_read1 else 2} from pair {read.query_name} is considered appropriately aligned")
                             read.set_tag('HP', f'HAP_{hap_id}')
                             qname_pair = norm_qnames.get(qname, set([]))
                             qname_pair.add(read)
@@ -275,9 +276,14 @@ def realign_filter_per_cov(bam,
 
                 # logger.warning(f"Check {check_odd_num} reads to find oddly high editing distance reads, {zero_odd_num} reads found no odd editing distance read pairs")
                 for qname, pair in norm_qnames.items():
-                    if (not qname in noisy_qnames) and (not qname in mismap_qnames):
-                        for read in pair:
-                            output_handle.write(read)
+                    if qname in noisy_qnames:
+                        logger.debug(f"Read pair {qname} is in noisy_qnames, skip this pair of reads")
+                        continue
+                    if qname in mismap_qnames:
+                        logger.debug(f"Read pair {qname} is in mismap_qnames, skip this pair of reads")
+                        continue
+                    for read in pair:
+                        output_handle.write(read)
 
     logger.warning(f"Filtered out {len(noisy_qnames)} noisy read-pairs (Editing distance without the biggest gap > {max_varno}) and {len(mismap_qnames - noisy_qnames)} read-pairs with ODD high editing distance, remaining {len(set(norm_qnames.keys()) - noisy_qnames - mismap_qnames)} read-pairs from {bam} (with total {total_num} reads) and output to {output_bam}\n\n")
 
