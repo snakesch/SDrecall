@@ -11,7 +11,7 @@ from src.utils import executeCmd
 from src.suppress_warning import *
 from fp_control.numba_operators import any_false_numba, numba_sum
 from fp_control.bam_ncls import overlap_qname_idx_iterator
-from fp_control.pairwise_read_inspection import determine_same_haplotype
+from fp_control.pairwise_read_inspection import determine_same_haplotype, get_read_id
 from src.log import logger
 
 
@@ -95,18 +95,21 @@ def get_overlap_intervals(read_pair1, read_pair2):
             r1_start = r1.reference_start
             r2_end = r2.reference_end
 
-            if r2_end - r1_start <= 0:
+            if r2_end - r1_start <= 0 or r2_end - r1_start >= 300:
+                logger.debug(f"Read {get_read_id(r1)} and {get_read_id(r2)} have no overlap")
                 continue
 
             r1_end = r1.reference_end
             r2_start = r2.reference_start
 
             if r1_end - r2_start <= 0:
+                logger.debug(f"Read {get_read_id(r1)} and {get_read_id(r2)} have no overlap")
                 continue
 
             overlap_start = max(r1_start, r2_start)
             overlap_end = min(r1_end, r2_end)
 
+            logger.debug(f"Found the overlap interval {overlap_start}-{overlap_end} between the read pair {get_read_id(r1)} and {get_read_id(r2)}")
             overlap_intervals[(overlap_start, overlap_end)] = (r1, r2)
 
     return overlap_intervals
