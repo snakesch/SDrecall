@@ -95,7 +95,7 @@ def get_overlap_intervals(read_pair1, read_pair2):
             r1_start = r1.reference_start
             r2_end = r2.reference_end
 
-            if r2_end - r1_start <= 0 or r2_end - r1_start >= 300:
+            if r2_end - r1_start <= 0:
                 continue
 
             r1_end = r1.reference_end
