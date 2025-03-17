@@ -569,14 +569,14 @@ def determine_same_haplotype(read, other_read,
     var_count = count_var(identical_part)
     indel_num = count_continuous_indel_blocks(identical_part)
 
-    overlap_span = overlap_span + numba_sum(score_arr[:var_count])
-    overlap_span = overlap_span + mean_read_length * 3 * indel_num
+    weight = overlap_span + numba_sum(score_arr[:var_count])
+    weight = weight + mean_read_length * 3 * indel_num
 
     if total_match:
         logger.debug(f"The two reads {read_id} and {other_read_id} are identical in the overlapping region. The overlap span is {read.reference_name}:{overlap_start}-{overlap_end}.")
         # logger.debug(f"The qseq_ref_positions of read {read_id} starting from {read.reference_start} is {qseq_ref_positions}, and the ref_positions is {ref_positions}")
         # logger.debug(f"The qseq_ref_positions of read {other_read_id} starting from {other_read.reference_start} is {other_qseq_ref_positions}, and the ref_positions is {other_ref_positions}")
-        return True, read_ref_pos_dict, read_hap_vectors, overlap_span
+        return True, read_ref_pos_dict, read_hap_vectors, weight
     else:
         if len(read_seq) != len(other_seq) or interval_hap_vector.size != interval_other_hap_vector.size:
             logger.debug(f"The two reads {read_id} and {other_read_id} are aligned to the same reference span {read.reference_name}:{overlap_start}-{overlap_end} with different size of sequence.")
@@ -610,7 +610,7 @@ def determine_same_haplotype(read, other_read,
 
         if tolerate:
             logger.debug(f"The two reads {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} are tolerant to {tolerated_count} mismatches")
-            overlap_span = overlap_span - tolerated_count * 20
-            return True, read_ref_pos_dict, read_hap_vectors, overlap_span
+            weight = weight - tolerated_count * 20
+            return True, read_ref_pos_dict, read_hap_vectors, weight
         else:
             return False, read_ref_pos_dict, read_hap_vectors, None

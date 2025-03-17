@@ -30,7 +30,7 @@ def stat_ad_to_dict(bam_file, logger = logger):
         logger.warning(f"Look at the two dataframes now: \n{alt_expanded.to_string(index=False)}\n{ad_expanded.to_string(index=False)}\n")
         return None
 
-    logger.debug("The AD expanded table looks like: \n{}\nThe ALT expanded table looks like: \n{}\n".format(ad_expanded.loc[~ad_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False),
+    # logger.debug("The AD expanded table looks like: \n{}\nThe ALT expanded table looks like: \n{}\n".format(ad_expanded.loc[~ad_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False),
                                                                                                             alt_expanded.loc[~alt_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False)))
 
     # Initialize the nested dictionary
@@ -84,32 +84,33 @@ def check_edge(u, v, adj_set):
     return adj_set.get((u, v), False) or adj_set.get((v, u), False)
 
 
-def get_overlap_intervals(read_pair1, read_pair2):
+def get_overlap_intervals(read_pair1, read_pair2, logger = logger):
     '''
     This function is to extract the overlapping intervals between two pairs of reads
     '''
     overlap_intervals = {}
+    # logger.debug(f"Trying to find overlap intervals between the read pair {[get_read_id(x) for x in read_pair1]} and {[get_read_id(x) for x in read_pair2]}")
 
     for r1 in read_pair1:
         for r2 in read_pair2:
             r1_start = r1.reference_start
             r2_end = r2.reference_end
 
-            if r2_end - r1_start <= 0 or r2_end - r1_start >= 300:
-                logger.debug(f"Read {get_read_id(r1)} and {get_read_id(r2)} have no overlap")
+            if r2_end <= r1_start:
+                # logger.debug(f"Read {get_read_id(r1)} and {get_read_id(r2)} have no overlap")
                 continue
 
             r1_end = r1.reference_end
             r2_start = r2.reference_start
 
-            if r1_end - r2_start <= 0:
-                logger.debug(f"Read {get_read_id(r1)} and {get_read_id(r2)} have no overlap")
+            if r1_end <= r2_start:
+                # logger.debug(f"Read {get_read_id(r1)} and {get_read_id(r2)} have no overlap")
                 continue
 
             overlap_start = max(r1_start, r2_start)
             overlap_end = min(r1_end, r2_end)
 
-            logger.debug(f"Found the overlap interval {overlap_start}-{overlap_end} between the read pair {get_read_id(r1)} and {get_read_id(r2)}")
+            # logger.debug(f"Found the overlap interval {overlap_start}-{overlap_end} between the read pair {get_read_id(r1)} and {get_read_id(r2)}")
             overlap_intervals[(overlap_start, overlap_end)] = (r1, r2)
 
     return overlap_intervals
@@ -282,7 +283,7 @@ def build_phasing_graph(bam_file,
             qv = g.add_vertex()
             qname_prop[qv] = qname
             qname_to_node[qname] = int(qv)
-            # logger.debug(f"Added a new node {v} for qname {qname} to the graph. The current vertices are {g.get_vertices()}")
+            # # logger.debug(f"Added a new node {v} for qname {qname} to the graph. The current vertices are {g.get_vertices()}")
         else:
             qv = g.vertex(qname_to_node[qname])
 
@@ -307,7 +308,7 @@ def build_phasing_graph(bam_file,
                 oqv = g.add_vertex()
                 qname_prop[oqv] = other_qname
                 qname_to_node[other_qname] = int(oqv)
-                # logger.debug(f"Added a new node {v} for qname {qname} to the graph. The current vertices are {g.get_vertices()}")
+                # # logger.debug(f"Added a new node {v} for qname {qname} to the graph. The current vertices are {g.get_vertices()}")
             else:
                 oqv = g.vertex(qname_to_node[other_qname])
 
@@ -318,8 +319,8 @@ def build_phasing_graph(bam_file,
             qname_check_dict[(int(qv), int(oqv))] = True
 
             # Inspect the overlap between the two pairs of reads
-            overlap_intervals = get_overlap_intervals(paired_reads, other_reads)
-            logger.debug(f"Found these overlap intervals between the read pair {qname} and {other_qname}: {overlap_intervals}")
+            overlap_intervals = get_overlap_intervals(paired_reads, other_reads, logger = logger)
+            # logger.debug(f"Found these overlap intervals between the read pair {qname} and {other_qname}: {overlap_intervals}")
 
             if len(overlap_intervals) == 0:
                 continue
@@ -335,7 +336,7 @@ def build_phasing_graph(bam_file,
             for (overlap_start, overlap_end), (read1, read2) in overlap_intervals.items():
                 uncovered_overlaps = find_uncovered_regions_numba(inspected_overlaps.starts[:inspected_overlaps.size], inspected_overlaps.ends[:inspected_overlaps.size], 
                                                                   overlap_start, overlap_end)
-                logger.debug(f"Found the uncovered regions {uncovered_overlaps} for the reads {read1.query_name} and {read2.query_name} in the overlap region ({chrom}:{overlap_start}-{overlap_end})")
+                # logger.debug(f"Found the uncovered regions {uncovered_overlaps} for the reads {read1.query_name} and {read2.query_name} in the overlap region ({chrom}:{overlap_start}-{overlap_end})")
                 for row_ind in range(uncovered_overlaps.shape[0]):
                     uncovered_start, uncovered_end = uncovered_overlaps[row_ind, 0], uncovered_overlaps[row_ind, 1]
                     bool_res, read_ref_pos_dict, read_hap_vectors, read_weight = determine_same_haplotype(read1, read2,
@@ -358,7 +359,7 @@ def build_phasing_graph(bam_file,
                         # logger.info(f"Found the reads {read1.query_name} ({read1.reference_name}:{read1.reference_start}-{read1.reference_end}) and {read2.query_name} ({read2.reference_name}:{read2.reference_start}-{read2.reference_end}) are in different haplotypes, overlap region ({overlap_start}-{overlap_end})")
 
                     if read_weight is not None:
-                        read_weight = read_weight if read_weight > 0 else 1
+                        read_weight = read_weight if read_weight > 0 else 0
                         norm_weight = read_weight/(mean_read_length * 10)
                         # norm_weight = norm_weight if norm_weight < 1 else 1 - 1e-6
                         # assert norm_weight is not None, f"The normalized weight {norm_weight} is not calculated while the raw weight is {read_weight} for the reads {read1.query_name} and {read2.query_name}"

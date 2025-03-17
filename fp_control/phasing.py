@@ -51,7 +51,7 @@ def graph_vertex_iter(vertex_indices, graph):
 
 def find_cliques_in_components(graph, weight_matrix, ew_cutoff = 0.101, logger = logger):
     '''
-    This function is to find the largest cliques in each component of the graph
+    This generator function is to find the largest cliques in each component of the graph
 
     - One critical consideration is that when extending cliques, if we allow two read pairs with low edge weight to be grouped into the same clique, there is a significant chance that this call is a false positive.
     - Low edge weight means the overlapping region between two read pairs does not contain sufficient variants to confidently determine the phase.
@@ -108,9 +108,9 @@ def find_cliques_in_components(graph, weight_matrix, ew_cutoff = 0.101, logger =
             cliques_iter = gce_algorithm(selected_indices, big_weight_matrix, cutoff = ew_cutoff, logger = logger)
             # logger.debug(f"Found {len(cliques)} cliques in the component {component_id}\n")
             for clique in cliques_iter:
-                # logger.info(f"Receiving a clique containing {[graph.vertex_properties['qname'][qid] for qid in clique]} in the component {component_id}")
+                logger.debug(f"First round (edge weight cutoff = {ew_cutoff}): Receiving a clique containing {[graph.vertex_properties['qname'][qid] for qid in clique]} in the component {component_id}")
                 if len(clique) <= 5:
-                    # logger.info(f"Found {[graph.vertex_properties['qname'][qid] for qid in clique]} read pairs in a very small clique.")
+                    logger.debug(f"Found {[graph.vertex_properties['qname'][qid] for qid in clique]} read pairs in a very small clique.")
                     small_row_indices.update(clique)
                     # logger.info(f"Adding the {len(clique)} vertices in the clique to the small row indices")
                     continue
@@ -129,6 +129,7 @@ def find_cliques_in_components(graph, weight_matrix, ew_cutoff = 0.101, logger =
         logger.info(f"Start to find the largest clique in the small weight matrix, which contains {numba_sum(small_row_mask)} rows and columns. Contiguous? {small_weight_matrix.flags['C_CONTIGUOUS']}")
         cliques_iter = gce_algorithm(selected_indices, small_weight_matrix, cutoff = ew_cutoff/2, logger = logger)
         for clique in cliques_iter:
+            logger.debug(f"Second round (edge weight cutoff = {ew_cutoff/2}): Receiving a clique containing {[graph.vertex_properties['qname'][qid] for qid in clique]} in the small weight matrix")
             yield clique
 
 

@@ -161,6 +161,7 @@ def realign_filter_per_cov(bam,
 
     # Calculate the mean read length of the input bam file, which can be used for read pair similarity calculation
     mean_read_length = calculate_mean_read_length(bam)
+    logger.info(f"Average read length: {mean_read_length}")
 
     # Create the read-pair graph used for phasing
     # Detailed description of the graph construction can be found in the function docstring.
