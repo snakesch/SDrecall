@@ -9,10 +9,9 @@ from src.log import logger
 
 
 def imap_filter_out(args):
-    import sys
     """Worker function that processes a single region and returns results with log file path"""
     # Unpack arguments
-    args, log_dir = args
+    args, log_dir, log_level = args
     raw_bam, output_bam, intrinsic_bam, bam_region_bed, max_varno, recall_mq_cutoff, basequal_median_cutoff, edge_weight_cutoff, numba_threads, tmp_dir, job_id = args
     import numba
     numba.set_num_threads(numba_threads)
@@ -38,7 +37,7 @@ def imap_filter_out(args):
     
     # Create logger that writes to file
     subprocess_logger = logging.getLogger(f"SubProcess-{job_id}")
-    subprocess_logger.setLevel(logging.DEBUG)  # Use logger level from src/log.py logger
+    subprocess_logger.setLevel(log_level)  # Use logger level from src/log.py logger
     subprocess_logger.addHandler(file_handler)
     subprocess_logger.propagate = False  # Don't send logs to parent loggers
     
