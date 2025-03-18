@@ -379,6 +379,7 @@ def build_phasing_graph(bam_file,
                 weight_matrix[int(qv), int(oqv)] = -1
                 weight_matrix[int(oqv), int(qv)] = -1
             else:
+                logger.debug(f"Between {qname_prop[qv]} and {qname_prop[oqv]}, the pair weight is {pair_weight}")
                 weight_matrix[int(qv), int(oqv)] = pair_weight
                 weight_matrix[int(oqv), int(qv)] = pair_weight
                 e = g.add_edge(qv, oqv)

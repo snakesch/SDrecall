@@ -32,6 +32,8 @@ def count_continuous_blocks(arr):
 
     # Pad one False to the beginning and end of arr
     extended_arr = np.empty(arr.size + 2, dtype=np.bool_)
+    extended_arr[0] = False  # Explicitly set beginning padding
+    extended_arr[-1] = False  # Explicitly set end padding
     extended_arr[1:-1] = arr
 
     shifted_sequence = numba_not(extended_arr[1:])
@@ -573,7 +575,8 @@ def determine_same_haplotype(read, other_read,
     weight = weight + mean_read_length * 3 * indel_num
 
     if total_match:
-        logger.debug(f"The two reads {read_id} and {other_read_id} are identical in the overlapping region. The overlap span is {read.reference_name}:{overlap_start}-{overlap_end}.")
+        logger.debug(f"The two reads {read_id} and {other_read_id} are identical in the overlapping region. The overlap span is {read.reference_name}:{overlap_start}-{overlap_end}. With a weight of {weight}, shared variant count is {var_count}, and shared indel count is {indel_num}. The identical part looks like {identical_part.tolist()}\nThe interval hapvector within overlap region for {read_id} is {interval_hap_vector.tolist()}\nAnd the interval hapvector within overlap region for {other_read_id} is {interval_other_hap_vector.tolist()}")
+
         # logger.debug(f"The qseq_ref_positions of read {read_id} starting from {read.reference_start} is {qseq_ref_positions}, and the ref_positions is {ref_positions}")
         # logger.debug(f"The qseq_ref_positions of read {other_read_id} starting from {other_read.reference_start} is {other_qseq_ref_positions}, and the ref_positions is {other_ref_positions}")
         return True, read_ref_pos_dict, read_hap_vectors, weight
@@ -609,7 +612,7 @@ def determine_same_haplotype(read, other_read,
                                                                 nested_ad_dict )
 
         if tolerate:
-            logger.debug(f"The two reads {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} are tolerant to {tolerated_count} mismatches")
+            logger.debug(f"The two reads {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} are tolerant to {tolerated_count} mismatches, with a weight of {weight}")
             weight = weight - tolerated_count * 20
             return True, read_ref_pos_dict, read_hap_vectors, weight
         else:
