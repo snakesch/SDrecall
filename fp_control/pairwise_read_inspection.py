@@ -575,14 +575,14 @@ def determine_same_haplotype(read, other_read,
     weight = weight + mean_read_length * 3 * indel_num
 
     if total_match:
-        logger.debug(f"The two reads {read_id} and {other_read_id} are identical in the overlapping region. The overlap span is {read.reference_name}:{overlap_start}-{overlap_end}. With a weight of {weight}, shared variant count is {var_count}, and shared indel count is {indel_num}. The identical part looks like {identical_part.tolist()}\nThe interval hapvector within overlap region for {read_id} is {interval_hap_vector.tolist()}\nAnd the interval hapvector within overlap region for {other_read_id} is {interval_other_hap_vector.tolist()}")
+        # logger.debug(f"The two reads {read_id} and {other_read_id} are identical in the overlapping region. The overlap span is {read.reference_name}:{overlap_start}-{overlap_end}. With a weight of {weight}, shared variant count is {var_count}, and shared indel count is {indel_num}. The identical part looks like {identical_part.tolist()}\nThe interval hapvector within overlap region for {read_id} is {interval_hap_vector.tolist()}\nAnd the interval hapvector within overlap region for {other_read_id} is {interval_other_hap_vector.tolist()}")
 
         # logger.debug(f"The qseq_ref_positions of read {read_id} starting from {read.reference_start} is {qseq_ref_positions}, and the ref_positions is {ref_positions}")
         # logger.debug(f"The qseq_ref_positions of read {other_read_id} starting from {other_read.reference_start} is {other_qseq_ref_positions}, and the ref_positions is {other_ref_positions}")
         return True, read_ref_pos_dict, read_hap_vectors, weight
     else:
         if len(read_seq) != len(other_seq) or interval_hap_vector.size != interval_other_hap_vector.size:
-            logger.debug(f"The two reads {read_id} and {other_read_id} are aligned to the same reference span {read.reference_name}:{overlap_start}-{overlap_end} with different size of sequence.")
+            # logger.debug(f"The two reads {read_id} and {other_read_id} are aligned to the same reference span {read.reference_name}:{overlap_start}-{overlap_end} with different size of sequence.")
             # logger.debug(f"The qseq_ref_positions of read {read_id} starting from {read.reference_start} is {qseq_ref_positions.tolist()}, and the ref_positions is {ref_positions.tolist()}")
             # logger.debug(f"The qseq_ref_positions of read {other_read_id} starting from {other_read.reference_start} is {other_qseq_ref_positions.tolist()}, and the ref_positions is {other_ref_positions.tolist()}")
             return False, read_ref_pos_dict, read_hap_vectors, None
@@ -595,11 +595,11 @@ def determine_same_haplotype(read, other_read,
         #     other_seq_arr = np.array(list(map(base_dict.get, other_seq)), dtype=np.int8)
 
         q_diff_indices = numba_diff_indices(read_seq, other_seq)
-        logger.debug(f"The mismatch indices between {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} relative to the query sequence are {q_diff_indices.tolist()}")
+        # logger.debug(f"The mismatch indices between {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} relative to the query sequence are {q_diff_indices.tolist()}")
         r_diff_indices = qr_idx_arr[q_diff_indices]
-        logger.debug(f"The mismatch indices between {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} relative to the reference genome are {r_diff_indices.tolist()}")
+        # logger.debug(f"The mismatch indices between {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} relative to the reference genome are {r_diff_indices.tolist()}")
         if numba_contain(r_diff_indices, np.int32(-1)):
-            logger.debug(f"Within in region {read.reference_name}:{overlap_start}-{overlap_end}, read {read_id} and read {other_read_id} have mismatches on indels, which make this two read pairs not intolerant to the mismatches")
+            # logger.debug(f"Within in region {read.reference_name}:{overlap_start}-{overlap_end}, read {read_id} and read {other_read_id} have mismatches on indels, which make this two read pairs not intolerant to the mismatches")
             # logger.debug(f"The query sequence within this region for read {read_id} is {read_seq.tolist()}, and the mismatch indices relative to the query sequence are {q_diff_indices.tolist()}")
             # logger.debug(f"The query sequence within this region for read {other_read_id} is {other_seq.tolist()}, and the mismatch indices relative to the reference genome are {r_diff_indices.tolist()}")
             return False, read_ref_pos_dict, read_hap_vectors, None
@@ -612,7 +612,7 @@ def determine_same_haplotype(read, other_read,
                                                                 nested_ad_dict )
 
         if tolerate:
-            logger.debug(f"The two reads {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} are tolerant to {tolerated_count} mismatches, with a weight of {weight}")
+            # logger.debug(f"The two reads {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} are tolerant to {tolerated_count} mismatches, with a weight of {weight}")
             weight = weight - tolerated_count * 20
             return True, read_ref_pos_dict, read_hap_vectors, weight
         else:
