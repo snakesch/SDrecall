@@ -371,6 +371,7 @@ def build_phasing_graph(bam_file,
                 inspected_overlaps.add(overlap_start, overlap_end)
                 n += 1
             qname_bools = qname_bools[:n]
+            pair_weight = 0 if pair_weight is None else pair_weight
             pair_weight = pair_weight if pair_weight > 0 else 1e-4
             
             if any_false_numba(qname_bools):
