@@ -30,7 +30,7 @@ def stat_ad_to_dict(bam_file, logger = logger):
         logger.warning(f"Look at the two dataframes now: \n{alt_expanded.to_string(index=False)}\n{ad_expanded.to_string(index=False)}\n")
         return None
 
-    # logger.debug("The AD expanded table looks like: \n{}\nThe ALT expanded table looks like: \n{}\n".format(ad_expanded.loc[~ad_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False),
+    logger.debug("The AD expanded table looks like: \n{}\nThe ALT expanded table looks like: \n{}\n".format(ad_expanded.loc[~ad_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False),
                                                                                                             alt_expanded.loc[~alt_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False)))
 
     # Initialize the nested dictionary
@@ -283,7 +283,7 @@ def build_phasing_graph(bam_file,
             qv = g.add_vertex()
             qname_prop[qv] = qname
             qname_to_node[qname] = int(qv)
-            # # logger.debug(f"Added a new node {v} for qname {qname} to the graph. The current vertices are {g.get_vertices()}")
+            # logger.debug(f"Added a new node {v} for qname {qname} to the graph. The current vertices are {g.get_vertices()}")
         else:
             qv = g.vertex(qname_to_node[qname])
 
@@ -308,7 +308,7 @@ def build_phasing_graph(bam_file,
                 oqv = g.add_vertex()
                 qname_prop[oqv] = other_qname
                 qname_to_node[other_qname] = int(oqv)
-                # # logger.debug(f"Added a new node {v} for qname {qname} to the graph. The current vertices are {g.get_vertices()}")
+                # logger.debug(f"Added a new node {v} for qname {qname} to the graph. The current vertices are {g.get_vertices()}")
             else:
                 oqv = g.vertex(qname_to_node[other_qname])
 
@@ -361,9 +361,6 @@ def build_phasing_graph(bam_file,
                     if read_weight is not None:
                         read_weight = read_weight if read_weight > 0 else 0
                         norm_weight = read_weight/(mean_read_length * 10)
-                        # norm_weight = norm_weight if norm_weight < 1 else 1 - 1e-6
-                        # assert norm_weight is not None, f"The normalized weight {norm_weight} is not calculated while the raw weight is {read_weight} for the reads {read1.query_name} and {read2.query_name}"
-                        # logger.info(f"Found the reads {read1.query_name} ({read1.reference_name}:{read1.reference_start}-{read1.reference_end}) and {read2.query_name} ({read2.reference_name}:{read2.reference_start}-{read2.reference_end}) are in the same haplotype, overlap region ({overlap_start}-{overlap_end}) with weight {norm_weight} (raw score {read_weight})")
                         if pair_weight is None:
                             pair_weight = norm_weight
                         else:
@@ -374,7 +371,7 @@ def build_phasing_graph(bam_file,
                 inspected_overlaps.add(overlap_start, overlap_end)
                 n += 1
             qname_bools = qname_bools[:n]
-            pair_weight = pair_weight if pair_weight != 1 else 1 + 1e-4
+            pair_weight = pair_weight if pair_weight > 0 else 1e-4
             
             if any_false_numba(qname_bools):
                 # logger.info(f"Qname_bools are {qname_bools}, Found two pairs {qname_prop[qv]} and {qname_prop[oqv]} are in different haplotypes, Removing the edge with the biggest weight")

@@ -49,7 +49,7 @@ def graph_vertex_iter(vertex_indices, graph):
 
 
 
-def find_cliques_in_components(graph, weight_matrix, ew_cutoff = 0.101, logger = logger):
+def find_cliques_in_components(graph, weight_matrix, ew_cutoff = 0.301, logger = logger):
     '''
     This generator function is to find the largest cliques in each component of the graph
 

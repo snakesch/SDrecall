@@ -80,6 +80,56 @@ def imap_filter_out(args):
         return f"{raw_bam},NaN,{log_file}"
 
 
+
+def weight_matrix_to_dataframe(weight_matrix, graph):
+    """
+    Convert a weight matrix indexed by graph vertices to a pandas DataFrame
+    with query names as row and column labels, using the graph's vertex property map.
+    
+    Parameters:
+    -----------
+    weight_matrix : numpy.ndarray
+        The square matrix of edge weights, indexed by vertex indices.
+    
+    graph : graph_tool.Graph
+        The graph object containing vertex properties with query names.
+        
+    Returns:
+    --------
+    pandas.DataFrame
+        A DataFrame where both rows and columns are labeled with query names,
+        and values represent edge weights between pairs of reads.
+    """
+    import pandas as pd
+    import numpy as np
+    
+    # Get direct access to the qname property map
+    qname_prop = graph.vertex_properties["qname"]
+    
+    # Get all vertices that are valid indices in the weight matrix
+    vertex_indices = []
+    vertex_qnames = []
+    
+    for v in graph.vertices():
+        v_idx = int(v)
+        if v_idx < weight_matrix.shape[0]:  # Ensure vertex index is within matrix bounds
+            vertex_indices.append(v_idx)
+            vertex_qnames.append(qname_prop[v])
+    
+    # Create the DataFrame using qnames from the property map
+    # First create a view of the weight matrix with only the relevant indices
+    submatrix = weight_matrix[np.ix_(vertex_indices, vertex_indices)]
+    
+    # Create the DataFrame with query names as labels
+    df = pd.DataFrame(
+        data=submatrix,
+        index=vertex_qnames,
+        columns=vertex_qnames
+    )
+    
+    return df
+
+
 def realign_filter_per_cov(bam,
                            output_bam = None,
                            intrinsic_bam = None,
@@ -87,7 +137,7 @@ def realign_filter_per_cov(bam,
                            max_varno = 5,
                            recall_mq_cutoff = 10,
                            basequal_median_cutoff = 15,
-                           edge_weight_cutoff = 0.201,
+                           edge_weight_cutoff = 0.301,
                            threads = 4,
                            tmp_dir = "/tmp",
                            logger=logger):
@@ -158,6 +208,7 @@ def realign_filter_per_cov(bam,
     logger.info(f"Successfully migrated the intrinsic BAM file {intrinsic_bam} to NCLS format\n")
     logger.info(f"Intrinsic BAM contains {len(intrin_bam_ncls[1])} reads in total.\n\n")
     bam_graph = bam.replace(".bam", ".phased.graphml")
+    bam_weight_matrix = bam.replace(".bam", ".weight_matrix.tsv")
 
     # Calculate the mean read length of the input bam file, which can be used for read pair similarity calculation
     mean_read_length = calculate_mean_read_length(bam)
@@ -174,9 +225,10 @@ def realign_filter_per_cov(bam,
     if phased_graph is None:
         return None, None
 
-    logger.info(f"Now succesfully built the phasing graph with {phased_graph.num_vertices()} vertices and {phased_graph.num_edges()} edges. Save it to {bam_graph}\n\n")
+    logger.info(f"Now succesfully built the phasing graph with {phased_graph.num_vertices()} vertices and {phased_graph.num_edges()} edges. Save it to {bam_graph}, the weight matrix is saved to {bam_weight_matrix}\n\n")
     # Now we need to extract the components in the phased graph
     phased_graph.save(bam_graph)
+    weight_matrix_to_dataframe(weight_matrix, phased_graph).to_csv(bam_weight_matrix, sep = "\t", index = True)
 
     # Now we need to do local phasing for each component in the graph. (Finding non-overlapping high edge weight cliques inside each component iteratively)
     qname_hap_info, hap_qname_info = phasing_realigned_reads(phased_graph,
