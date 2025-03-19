@@ -17,7 +17,6 @@ from src.merge_variants_with_priority import merge_with_priority
 
 from realign_recall.stat_realign_group_regions import stat_all_RG_region_size
 from realign_recall.realign_per_RG import imap_process_masked_bam
-from realign_recall.annotate_HP_tag_to_vars import annotate_vcf as annotate_vcf_HP_tag
 from realign_recall.prepare_masked_align_region import imap_prepare_masked_align_region_per_RG
 from misalignment_elimination import eliminate_misalignments
 
@@ -183,42 +182,22 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
     print("*"*100, "\n"*2, file=sys.stderr)
 
     target_region = sdrecall_paths.multi_align_bed_path()
-    deduped_raw_bam, pooled_filtered_bam = eliminate_misalignments(deduped_raw_bam,
-                                                                   pooled_filtered_bam,
-                                                                   total_intrinsic_bam,
-                                                                   sdrecall_paths.input_bam,
-                                                                   ref_genome,
-                                                                   target_regions = target_region,
-                                                                   avg_frag_size=avg_frag_size,
-                                                                   threads=threads,
-                                                                   numba_threads=numba_threads,
-                                                                   conf_level=conf_level,
-                                                                   recall_mq_cutoff=recall_mq_cutoff,
-                                                                   cache_dir=sdrecall_paths.tmp_dir,
-                                                                   logger=logger)
-
-    # Call variants on the filtered BAM file after misalignment elimination
     pooled_filtered_vcf = sdrecall_paths.recall_filtered_vcf_path()
-    logger.info(f"Calling variants on the filtered BAM file {pooled_filtered_bam}")
-    cmd = f"bash {shell_utils} bcftools_call_per_RG \
-            -m {ref_genome} \
-            -b {pooled_filtered_bam} \
-            -o {pooled_filtered_vcf} \
-            -c {threads} \
-            -p {sdrecall_paths.sample_id}"
-    executeCmd(cmd, logger=logger)
-
-    # Now we need to merge the pooled filtered vcf and the pooled raw vcf to identify which variants might be derived from misalignments
-    pooled_filtered_vcf = annotate_vcf_HP_tag(pooled_filtered_vcf, 
-                                              pooled_filtered_vcf, 
-                                              pooled_filtered_bam, 
-                                              "HP", 
-                                              logger = logger)
-    pooled_raw_vcf = annotate_vcf_HP_tag(pooled_raw_vcf, 
-                                         pooled_raw_vcf, 
-                                         deduped_raw_bam, 
-                                         "HP", 
-                                         logger = logger)
+    deduped_raw_bam, pooled_filtered_bam, pooled_filtered_vcf = eliminate_misalignments(deduped_raw_bam,
+                                                                                        pooled_filtered_bam,
+                                                                                        pooled_filtered_vcf,
+                                                                                        total_intrinsic_bam,
+                                                                                        sdrecall_paths.input_bam,
+                                                                                        ref_genome,
+                                                                                        sdrecall_paths.sample_id,
+                                                                                        target_regions = target_region,
+                                                                                        avg_frag_size=avg_frag_size,
+                                                                                        threads=threads,
+                                                                                        numba_threads=numba_threads,
+                                                                                        conf_level=conf_level,
+                                                                                        recall_mq_cutoff=recall_mq_cutoff,
+                                                                                        cache_dir=sdrecall_paths.tmp_dir,
+                                                                                        logger=logger)
     
     tmp_merged_vcf = prepare_tmp_file(suffix=".vcf.gz", tmp_dir=sdrecall_paths.tmp_dir).name
     merge_with_priority(query_vcf = pooled_raw_vcf, 

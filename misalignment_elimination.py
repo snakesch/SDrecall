@@ -11,7 +11,7 @@ ctx = mp.get_context("spawn")
 
 from io import StringIO
 from datetime import datetime
-from src.utils import executeCmd, configure_parallelism, merge_bams
+from src.utils import executeCmd, configure_parallelism, merge_bams, prepare_tmp_file
 from src.log import logger
 from src.const import shell_utils
 from src.suppress_warning import *
@@ -48,9 +48,11 @@ def gt_filter_init(threads, cache_dir=None):
 
 def eliminate_misalignments(input_bam,
                             output_bam,
+                            output_vcf,
                             intrinsic_bam,
                             original_bam,
                             ref_genome,
+                            sample_id,
                             target_regions,
                             avg_frag_size = 400,
                             threads = 12,
@@ -134,6 +136,8 @@ def eliminate_misalignments(input_bam,
                      edge_weight_cutoff,
                      numba_threads,
                      cache_dir,
+                     ref_genome,
+                     sample_id,
                      i+1), 
                     log_dir,
                     logger.level
@@ -150,23 +154,20 @@ def eliminate_misalignments(input_bam,
                 raw_bam = result_parts[0]
                 
                 # Extract the log file path (now at position 2)
-                log_file = result_parts[2] if len(result_parts) >= 3 else "No log file"
+                log_file = result_parts[3] if len(result_parts) >= 4 else "No log file"
                 
                 # For result processing, we need to add placeholders to match the expected 5 fields
-                # The original expected: raw_bam, masked_bam, clean_masked_bam, noise_masked_bam, masked_vcf
-                if len(result_parts) == 3 and result_parts[1] != "NaN":  # Successful result: raw_bam, output_bam, log_file
-                    standard_result = f"{result_parts[0]},{result_parts[1]}"
-                else:  # Error result: raw_bam, NaN, log_file
-                    standard_result = f"{result_parts[0]},NaN"
-                    
-                result_record_strs.append(standard_result)
+                # The original expected: raw_bam, filtered_bam, filtered_vcf, log_file                
+                result_record_strs.append(f"{raw_bam},{result_parts[1]},{result_parts[2]},{log_file}")
                 
                 # Print a reference to the log file instead of all log content
                 print(f"Subprocess {i} for {raw_bam} complete. Full log available at: {log_file}", file=sys.stderr)
                 
                 # Display brief status based on result
-                if len(result_parts) >= 2 and result_parts[1] != "NaN":
+                if len(result_parts) >= 4 and result_parts[2] != "NaN":
                     print(f"  Status: SUCCESS - Created output: {result_parts[1]}", file=sys.stderr)
+                elif len(result_parts) >= 4 and result_parts[1] != "NaN":
+                    print(f"  Status: WARNING - Succesfully generate the filtered BAM file {result_parts[1]} but failed to call variants on the filtered BAM file", file=sys.stderr)
                 else:
                     # For errors, show the last few lines of the log file to help with debugging
                     try:
@@ -185,7 +186,7 @@ def eliminate_misalignments(input_bam,
             # Continue with existing result processing...
             logger.info("Start to compose the parallel returned results into a dataframe")
             post_result_tab = os.path.join(os.path.dirname(raw_bams[0]), "post_result.tsv")
-            post_result_df = pd.read_csv(StringIO("\n".join(result_record_strs)), header=None, names=["raw_masked_bam", "masked_bam"], na_values="NaN")
+            post_result_df = pd.read_csv(StringIO("\n".join(result_record_strs)), header=None, names=["raw_masked_bam", "masked_bam", "masked_vcf"], na_values="NaN")
             post_result_df.to_csv(post_result_tab, sep="\t", index=False)
             
             # Log summary statistics about the results
@@ -213,7 +214,22 @@ def eliminate_misalignments(input_bam,
                         threads=threads - 1, 
                         tmp_dir = cache_dir, 
                         logger=logger)
-            return input_bam, output_bam
+            
+            # Concat VCFs
+            vcf_list = post_result_df["masked_vcf"].dropna().unique().tolist()
+            vcf_list_file = prepare_tmp_file(suffix=".txt", tmp_dir=cache_dir).name
+            with open(vcf_list_file, "w") as f:
+                for vcf in vcf_list:
+                    f.write(f"{vcf}\n")
+            logger.info(f"Merging {len(vcf_list)} VCF files into {output_vcf}")
+            cmd = f"bash {shell_utils} bcftools_concatvcfs \
+                    -v {vcf_list_file} \
+                    -o {output_vcf} \
+                    -c {threads} \
+                    -t {cache_dir} \
+                    -s {sample_id}"
+            executeCmd(cmd, logger=logger)
+            return input_bam, output_bam, output_vcf
             
     else:
         logger.info(f"The post processed masked bam and vcf files are already up-to-date. No need to run the post processing again.")

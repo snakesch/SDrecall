@@ -4,6 +4,7 @@ import logging
 import traceback
 
 from src.utils import executeCmd, prepare_tmp_file
+from realign_recall.annotate_HP_tag_to_vars import annotate_vcf as annotate_vcf_HP_tag
 from src.const import shell_utils
 from src.log import logger
 
@@ -12,7 +13,7 @@ def imap_filter_out(args):
     """Worker function that processes a single region and returns results with log file path"""
     # Unpack arguments
     args, log_dir, log_level = args
-    raw_bam, output_bam, intrinsic_bam, bam_region_bed, max_varno, recall_mq_cutoff, basequal_median_cutoff, edge_weight_cutoff, numba_threads, tmp_dir, job_id = args
+    raw_bam, output_bam, intrinsic_bam, bam_region_bed, max_varno, recall_mq_cutoff, basequal_median_cutoff, edge_weight_cutoff, numba_threads, tmp_dir, ref_genome, sample_id, job_id = args
     import numba
     numba.set_num_threads(numba_threads)
     numba.config.THREADING_LAYER = 'omp'
@@ -51,7 +52,7 @@ def imap_filter_out(args):
                                f"edge_weight_cutoff={edge_weight_cutoff}")
         
         # Call the main processing function
-        phased_graph, output_bam = realign_filter_per_cov(
+        phased_graph, output_bam, output_vcf = realign_filter_per_cov(
             bam=raw_bam,
             output_bam=output_bam,
             intrinsic_bam=intrinsic_bam,
@@ -61,23 +62,29 @@ def imap_filter_out(args):
             basequal_median_cutoff=basequal_median_cutoff,
             edge_weight_cutoff=edge_weight_cutoff,
             tmp_dir=tmp_dir,
+            ref_genome=ref_genome,
+            sample_id=sample_id,
             logger=subprocess_logger
         )
         
         # If successful, return result with comma-separated fields and log file path
         if phased_graph is None:
             subprocess_logger.warning(f"Cannot filter {raw_bam} because the phased graph cannot be built")
-            return f"{raw_bam},NaN,{log_file}"
+            return f"{raw_bam},NaN,NaN,{log_file}"
+        
+        if output_vcf is None and output_bam is not None:
+            subprocess_logger.warning(f"Failed to call variants on the filtered BAM file {output_bam}")
+            return f"{raw_bam},{output_bam},NaN,{log_file}"
             
         subprocess_logger.info(f"Successfully processed {raw_bam}")
-        return f"{raw_bam},{output_bam},{log_file}"
+        return f"{raw_bam},{output_bam},{output_vcf},{log_file}"
         
     except Exception as e:
         # Log the full stack trace for debugging
         subprocess_logger.error(f"Error processing {raw_bam}: {str(e)}")
         subprocess_logger.error(traceback.format_exc())
         # Return error result with log file path
-        return f"{raw_bam},NaN,{log_file}"
+        return f"{raw_bam},NaN,NaN,{log_file}"
 
 
 
@@ -140,6 +147,8 @@ def realign_filter_per_cov(bam,
                            edge_weight_cutoff = 0.301,
                            threads = 4,
                            tmp_dir = "/tmp",
+                           ref_genome = None,
+                           sample_id = None,
                            logger=logger):
     '''
     Main function for phasing and filtering realigned reads per continuous coverage region.
@@ -346,7 +355,8 @@ def realign_filter_per_cov(bam,
                  samtools index {bam} && \
                  rm {tmp_bam} && \
                  [[ $(samtools view {bam} | wc -l) -ge 1 ]] && \
-                 ls -lh {bam}", logger=logger)
+                 ls -lh {bam}", logger=logger)    
+
     # Sort and index the output bam file
     try:
         executeCmd(f"samtools sort -O bam -T {tmp_dir} -o {tmp_bam} {output_bam} && \
@@ -356,8 +366,31 @@ def realign_filter_per_cov(bam,
                      ls -lh {output_bam}", logger=logger)
     except Exception as e:
         logger.warning(f"Failed to sort and index the output bam file {output_bam}, because its empty")
-        return None, None
-    return phased_graph, output_bam
+        return None, None, None
+    
+    # Call variants on the filtered BAM file
+    output_vcf = output_bam.replace(".bam", ".vcf.gz")
+    logger.info(f"Calling variants on the filtered BAM file {output_bam}")
+    cmd = f"bash {shell_utils} bcftools_call_per_RG \
+            -m {ref_genome} \
+            -b {output_bam} \
+            -o {output_vcf} \
+            -c {threads} \
+            -p {sample_id}"
+    try:
+        executeCmd(cmd, logger=logger)
+    except Exception as e:
+        logger.warning(f"Failed to call variants on the filtered BAM file {output_bam}, because {e}")
+        return phased_graph, output_bam, None
+    
+    # Annotate variants with HP tags
+    output_vcf = annotate_vcf_HP_tag(output_vcf, 
+                                     output_vcf, 
+                                     output_bam, 
+                                     "HP", 
+                                     logger = logger)
+    
+    return phased_graph, output_bam, output_vcf
 
 
 

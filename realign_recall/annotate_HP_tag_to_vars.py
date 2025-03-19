@@ -4,6 +4,7 @@ from collections import defaultdict
 from src.utils import prepare_tmp_file, executeCmd
 from src.log import logger
 
+
 def get_supporting_tags(bam_file, chrom, pos, ref, alts, tag, min_mapq=10, min_bq=15):
     supporting_tags = defaultdict(set)
     with pysam.AlignmentFile(bam_file, "rb") as samfile:
