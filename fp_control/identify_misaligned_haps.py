@@ -672,7 +672,7 @@ def inspect_by_haplotypes(input_bam,
 
     # Iterate over all the haplotypes
     for hid, qnames in hap_qname_info.items():
-        logger.debug(f"The haplotype {hid} contains {len(qnames)} read pairs in total. And the qnames are: \n{qnames}\n")
+        # logger.debug(f"The haplotype {hid} contains {len(qnames)} read pairs in total. And the qnames are: \n{qnames}\n")
         hid_cov_bed = prepare_tmp_file(suffix = f".haplotype_{hid}.cov.bed", tmp_dir = tmp_dir).name
 
         # Extract all the qname indices and all the reads belonged to the iterating haplotype
@@ -696,7 +696,7 @@ def inspect_by_haplotypes(input_bam,
         # Iterate over all the continuous regions covered by the iterating haplotype
         for span, reads in conregion_dict.items():
             # span end is exclusive
-            logger.debug(f"The haplotype {hid} contains {len(reads)} reads in the continuous region {span}.")
+            # logger.debug(f"The haplotype {hid} contains {len(reads)} reads in the continuous region {span}.")
             chrom = reads[0].reference_name
 
             # Iterate over all the reads overlapping with the iterating continuous region covered by the iterating haplotype
@@ -720,7 +720,7 @@ def inspect_by_haplotypes(input_bam,
             hid_var_count[hid] += var_count
 
             # Log the extreme variant density and the variant count of the iterating haplotype
-            logger.debug(f"For haplotype {hid} at continuous region {span}, the consensus sequence is {consensus_sequence.tolist()}. The extreme variant density is {extreme_vard}.")
+            # logger.debug(f"For haplotype {hid} at continuous region {span}, the consensus sequence is {consensus_sequence.tolist()}. The extreme variant density is {extreme_vard}.")
 
             # Update the extreme variant density of the iterating haplotype
             hid_extreme_vard[hid] = extreme_vard or hid_extreme_vard[hid]
@@ -772,7 +772,10 @@ def inspect_by_haplotypes(input_bam,
     # Iterate over all the windows
     for interval in sweep_regions:
         region = (interval.chrom, interval.start, interval.end)
-        logger.info(f"Inspecting the region {region}.")
+        if interval.end - interval.start < 20:
+            logger.debug(f"The region {region} is too small (spanning only {interval.end - interval.start} bp) for calculating the coefficients of haplotype items in the binary integer linear programming model.")
+            continue
+        logger.debug(f"Inspecting the region {region} to compose the binary integer linear programming model.")
         record_df, total_hap_vectors, total_err_vectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx, read_ref_pos_dict = identify_misalignment_per_region(region,
                                                                                                                                                                             bam_ncls,
                                                                                                                                                                             qname_hap_info,

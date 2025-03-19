@@ -144,7 +144,7 @@ def realign_filter_per_cov(bam,
                            max_varno = 5,
                            recall_mq_cutoff = 10,
                            basequal_median_cutoff = 15,
-                           edge_weight_cutoff = 0.301,
+                           edge_weight_cutoff = 0.201,
                            threads = 4,
                            tmp_dir = "/tmp",
                            ref_genome = None,
@@ -232,7 +232,7 @@ def realign_filter_per_cov(bam,
                                                                                                               mean_read_length,
                                                                                                               logger = logger)
     if phased_graph is None:
-        return None, None
+        return None, None, None
 
     logger.info(f"Now succesfully built the phasing graph with {phased_graph.num_vertices()} vertices and {phased_graph.num_edges()} edges. Save it to {bam_graph}, the weight matrix is saved to {bam_weight_matrix}\n\n")
     # Now we need to extract the components in the phased graph

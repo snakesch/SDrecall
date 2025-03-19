@@ -49,7 +49,7 @@ def graph_vertex_iter(vertex_indices, graph):
 
 
 
-def find_cliques_in_components(graph, weight_matrix, ew_cutoff = 0.301, logger = logger):
+def find_cliques_in_components(graph, weight_matrix, ew_cutoff = 0.201, logger = logger):
     '''
     This generator function is to find the largest cliques in each component of the graph
 
@@ -108,9 +108,9 @@ def find_cliques_in_components(graph, weight_matrix, ew_cutoff = 0.301, logger =
             cliques_iter = gce_algorithm(selected_indices, big_weight_matrix, cutoff = ew_cutoff, logger = logger)
             # logger.debug(f"Found {len(cliques)} cliques in the component {component_id}\n")
             for clique in cliques_iter:
-                logger.debug(f"First round (edge weight cutoff = {ew_cutoff}): Receiving a clique containing {[graph.vertex_properties['qname'][qid] for qid in clique]} in the component {component_id}")
+                # logger.debug(f"First round (edge weight cutoff = {ew_cutoff}): Receiving a clique containing {[graph.vertex_properties['qname'][qid] for qid in clique]} in the component {component_id}")
                 if len(clique) <= 5:
-                    logger.debug(f"Found {[graph.vertex_properties['qname'][qid] for qid in clique]} read pairs in a very small clique.")
+                    # logger.debug(f"Found {[graph.vertex_properties['qname'][qid] for qid in clique]} read pairs in a very small clique.")
                     small_row_indices.update(clique)
                     # logger.info(f"Adding the {len(clique)} vertices in the clique to the small row indices")
                     continue
@@ -129,7 +129,7 @@ def find_cliques_in_components(graph, weight_matrix, ew_cutoff = 0.301, logger =
         logger.info(f"Start to find the largest clique in the small weight matrix, which contains {numba_sum(small_row_mask)} rows and columns. Contiguous? {small_weight_matrix.flags['C_CONTIGUOUS']}")
         cliques_iter = gce_algorithm(selected_indices, small_weight_matrix, cutoff = ew_cutoff/2, logger = logger)
         for clique in cliques_iter:
-            logger.debug(f"Second round (edge weight cutoff = {ew_cutoff/2}): Receiving a clique containing {[graph.vertex_properties['qname'][qid] for qid in clique]} in the small weight matrix")
+            # logger.debug(f"Second round (edge weight cutoff = {ew_cutoff/2}): Receiving a clique containing {[graph.vertex_properties['qname'][qid] for qid in clique]} in the small weight matrix")
             yield clique
 
 
@@ -174,12 +174,12 @@ def find_components_inside_filtered_cliques(final_cliques,
             c_index = component_labels[v]
             components_dict[c_index].add(int(v))
 
-        logger.debug(f"Found {len(components_dict)} components in the clique {clique}")
+        # logger.debug(f"Found {len(components_dict)} components in the clique {clique}")
         for c_index, vs in components_dict.items():
             for v in vs:
                 final_components[v] = haplotype_idx
             qnames = "\n".join([graph.vertex_properties['qname'][graph.vertex(v)] for v in vs])
-            logger.debug(f"Assigning \n{qnames}\nto the haplotype group {haplotype_idx}")
+            # logger.debug(f"Assigning \n{qnames}\nto the haplotype group {haplotype_idx}")
             haplotype_idx += 1
 
     # logger.info(f"This is the final components: {final_components}")
