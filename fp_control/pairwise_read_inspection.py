@@ -2,7 +2,6 @@ import logging
 import numba
 import numpy as np
 from numba import types
-from numba.typed import Dict
 
 from src.log import logger
 from src.suppress_warning import *
@@ -386,7 +385,8 @@ def seq_err_det_stacked_bases(target_read_start,
 def tolerate_mismatches_two_seq(read1_package, 
                                 read2_package,
                                 abs_diff_indices,
-                                nested_ad_dict):
+                                nested_ad_dict,
+                                empty_dict):
     '''
     This function is used to compare two sequences and identify the mismatch positions
     And to decide whether we are safe to determine the mismatches are originated from sequencing error or not.
@@ -408,16 +408,14 @@ def tolerate_mismatches_two_seq(read1_package,
                                              read1_qseq_qualities,
                                              read1_ref_positions,
                                              diff_ind,
-                                             nested_ad_dict.get(diff_ind, Dict.empty(key_type=types.int8,
-                                                                                     value_type=types.int16)))
+                                             nested_ad_dict.get(diff_ind, empty_dict))
 
         seq_err2 = seq_err_det_stacked_bases(read2_start,
                                              read2_qseq_encoded,
                                              read2_qseq_qualities,
                                              read2_ref_positions,
                                              diff_ind,
-                                             nested_ad_dict.get(diff_ind, Dict.empty(key_type=types.int8,
-                                                                                     value_type=types.int16)))
+                                             nested_ad_dict.get(diff_ind, empty_dict))
         tolerate_mismatches.append(seq_err1 or seq_err2)
 
     if all(tolerate_mismatches):
@@ -452,6 +450,7 @@ def determine_same_haplotype(read, other_read,
                              nested_ad_dict = {},
                              read_ref_pos_dict = {},
                              mean_read_length = 148,
+                             empty_dict = {},
                              logger = logger):
     '''
     Determine if two reads belong to the same haplotype based on their overlapping region.
@@ -609,7 +608,8 @@ def determine_same_haplotype(read, other_read,
         tolerate, tolerated_count = tolerate_mismatches_two_seq(read_package,
                                                                 other_read_package,
                                                                 r_diff_indices,
-                                                                nested_ad_dict )
+                                                                nested_ad_dict,
+                                                                empty_dict )
 
         if tolerate:
             # logger.debug(f"The two reads {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} are tolerant to {tolerated_count} mismatches, with a weight of {weight}")

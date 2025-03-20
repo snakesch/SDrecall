@@ -237,7 +237,7 @@ def realign_filter_per_cov(bam,
     logger.info(f"Now succesfully built the phasing graph with {phased_graph.num_vertices()} vertices and {phased_graph.num_edges()} edges. Save it to {bam_graph}, the weight matrix is saved to {bam_weight_matrix}\n\n")
     # Now we need to extract the components in the phased graph
     phased_graph.save(bam_graph)
-    weight_matrix_to_dataframe(weight_matrix, phased_graph).to_csv(bam_weight_matrix, sep = "\t", index = True)
+    # weight_matrix_to_dataframe(weight_matrix, phased_graph).to_csv(bam_weight_matrix, sep = "\t", index = True)
 
     # Now we need to do local phasing for each component in the graph. (Finding non-overlapping high edge weight cliques inside each component iteratively)
     qname_hap_info, hap_qname_info = phasing_realigned_reads(phased_graph,
@@ -394,7 +394,76 @@ def realign_filter_per_cov(bam,
 
 
 
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Realign and filter reads per coverage region")
+    
+    # Required parameters
+    parser.add_argument("--bam", type=str, required=True, help="Path to input BAM file")
+    
+    # Optional parameters
+    parser.add_argument("--output_bam", type=str, help="Path for output filtered BAM file (default: input.clean.bam)")
+    parser.add_argument("--intrinsic_bam", type=str, help="Path to intrinsic BAM file")
+    parser.add_argument("--bam_region_bed", type=str, help="Path to BED file defining covered regions")
+    parser.add_argument("--max_varno", type=float, default=5, help="Maximum variant number allowed")
+    parser.add_argument("--recall_mq_cutoff", type=int, default=10, help="Mapping quality cutoff")
+    parser.add_argument("--basequal_median_cutoff", type=int, default=15, help="Base quality median cutoff")
+    parser.add_argument("--edge_weight_cutoff", type=float, default=0.201, help="Edge weight cutoff")
+    parser.add_argument("--threads", type=int, default=4, help="Number of threads")
+    parser.add_argument("--tmp_dir", type=str, default="/tmp", help="Temporary directory")
+    parser.add_argument("--ref_genome", type=str, help="Path to reference genome")
+    parser.add_argument("--sample_id", type=str, help="Sample identifier")
+    parser.add_argument("--log_level", type=str, default="INFO", 
+                        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+                        help="Logging level")
+    
+    args = parser.parse_args()
 
+    # Set numba and openmp threads
+    os.environ["NUMBA_NUM_THREADS"] = str(args.threads)
+    os.environ["MKL_NUM_THREADS"] = str(args.threads)
+    os.environ["OPENBLAS_NUM_THREADS"] = str(args.threads)
+    os.environ["OMP_NUM_THREADS"] = str(args.threads)
+    
+    # Configure logging level if requested
+    if args.log_level:
+        import logging
+        numeric_level = getattr(logging, args.log_level.upper(), None)
+        if isinstance(numeric_level, int):
+            logger.setLevel(numeric_level)
+    
+    # Run the main function
+    phased_graph, output_bam, output_vcf = realign_filter_per_cov(
+        bam=args.bam,
+        output_bam=args.output_bam,
+        intrinsic_bam=args.intrinsic_bam,
+        bam_region_bed=args.bam_region_bed,
+        max_varno=args.max_varno,
+        recall_mq_cutoff=args.recall_mq_cutoff,
+        basequal_median_cutoff=args.basequal_median_cutoff,
+        edge_weight_cutoff=args.edge_weight_cutoff,
+        threads=args.threads,
+        tmp_dir=args.tmp_dir,
+        ref_genome=args.ref_genome,
+        sample_id=args.sample_id,
+        logger=logger
+    )
+    
+    # Print results
+    logger.info(f"Processing complete:")
+    logger.info(f"  Output BAM: {output_bam}")
+    logger.info(f"  Output VCF: {output_vcf}")
+    if phased_graph:
+        logger.info(f"  Graph saved: {args.bam.replace('.bam', '.phased.graphml')}")
+    
+    # Return appropriate exit code
+    import sys
+    if output_bam is None:
+        logger.error("Failed to generate output BAM")
+        sys.exit(1)
+    else:
+        sys.exit(0)
 
 
 

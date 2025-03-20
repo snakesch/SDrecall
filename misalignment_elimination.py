@@ -140,7 +140,7 @@ def eliminate_misalignments(input_bam,
                      sample_id,
                      i+1), 
                     log_dir,
-                    logger.level
+                    20
                 ) for i, (raw_bam, clean_bam, intrinsic_bam, raw_bam_region) in enumerate(zip(raw_bams, clean_bams, intrinsic_bams, raw_bam_regions))]
             )
             
@@ -158,7 +158,7 @@ def eliminate_misalignments(input_bam,
                 
                 # For result processing, we need to add placeholders to match the expected 5 fields
                 # The original expected: raw_bam, filtered_bam, filtered_vcf, log_file                
-                result_record_strs.append(f"{raw_bam},{result_parts[1]},{result_parts[2]},{log_file}")
+                result_record_strs.append(f"{raw_bam},{result_parts[1]},{result_parts[2]}")
                 
                 # Print a reference to the log file instead of all log content
                 print(f"Subprocess {i} for {raw_bam} complete. Full log available at: {log_file}", file=sys.stderr)
@@ -239,23 +239,49 @@ def eliminate_misalignments(input_bam,
 if __name__ == "__main__":
     import argparse as ap
     parser = ap.ArgumentParser(description="Eliminate the misalignments from the input bam file")
+    
+    # Required parameters
     parser.add_argument("--input_bam", type=str, required=True, help="The input bam file")
     parser.add_argument("--output_bam", type=str, required=True, help="The output bam file")
+    parser.add_argument("--output_vcf", type=str, required=True, help="The output VCF file")
     parser.add_argument("--intrinsic_bam", type=str, required=True, help="The intrinsic bam file")
+    parser.add_argument("--original_bam", type=str, required=True, help="The original bam file")
     parser.add_argument("--ref_genome", type=str, required=True, help="The reference genome file")
-    parser.add_argument("--avg_frag_size", type=int, required=True, help="The average fragment size")
-    parser.add_argument("--threads", type=int, required=True, help="The number of threads")
-    parser.add_argument("--numba_threads", type=int, required=True, help="The number of threads for numba")
-    parser.add_argument("--logger", type=str, required=True, help="The logger")
+    parser.add_argument("--sample_id", type=str, required=True, help="Sample identifier")
+    parser.add_argument("--target_regions", type=str, required=True, help="BED file with target regions")
+    
+    # Optional parameters with defaults
+    parser.add_argument("--avg_frag_size", type=int, default=400, help="The average fragment size")
+    parser.add_argument("--threads", type=int, default=12, help="The number of threads")
+    parser.add_argument("--numba_threads", type=int, default=4, help="The number of threads for numba")
+    parser.add_argument("--conf_level", type=float, default=0.01, help="Confidence level for statistical filtering")
+    parser.add_argument("--stat_sample_size", type=int, default=1000000, help="Sample size for statistical analysis")
+    parser.add_argument("--recall_mq_cutoff", type=int, default=10, help="Mapping quality cutoff for recall")
+    parser.add_argument("--basequal_median_cutoff", type=int, default=15, help="Base quality median cutoff")
+    parser.add_argument("--edge_weight_cutoff", type=float, default=0.201, help="Edge weight cutoff")
+    parser.add_argument("--cache_dir", type=str, default="/tmp", help="Directory for temporary files")
+    
     args = parser.parse_args()
 
-    eliminate_misalignments(args.input_bam,
-                            args.output_bam,
-                            args.intrinsic_bam,
-                            args.ref_genome,
-                            args.avg_frag_size,
-                            args.threads,
-                            args.numba_threads,
-                            args.logger)
+    eliminate_misalignments(
+        input_bam=args.input_bam,
+        output_bam=args.output_bam,
+        output_vcf=args.output_vcf,
+        intrinsic_bam=args.intrinsic_bam,
+        original_bam=args.original_bam,
+        ref_genome=args.ref_genome,
+        sample_id=args.sample_id,
+        target_regions=args.target_regions,
+        avg_frag_size=args.avg_frag_size,
+        threads=args.threads,
+        numba_threads=args.numba_threads,
+        conf_level=args.conf_level,
+        stat_sample_size=args.stat_sample_size,
+        recall_mq_cutoff=args.recall_mq_cutoff,
+        basequal_median_cutoff=args.basequal_median_cutoff,
+        edge_weight_cutoff=args.edge_weight_cutoff,
+        cache_dir=args.cache_dir,
+        logger=logger  # Using the imported logger
+    )
 
 

@@ -236,7 +236,6 @@ def sweep_region_inspection(hap_cov_beds,
 
 
 
-
 def calculate_coefficient_per_group(record_df, logger=logger):
     # Generate a rank for haplotypes
     record_df["rank"] = rank_unique_values(record_df["var_count"].to_numpy() * 50 + record_df["indel_count"].to_numpy())
@@ -492,7 +491,7 @@ def identify_misalignment_per_region(region,
     record_df = pd.DataFrame(record_2d_arr, columns = ["start", "end", "total_depth", "hap_id", "hap_depth", "var_count", "indel_count"])
     record_df["chrom"] = chrom
 
-    logger.info(f"Found {len(final_clusters)} haplotype clusters for region {region_str}. The dataframe recording the haplotypes in this region looks like :\n{record_df.to_string(index=False)}\n")
+    # logger.debug(f"Found {len(final_clusters)} haplotype clusters for region {region_str}. The dataframe recording the haplotypes in this region looks like :\n{record_df.to_string(index=False)}\n")
     return record_df, total_hapvectors, total_errvectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx, read_ref_pos_dict
 
 
@@ -672,6 +671,11 @@ def inspect_by_haplotypes(input_bam,
 
     # Iterate over all the haplotypes
     for hid, qnames in hap_qname_info.items():
+        # If only one read pair is in the iterating haplotype, it is a scattered haplotype, it should not be considered since the poor coverage
+        if len(qnames) < 2:
+            scatter_hid_dict[hid] = True
+            continue
+
         # logger.debug(f"The haplotype {hid} contains {len(qnames)} read pairs in total. And the qnames are: \n{qnames}\n")
         hid_cov_bed = prepare_tmp_file(suffix = f".haplotype_{hid}.cov.bed", tmp_dir = tmp_dir).name
 
@@ -688,10 +692,6 @@ def inspect_by_haplotypes(input_bam,
 
         pb.BedTool(region_str, from_string = True).sort().merge().saveas(hid_cov_bed)
         hid_cov_beds[hid] = hid_cov_bed
-
-        # If only one read pair is in the iterating haplotype, it is a scattered haplotype, unless the total involving read pairs are small
-        if len(qnames) < 2 and len(read_dict) > 20:
-            scatter_hid_dict[hid] = True
 
         # Iterate over all the continuous regions covered by the iterating haplotype
         for span, reads in conregion_dict.items():
@@ -775,7 +775,7 @@ def inspect_by_haplotypes(input_bam,
         if interval.end - interval.start < 20:
             logger.debug(f"The region {region} is too small (spanning only {interval.end - interval.start} bp) for calculating the coefficients of haplotype items in the binary integer linear programming model.")
             continue
-        logger.debug(f"Inspecting the region {region} to compose the binary integer linear programming model.")
+        # logger.debug(f"Inspecting the region {region} to compose the binary integer linear programming model.")
         record_df, total_hap_vectors, total_err_vectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx, read_ref_pos_dict = identify_misalignment_per_region(region,
                                                                                                                                                                             bam_ncls,
                                                                                                                                                                             qname_hap_info,

@@ -91,21 +91,18 @@ def apply_index_mask(size, initial_index_mask):
     return np.arange(size, dtype=np.int32)[initial_index_mask]
 
 
-@numba.njit(parallel=True, fastmath=True)
+@numba.njit(fastmath=True)
 def numba_diff_indices(arr1, arr2):
-    """
-    Find the indices where two arrays differ.
-
-    This function uses Numba for faster computation.
-
-    Parameters:
-    - arr1, arr2: numpy.ndarray
-        The two arrays to compare.
-
-    Returns:
-    - numpy.ndarray: Indices where the arrays differ.
-    """
-    return np.where(arr1 != arr2)[0]
+    """Optimized sequential implementation"""  
+    # Fill result array
+    result = np.empty(arr1.size, dtype=np.int16)
+    idx = 0
+    for i in range(arr1.size):
+        if arr1[i] != arr2[i]:
+            result[idx] = i
+            idx += 1
+    
+    return result[:idx]
 
 
 @numba.njit(types.int16[:](types.int16[:], types.int32, types.int32, types.int32), fastmath=True)

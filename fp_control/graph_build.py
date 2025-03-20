@@ -15,7 +15,7 @@ from fp_control.pairwise_read_inspection import determine_same_haplotype, get_re
 from src.log import logger
 
 
-def stat_ad_to_dict(bam_file, logger = logger):
+def stat_ad_to_dict(bam_file, empty_dict, logger = logger):
     # Build up an AD query dict by bcftools mpileup
     bam_ad_file = f"{bam_file}.ad"
     cmd = f"""bcftools mpileup -Ou --no-reference -a FORMAT/AD --indels-2.0 -q 10 -Q 15 {bam_file} | \
@@ -57,8 +57,7 @@ def stat_ad_to_dict(bam_file, logger = logger):
 
         # Initialize the inner dictionary if the outer key is not present
         if outer_key not in nested_ad_dict[chrom]:
-            nested_ad_dict[chrom][outer_key] = Dict.empty(key_type=types.int8,
-                                                          value_type=types.int16)
+            nested_ad_dict[chrom][outer_key] = empty_dict
         # Add the first pair of inner key-value
         nested_ad_dict[chrom][outer_key][inner_key] = value
 
@@ -261,7 +260,8 @@ def build_phasing_graph(bam_file,
     read_ref_pos_dict = {}
 
     # Create a dictionary to store Allele Depth for each position
-    nested_ad_dict = stat_ad_to_dict(bam_file, logger = logger)
+    empty_dict = Dict.empty(key_type=types.int8, value_type=types.int16)
+    nested_ad_dict = stat_ad_to_dict(bam_file, empty_dict, logger = logger)
     if nested_ad_dict is None:
         logger.warning(f"No ALT allele found in this BAM file. Skip this entire script")
         return None, None, None, None, None
@@ -346,6 +346,7 @@ def build_phasing_graph(bam_file,
                                                                                                           nested_ad_dict = nested_ad_dict[chrom],
                                                                                                           read_ref_pos_dict = read_ref_pos_dict,
                                                                                                           mean_read_length = mean_read_length,
+                                                                                                          empty_dict = empty_dict,
                                                                                                           logger = logger)
                     if np.isnan(bool_res):
                         qname_bools[n] = 0
