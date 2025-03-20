@@ -1,5 +1,4 @@
-
-
+import gc
 
 from src.log import logger, log_command
 from src.const import shell_utils
@@ -91,6 +90,7 @@ def process_masked_bam( rg_tag,
         try:
             executeCmd(cmd, logger=logger)
         except RuntimeError:
+            gc.collect()
             return f"{rg_tag},{rg_bed},NaN,NaN"
         else:
             # Now perform the variants calling
@@ -113,13 +113,17 @@ def process_masked_bam( rg_tag,
                 try:
                     executeCmd(cmd, logger=logger)
                 except RuntimeError:
+                    gc.collect()
                     return f"{rg_tag},{rg_bed},{raw_masked_bam},NaN"
                 else:
                     logger.warning(f"Though the process reported error. The VCF file {raw_masked_vcf} is still valid and updated")
+                    gc.collect()
                     return f"{rg_tag},{rg_bed},{raw_masked_bam},{raw_masked_vcf}"
             else:
                 logger.info(f"Succesfully generate the vcf file {raw_masked_vcf} for region {rg_bed}")
+                gc.collect()
                 return f"{rg_tag},{rg_bed},{raw_masked_bam},{raw_masked_vcf}"
     else:
         logger.info(f"The masked bam {raw_masked_bam} is already up-to-date. No need to map again.")
+        gc.collect()
         return f"{rg_tag},{rg_bed},{raw_masked_bam},{raw_masked_vcf}"

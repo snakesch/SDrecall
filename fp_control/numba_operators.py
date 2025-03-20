@@ -52,7 +52,7 @@ def any_false_numba(array):
     return False
 
 
-@numba.njit(parallel=True)
+@numba.njit(parallel=False)
 def numba_isin(arr, uniq_vals):
     '''
     return the index (as booleans) of the array that their corresponding value is in another array
@@ -86,7 +86,7 @@ def create_default_false_mask(size):
 
 
 
-@numba.njit(types.int32[:](types.int32, types.boolean[:]), fastmath=True, parallel=True)
+@numba.njit(types.int32[:](types.int32, types.boolean[:]), fastmath=True, parallel=False)
 def apply_index_mask(size, initial_index_mask):
     return np.arange(size, dtype=np.int32)[initial_index_mask]
 

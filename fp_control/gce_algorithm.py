@@ -42,7 +42,7 @@ def create_default_true_mask(size):
     return np.ones(size, dtype=numba.bool_)
 
 
-@numba.njit(types.boolean[:](types.int32), fastmath=True, parallel=True)
+@numba.njit(types.boolean[:](types.int32), fastmath=True, parallel=False)
 def para_create_default_true_mask(size):
     return np.ones(size, dtype=numba.bool_)
 
@@ -187,7 +187,7 @@ def row_wise_max_with_mask_sparse(matrix_data,
 
 
 
-@numba.njit(types.float32[:](types.float32[:], types.int32[:], types.int32[:], types.int32, types.boolean[:], types.float32), fastmath=True, parallel=True)
+@numba.njit(types.float32[:](types.float32[:], types.int32[:], types.int32[:], types.int32, types.boolean[:], types.float32), fastmath=True, parallel=False)
 def para_row_wise_max_with_mask_sparse(matrix_data,
                                        matrix_indices,
                                        matrix_indptr,
@@ -241,7 +241,7 @@ def row_wise_max_with_mask_nb(matrix, index_mask, mask_values):
 
 
 
-@numba.njit(types.float32[:](types.float32[:, :], types.boolean[:], types.float32[:]), fastmath=True, parallel=True)
+@numba.njit(types.float32[:](types.float32[:, :], types.boolean[:], types.float32[:]), fastmath=True, parallel=False)
 def para_row_wise_max_with_mask_nb(matrix, index_mask, mask_values):
     '''
     Deprecated, using sparse matrix now

@@ -56,7 +56,7 @@ def eliminate_misalignments(input_bam,
                             target_regions,
                             avg_frag_size = 400,
                             threads = 12,
-                            numba_threads = 4,
+                            numba_threads = 2,
                             conf_level = 0.01,
                             stat_sample_size = 1000000,
                             recall_mq_cutoff = 10,
@@ -114,7 +114,7 @@ def eliminate_misalignments(input_bam,
         clean_bams = [ re.sub(r"\.raw\.", ".", cb) for cb in raw_bams]
         
         # Filter out the misaligned_reads per chromosome
-        job_num, _ = configure_parallelism(threads, numba_threads/2.5) # Empirical choice
+        job_num, _ = configure_parallelism(threads, numba_threads/min(numba_threads, 3)) # Empirical choice
         nm_cutoff, _ = calculate_NM_distribution_poisson(original_bam, conf_level, stat_sample_size, logger=logger)
 
         # Create a dedicated log directory
@@ -253,7 +253,7 @@ if __name__ == "__main__":
     # Optional parameters with defaults
     parser.add_argument("--avg_frag_size", type=int, default=400, help="The average fragment size")
     parser.add_argument("--threads", type=int, default=12, help="The number of threads")
-    parser.add_argument("--numba_threads", type=int, default=4, help="The number of threads for numba")
+    parser.add_argument("--numba_threads", type=int, default=2, help="The number of threads for numba")
     parser.add_argument("--conf_level", type=float, default=0.01, help="Confidence level for statistical filtering")
     parser.add_argument("--stat_sample_size", type=int, default=1000000, help="Sample size for statistical analysis")
     parser.add_argument("--recall_mq_cutoff", type=int, default=10, help="Mapping quality cutoff for recall")

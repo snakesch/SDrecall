@@ -1,4 +1,5 @@
 import os
+import gc
 import pysam
 import logging
 import traceback
@@ -16,7 +17,7 @@ def imap_filter_out(args):
     raw_bam, output_bam, intrinsic_bam, bam_region_bed, max_varno, recall_mq_cutoff, basequal_median_cutoff, edge_weight_cutoff, numba_threads, tmp_dir, ref_genome, sample_id, job_id = args
     import numba
     numba.set_num_threads(numba_threads)
-    numba.config.THREADING_LAYER = 'omp'
+    numba.config.THREADING_LAYER = 'tbb'
 
     # Create unique log file for this subprocess
     log_file = os.path.join(log_dir, f"subprocess_{job_id}_{os.path.basename(raw_bam)}.log")
@@ -45,6 +46,9 @@ def imap_filter_out(args):
     try:
         # Log the start of processing with all parameters for debugging
         subprocess_logger.warning(f"Log level: {subprocess_logger.level}")
+        subprocess_logger.warning(f"Thread settings: numba={numba.get_num_threads()}, " + 
+                                  f"OMP={os.environ.get('OMP_NUM_THREADS')}, " + 
+                                  f"MKL={os.environ.get('MKL_NUM_THREADS')}")
         subprocess_logger.info(f"Processing region in {raw_bam}")
         subprocess_logger.info(f"Parameters: output_bam={output_bam}, intrinsic_bam={intrinsic_bam}, "
                                f"bam_region_bed={bam_region_bed}, max_varno={max_varno}, "
@@ -66,6 +70,7 @@ def imap_filter_out(args):
             sample_id=sample_id,
             logger=subprocess_logger
         )
+        gc.collect()
         
         # If successful, return result with comma-separated fields and log file path
         if phased_graph is None:
@@ -83,6 +88,7 @@ def imap_filter_out(args):
         # Log the full stack trace for debugging
         subprocess_logger.error(f"Error processing {raw_bam}: {str(e)}")
         subprocess_logger.error(traceback.format_exc())
+        gc.collect()
         # Return error result with log file path
         return f"{raw_bam},NaN,NaN,{log_file}"
 
@@ -354,7 +360,7 @@ def realign_filter_per_cov(bam,
     logger.warning(f"Filtered out {len(noisy_qnames)} noisy read-pairs (Editing distance without the biggest gap > {max_varno}) and {len(mismap_qnames - noisy_qnames)} read-pairs with ODD high editing distance, remaining {len(set(norm_qnames.keys()) - noisy_qnames - mismap_qnames)} read-pairs from {bam} (with total {total_num} reads) and output to {output_bam}\n\n")
 
     # Replace the input BAM file with the tmp BAM file with modified RG tags for visualization of haplotype clusters
-    executeCmd(f"samtools sort -O bam -T {tmp_dir} -o {bam} {tmp_bam} && \
+    executeCmd(f"samtools sort -O bam -@ {threads} -T {tmp_dir} -o {bam} {tmp_bam} && \
                  samtools index {bam} && \
                  rm {tmp_bam} && \
                  [[ $(samtools view {bam} | wc -l) -ge 1 ]] && \
@@ -362,7 +368,7 @@ def realign_filter_per_cov(bam,
 
     # Sort and index the output bam file
     try:
-        executeCmd(f"samtools sort -O bam -T {tmp_dir} -o {tmp_bam} {output_bam} && \
+        executeCmd(f"samtools sort -O bam -@ {threads} -T {tmp_dir} -o {tmp_bam} {output_bam} && \
                      mv {tmp_bam} {output_bam} && \
                      samtools index {output_bam} && \
                      [[ $(samtools view {output_bam} | wc -l) -ge 1 ]] && \

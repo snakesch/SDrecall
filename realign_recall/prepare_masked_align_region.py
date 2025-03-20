@@ -1,6 +1,7 @@
 import pybedtools as pb
 import pandas as pd
 import os
+import gc
 
 
 from src.log import logger, log_command
@@ -191,7 +192,7 @@ def prepare_masked_align_region_per_RG( rg_label: str,
         record = record.replace("target_fc_region_size", f"{target_fc_size}")
         logger.debug(f"The returned record for {rg_label} subgroup {subgroup_id} is {record}")
         records.append(record)
-
+    gc.collect()
     return tuple(records)
 
 

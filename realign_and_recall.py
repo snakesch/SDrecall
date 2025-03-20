@@ -1,11 +1,11 @@
 ## Realign --> realignment + variant calling
 import os
 import io
+import gc
 import sys
 import multiprocessing as mp
 ctx = mp.get_context("spawn")
 
-import gc
 import pandas as pd
 
 from itertools import repeat
