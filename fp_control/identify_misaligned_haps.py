@@ -753,6 +753,10 @@ def inspect_by_haplotypes(input_bam,
     sweep_region_bed = input_bam.replace(".bam", ".sweep.bed")
     # Remove the scattered haplotypes from the sweep regions
     hid_cov_beds = {hid:bed for hid, bed in hid_cov_beds.items() if hid not in scatter_hid_dict}
+    if len(hid_cov_beds) == 0:
+        logger.warning(f"All haplotypes are scattered (only supported by 1 read pair). Meaning this bam covers a region with barely no reads covered. In total only {len(hap_qname_info)} haplotypes are involved. Directly discard this region for further analysis.")
+        return set([]), set([])
+    
     sweep_regions = sweep_region_inspection(hid_cov_beds, sweep_region_bed, logger = logger)
     logger.info(f"Now the sweep regions are saved to {sweep_region_bed}.")
 

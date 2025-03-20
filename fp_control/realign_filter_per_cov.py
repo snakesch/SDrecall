@@ -280,7 +280,10 @@ def realign_filter_per_cov(bam,
                                                               logger = logger )
 
     assert len(correct_qnames & mismap_qnames) == 0, f"The correct_qnames and mismap_qnames have overlap: {correct_qnames & mismap_qnames}"
-
+    if len(correct_qnames) == 0:
+        logger.warning(f"No read pairs are found to be correctly aligned in the target regions. In total only {len(hap_qname_info)} cliques (haplotypes) are found in the target inspected regions.")
+        return None, None, None
+    
     logger.info(f"In total has found {len(hap_qname_info)} clique separated components (haplotypes) in the target inspected regions.")
     logger.info(f"We found {len(mismap_qnames)} read pairs that are likely to be misaligned in the target regions.\n {mismap_qnames}\n And {len(correct_qnames)} read pairs that are likely to be correctly aligned in the target regions.\n {correct_qnames}\n")
 
