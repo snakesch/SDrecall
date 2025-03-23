@@ -30,7 +30,7 @@ def pool_init(tmp_dir: str):
 
 def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
                         threads = 12,
-                        numba_threads = 4,
+                        numba_threads = 2,
                         recall_mq_cutoff = 10,
                         conf_level = 0.01):
     # First calculate input bam fragment size distribution

@@ -140,7 +140,7 @@ def eliminate_misalignments(input_bam,
                      sample_id,
                      i+1), 
                     log_dir,
-                    20
+                    logger.level
                 ) for i, (raw_bam, clean_bam, intrinsic_bam, raw_bam_region) in enumerate(zip(raw_bams, clean_bams, intrinsic_bams, raw_bam_regions))]
             )
             

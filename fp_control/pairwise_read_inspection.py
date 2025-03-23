@@ -313,6 +313,7 @@ def get_errorvector_from_cigar(read, cigar_tuples, logger=logger):
     base_qualities = np.array(read.query_qualities, dtype=np.int32)
     query_consume = 0
     ref_consume = 0
+    logger.debug(f"The input cigar string is {read.cigartuples} from read {get_read_id(read)}")
 
     for operation, length in cigar_tuples:
         assert operation != 0, f"The CIGAR string require separate mismatch from match. But current one does not: {cigar_tuples}"
@@ -336,7 +337,7 @@ def get_errorvector_from_cigar(read, cigar_tuples, logger=logger):
         elif operation == 1:
             # Insertion, we assign 99 to the base at the reference position immediately followed by the insertion
             # The base quality does not affect the gaps appeared in the alignment, later 99 will be replaced by 0
-            errorvector[ref_consume] = 99
+            errorvector[ref_consume - 1] = 99
             query_consume += length
         elif operation == 2:
             # Deletion, we assign 99 to the bases at the reference positions within the deletion
@@ -364,7 +365,7 @@ def seq_err_det_stacked_bases(target_read_start,
     target_base_encoded = numba_indexing_int8(target_read_qseq_encoded, target_read_qidx)
     base_qual = numba_indexing_int8(target_read_qseq_qualities, target_read_qidx)
     
-    if base_qual >= 10:
+    if base_qual >= 15:
         return False
     
     ad = nested_dict.get(target_base_encoded, 0)
@@ -375,7 +376,7 @@ def seq_err_det_stacked_bases(target_read_start,
 
     af = int(ad) / int(dp)
 
-    if (af <= 0.02 or (int(ad) == 1 and int(dp) >= 10)) and base_qual < 10:
+    if (af <= 0.02 or (int(ad) == 1 and int(dp) >= 10)) and base_qual < 13:
         return True
     else:
         return False
@@ -537,14 +538,6 @@ def determine_same_haplotype(read, other_read,
     diff_pos_read = interval_hap_vector[diff_indices]
     diff_pos_oread = interval_other_hap_vector[diff_indices]
 
-    read_indel_overlap = get_indel_bools(diff_pos_read)
-    oread_indel_overlap = get_indel_bools(diff_pos_oread)
-
-    if numba_sum(read_indel_overlap) > 0:
-        return False, read_ref_pos_dict, read_hap_vectors, None
-    if numba_sum(oread_indel_overlap) > 0:
-        return False, read_ref_pos_dict, read_hap_vectors, None
-
     # Now use overlap_start and overlap_end to extract the sequence
     read_seq, qr_idx_arr = get_interval_seq(np.int32(read.reference_start), 
                                             np.int32(overlap_start), 
@@ -563,6 +556,7 @@ def determine_same_haplotype(read, other_read,
     # We need to cut N output comparison for read_seq and other_seq
     
     total_match = compare_sequences(read_seq, other_seq, np.int8(4))
+    logger.debug(f"The total match between {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} is {total_match}, the query sequence of {read_id} is {read_seq.tolist()}, and the query sequence of {other_read_id} is {other_seq.tolist()}")
 
     identical_idx = numba_compare(interval_hap_vector, interval_other_hap_vector)
     identical_part = numba_bool_indexing(interval_hap_vector, identical_idx)

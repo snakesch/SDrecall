@@ -117,8 +117,6 @@ def lp_solve_remained_haplotypes(total_record_df,
             continue
         rank_2_count = group[group["rank"] <= 2].shape[0]
         # Column index extraction
-        # hapid_indices = [hap_id_coefficients[hap_id_coefficients["hap_id"] == hapid].index[0] for hapid in included_hapids]
-        # hapid_indices = find_indices(hap_id_coefficients["hap_id"].to_numpy(), included_hapids)
         hapid_indices = [hapid_to_index[hapid] for hapid in included_hapids]
         lower_bound = included_hapids.size - rank_2_count
         upper_bound = max(included_hapids.size - 2, lower_bound)
@@ -127,7 +125,7 @@ def lp_solve_remained_haplotypes(total_record_df,
                               included_hapids.size,
                               np.array(hapid_indices, dtype=np.int32),
                               np.ones(included_hapids.size, dtype=np.double))
-        logger.info(f"The addrow status is {status}, the group included hap_ids are {included_hapids}, the corresponding hap_id indices are {hapid_indices} the lower bound is {lower_bound}, the upper bound is {upper_bound}.")
+        logger.info(f"The addrow status is {status}, the group included hap_ids are {included_hapids.tolist()}, the corresponding hap_id indices are {hapid_indices} the lower bound is {lower_bound}, the upper bound is {upper_bound}.")
 
     # Run solver
     highs.run()

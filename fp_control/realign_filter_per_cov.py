@@ -191,6 +191,8 @@ def realign_filter_per_cov(bam,
     from fp_control.identify_misaligned_haps import inspect_by_haplotypes
     from fp_control.phasing import phasing_realigned_reads
 
+    chunk_id = os.path.basename(bam).split(".")[-2]
+
     # Given the top 1% mismatch count per read (one structrual variant count as 1 mismatch)
     tmp_bam = prepare_tmp_file(suffix=".bam", tmp_dir = tmp_dir).name
 
@@ -332,7 +334,7 @@ def realign_filter_per_cov(bam,
                             not read.is_duplicate and \
                             not read.is_qcfail:
                             logger.debug(f"Read {1 if read.is_read1 else 2} from pair {read.query_name} is considered appropriately aligned")
-                            read.set_tag('HP', f'HAP_{hap_id}')
+                            read.set_tag('HP', f'chunk{chunk_id}_{hap_id}')
                             qname_pair = norm_qnames.get(qname, set([]))
                             qname_pair.add(read)
                             norm_qnames[qname] = qname_pair
@@ -342,7 +344,7 @@ def realign_filter_per_cov(bam,
                     if qname in noisy_qnames:
                         hap_id = f"{hap_id}_HIGHVD"
                         
-                    read.set_tag('HP', f'HAP_{hap_id}')
+                    read.set_tag('HP', f'chunk{chunk_id}_{hap_id}')
                     tmp_handle.write(read)
 
                 # logger.warning(f"Check {check_odd_num} reads to find oddly high editing distance reads, {zero_odd_num} reads found no odd editing distance read pairs")

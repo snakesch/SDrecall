@@ -178,28 +178,39 @@ def judge_misalignment_by_extreme_vardensity(seq):
     five_vard = count_window_var_density(seq, padding_size = 42)
     six_vard = count_window_var_density(seq, padding_size = 65)
     read_vard = count_window_var_density(seq, padding_size = 74)
-    
-    if numba_sum(five_vard >= 7/85) > 0:
-        select_bool = five_vard >= 7/85
-        padding = 42
-    elif numba_sum(six_vard >= 9/131) > 0:
-        select_bool = six_vard >= 9/131
-        padding = 65
-    elif numba_sum(read_vard > 11/148) > 0:
-        return True
-    else:
-        return False
+    # logger.debug(f"For the sequence {seq.tolist()}, the five_vard is {five_vard.tolist()}, the six_vard is {six_vard.tolist()}, the read_vard is {read_vard.tolist()}")
 
-    true_segments = extract_true_stretches(select_bool)
-    max_indel_count = 0
-    for i in range(true_segments.shape[0]):
-        start = true_segments[i, 0] - padding
-        end = true_segments[i, 1] + padding
-        five_seq = seq[start:end]
-        indel_count = count_continuous_indel_blocks(five_seq)
-        max_indel_count = max(max_indel_count, indel_count)
-    if max_indel_count > 1:
+    if numba_sum(five_vard >= 5/85) > 0:
+        select_bool = five_vard >= 5/85
+        padding = 42
+        true_segments = extract_true_stretches(select_bool)
+        max_indel_count = 0
+        for i in range(true_segments.shape[0]):
+            start = true_segments[i, 0] - padding
+            end = true_segments[i, 1] + padding
+            five_seq = seq[start:end]
+            indel_count = count_continuous_indel_blocks(five_seq)
+            max_indel_count = max(max_indel_count, indel_count)
+        if max_indel_count > 1:
+            return True
+
+    if numba_sum(six_vard >= 6/131) > 0:
+        select_bool = six_vard >= 6/131
+        padding = 65
+        true_segments = extract_true_stretches(select_bool)
+        max_indel_count = 0
+        for i in range(true_segments.shape[0]):
+            start = true_segments[i, 0] - padding
+            end = true_segments[i, 1] + padding
+            five_seq = seq[start:end]
+            indel_count = count_continuous_indel_blocks(five_seq)
+            max_indel_count = max(max_indel_count, indel_count)
+        if max_indel_count > 1:
+            return True
+    
+    if numba_sum(read_vard >= 11/148) > 0:
         return True
+    
     return False
 
 
@@ -211,29 +222,29 @@ def calculate_coefficient(arr2d):
     span = (arr2d[:, 1] - arr2d[:, 0])
     depth_frac = (1 - arr2d[:, 4]/arr2d[:, 2]).astype(types.float32)
 
-    return rank * span * np.sqrt(depth_frac)
+    return rank * np.sqrt(span * depth_frac)
 
 
 
-def sweep_region_inspection(hap_cov_beds,
+def sweep_region_inspection(input_bam, 
                             output_bed = None,
+                            depth_cutoff = 5,
+                            window_size = 120,
+                            step_size = 30,
                             logger = logger):
 
     if output_bed is None:
         output_bed = prepare_tmp_file(suffix = ".bed").name
 
-    hap_ids, hap_id_beds = zip(*hap_cov_beds.items())
-    x = pb.BedTool()
-    sweep_regions = x.multi_intersect(i=hap_id_beds).to_dataframe(disable_auto_names = True, names = ["chrom", "start", "end", "hap_no", "hap_ids"] + [f"unknown_{i}" for i in range(len(hap_id_beds))]).iloc[:, :4]
-    multi_haps_regions = sweep_regions.loc[sweep_regions["hap_no"].astype(int) >= 3, :]
-    if len(multi_haps_regions) == 0:
-        logger.warning(f"No sweep regions are found. Return None. The original sweep regions are:\n{sweep_regions.to_string(index=False)}")
-        return None
-    multi_haps_regions.to_csv(output_bed, sep = "\t", index = False, header = False)
+    cmd = f"samtools depth {input_bam} | \
+            mawk -F '\\t' '$3 >= {depth_cutoff}{{printf \"%s\\t%s\\t%s\\n\", $1, $2-1, $2;}}' | \
+            bedtools merge -i stdin | \
+            bedtools makewindows -b stdin -w {window_size} -s {step_size} > {output_bed}"
+
+    executeCmd(cmd, logger = logger)
 
     op_bed_obj = pb.BedTool(output_bed)
     return op_bed_obj
-
 
 
 def calculate_coefficient_per_group(record_df, logger=logger):
@@ -295,12 +306,12 @@ def extract_continuous_regions_dict(reads):
 def group_by_dict_optimized(vprop, vertices):
     grouped_keys = {}
     for v, rs in vertices.items():
-        v_idx, q = v
+        v_idx, qname = v
         label = vprop[v_idx]
         if label not in grouped_keys:
             grouped_keys[label] = [[], [], []]
         grouped_keys[label][0].append(v_idx)
-        grouped_keys[label][1].append(q)
+        grouped_keys[label][1].append(qname)
         grouped_keys[label][2].append(rs)
     return grouped_keys
 
@@ -321,7 +332,7 @@ def record_haplotype_rank(haplotype_dict, mean_read_length = 150):
         seq, reads, span, _ = haplotype_dict[hid]
         starts[i] = span[0]
         ends[i] = span[1]
-        depth = len(reads) * mean_read_length/len(seq)
+        depth = len(reads) * mean_read_length/max(len(seq), mean_read_length)
         hap_depths[i] = depth
         hap_ids[i] = hid
         var_counts[i] = count_var(seq)
@@ -381,9 +392,11 @@ def summarize_enclosing_haps(hap_subgraphs, qname_to_node, region, logger = logg
         return None, None
     else:
         # Shrink the window to the largest overlapping haplotype
+        logger.info(f"Shrink the region {region} to include more enclosing haplotypes: {inspect_results}")
         recover_results = [t for t in inspect_results if t[4] >= 0.8]
         recover_span = max(recover_results, key = lambda x: x[2][0])[2][0], min(recover_results, key = lambda x: x[2][1])[2][1]
         overlapping_span = (max(recover_span[0], start), min(recover_span[1], end))
+        logger.info(f"Now the region is shrinked to {overlapping_span} and it contains the following haplotypes: {recover_results}")
         for t in recover_results:
             hap_id, qnames, span, sreads, _ = t
             region_haplotype_info[span] = (sreads, set([qname_to_node[r.query_name] for r in sreads]), hap_id, qnames)
@@ -415,7 +428,7 @@ def identify_misalignment_per_region(region,
     Inputs:
     region: a tuple of (chrom, start, end)
     bam_ncls: a tuple of ({chrom: ncls_object}, {interval_idx: [read1, read2]}, {interval_idx: qname}, {qname: interval_idx})
-    qname_hap_info: a dictionary {qname: haplotype_id}
+    qname_hap_info: a dictionary {vertex_idx: haplotype_id}
     qname_to_node: a dictionary {qname: vertex_idx}
     lowqual_qnames: a set of qnames that are low quality and ignored
     clique_sep_component_idx: a dictionary {haplotype_id: clique_separated_component_idx}
@@ -434,6 +447,7 @@ def identify_misalignment_per_region(region,
     # Identify a map that
     # (vertex_idx, qname) --> read object (pysam.AlignedSegment)
     vertices = defaultdict(list)
+    debug_vertices = defaultdict(list)
     # a set of vertex indices (qname idx) corresponding to the overlapping reads
     vert_inds = set()
     for read in overlap_reads_iter:
@@ -442,14 +456,16 @@ def identify_misalignment_per_region(region,
             continue
         vert_idx = qname_to_node[qname]
         vertices[(vert_idx, qname)].append(read)
+        debug_vertices[(vert_idx, qname)].append(get_read_id(read))
         vert_inds.add(vert_idx)
+    logger.debug(f"Building the table for BILP, within region {region}, the vertices are:\n{'\n'.join([f'vertex_idx: {t[0]}, qname: {t[1]}, haplotype_id: {qname_hap_info[qname_to_node[t[1]]]}, reads: {read_ids}' for t, read_ids in debug_vertices.items()])}")
 
     # qname_hap_info is a dictionary {qname: haplotype_id}
     # Establish a dictionary of the form {haplotype_id: [vertex_idices, qnames, read_pair_lists]} based on the overlapping reads identified above
     hap_subgraphs = group_by_dict_optimized(qname_hap_info, vertices)
 
     if len(hap_subgraphs) == 0:
-        logger.error(f"No haplotype clusters are found for region {region}. These are the qnames found overlapping this region: {vertices}. Skip this region.\n")
+        logger.warning(f"No haplotype clusters are found for region {region}. These are the qnames found overlapping this region: {vertices}. Skip this region.\n")
         return None, total_hapvectors, total_errvectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx, read_ref_pos_dict
 
     # For each hap_subgraph, we need to generate the consensus sequence for the reads
@@ -457,9 +473,9 @@ def identify_misalignment_per_region(region,
     region_haplotype_info, overlapping_span = summarize_enclosing_haps(hap_subgraphs, qname_to_node, region, logger = logger)
     if region_haplotype_info is None:
         return None, total_hapvectors, total_errvectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx, read_ref_pos_dict
-
+    logger.debug(f"The region {chrom}:{overlapping_span} contains the following haplotypes:\n{'\n'.join([f'{span}: {haplotype_idx} {qnames}' for span, (reads, vert_inds, haplotype_idx, qnames) in region_haplotype_info.items()])}")
     # Prepare region_str for logging
-    region_str = f"{read.reference_name}:{overlapping_span[0]}-{overlapping_span[1]}"
+    region_str = f"{chrom}:{overlapping_span[0]}-{overlapping_span[1]}"
 
     final_clusters = {}
     for span, (reads, vert_inds, haplotype_idx, qnames) in region_haplotype_info.items():
@@ -482,7 +498,7 @@ def identify_misalignment_per_region(region,
         overlapping_con_seq = consensus_sequence[overlapping_span[0] - span[0]:overlapping_span[1] - span[0] + 1]
         final_clusters[haplotype_idx] = (overlapping_con_seq, reads, overlapping_span, qnames)
 
-    # logger.info(f"The Final haplotype dict looks like this \n{final_clusters}\n")
+    logger.info(f"The Final haplotype dict looks like this \n{'\n'.join([f'{haplotype_idx}: encoded_consensus_sequence: {con_seq.tolist()}, reads: {reads}, span: {span}, qnames: {qnames}' for haplotype_idx, (con_seq, reads, span, qnames) in final_clusters.items()])}")
     if len(final_clusters) <= 2:
         logger.warning(f"Only {len(final_clusters)} haplotype clusters are found for region {region_str}. Do not need to choose 2 haplotypes, Skip this region.\n")
         return None, total_hapvectors, total_errvectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx, read_ref_pos_dict
@@ -491,7 +507,7 @@ def identify_misalignment_per_region(region,
     record_df = pd.DataFrame(record_2d_arr, columns = ["start", "end", "total_depth", "hap_id", "hap_depth", "var_count", "indel_count"])
     record_df["chrom"] = chrom
 
-    # logger.debug(f"Found {len(final_clusters)} haplotype clusters for region {region_str}. The dataframe recording the haplotypes in this region looks like :\n{record_df.to_string(index=False)}\n")
+    logger.debug(f"Found {len(final_clusters)} haplotype clusters for region {region_str}. The dataframe recording the haplotypes in this region looks like :\n{record_df.to_string(index=False)}\n")
     return record_df, total_hapvectors, total_errvectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx, read_ref_pos_dict
 
 
@@ -595,6 +611,7 @@ def stat_refseq_similarity(intrin_bam_ncls,
 
         # Identify paralogous sequence variants (PSVs) originated from paralogous reference sequences
         varcount, alt_varcount = ref_genome_similarity(interval_con_seq, interval_genomic_hap)
+        logger.debug(f"For haplotype {hid}, within region {span}, comparing to the genomic sequence {homo_refseq_qname}. Variant count is {varcount} and variant count comparing against homologous counterpart sequence is {alt_varcount}.")
         if homo_refseq_qname in varcounts_among_refseqs[hid]:
             varcounts_among_refseqs[hid][homo_refseq_qname].append((varcount, alt_varcount))
         else:
@@ -667,17 +684,17 @@ def inspect_by_haplotypes(input_bam,
     scatter_hid_dict = defaultdict(bool) # Initialize a dictionary to store if the haplotype is scattered
     logger.info("All the haplotype IDs are :\n{}\n".format(list(hap_qname_info.keys())))
     varcounts_among_refseqs = defaultdict(dict)
-    hid_cov_beds = {}
+    # hid_cov_beds = {}
 
     # Iterate over all the haplotypes
     for hid, qnames in hap_qname_info.items():
         # If only one read pair is in the iterating haplotype, it is a scattered haplotype, it should not be considered since the poor coverage
-        if len(qnames) < 2:
+        if len(qnames) < 3:
             scatter_hid_dict[hid] = True
             continue
 
-        # logger.debug(f"The haplotype {hid} contains {len(qnames)} read pairs in total. And the qnames are: \n{qnames}\n")
-        hid_cov_bed = prepare_tmp_file(suffix = f".haplotype_{hid}.cov.bed", tmp_dir = tmp_dir).name
+        logger.debug(f"The haplotype {hid} contains {len(qnames)} read pairs in total. And the qnames are: \n{qnames}\n")
+        # hid_cov_bed = prepare_tmp_file(suffix = f".haplotype_{hid}.cov.bed", tmp_dir = tmp_dir).name
 
         # Extract all the qname indices and all the reads belonged to the iterating haplotype
         qname_indices = [qname_idx_dict[qname] for qname in qnames]
@@ -690,13 +707,13 @@ def inspect_by_haplotypes(input_bam,
         for span, reads in conregion_dict.items():
             region_str += f"{reads[0].reference_name}\t{span[0]}\t{span[1]}\n"
 
-        pb.BedTool(region_str, from_string = True).sort().merge().saveas(hid_cov_bed)
-        hid_cov_beds[hid] = hid_cov_bed
+        # pb.BedTool(region_str, from_string = True).sort().merge().saveas(hid_cov_bed)
+        # hid_cov_beds[hid] = hid_cov_bed
 
         # Iterate over all the continuous regions covered by the iterating haplotype
         for span, reads in conregion_dict.items():
             # span end is exclusive
-            # logger.debug(f"The haplotype {hid} contains {len(reads)} reads in the continuous region {span}.")
+            logger.debug(f"The haplotype {hid} contains {len(reads)} reads in the continuous region {span}.")
             chrom = reads[0].reference_name
 
             # Iterate over all the reads overlapping with the iterating continuous region covered by the iterating haplotype
@@ -712,6 +729,7 @@ def inspect_by_haplotypes(input_bam,
 
             # Judge if the consensus sequence of the haplotype within the iterating continuous region contains extremely high variant density
             extreme_vard = judge_misalignment_by_extreme_vardensity(consensus_sequence)
+            logger.debug(f"For haplotype {hid}, within region {span}, the consensus sequence is {consensus_sequence.tolist()}. The extreme variant density is {extreme_vard}.")
 
             # Count the variant count of the consensus sequence
             var_count = count_var(consensus_sequence)
@@ -752,12 +770,12 @@ def inspect_by_haplotypes(input_bam,
 
     sweep_region_bed = input_bam.replace(".bam", ".sweep.bed")
     # Remove the scattered haplotypes from the sweep regions
-    hid_cov_beds = {hid:bed for hid, bed in hid_cov_beds.items() if hid not in scatter_hid_dict}
-    if len(hid_cov_beds) == 0:
-        logger.warning(f"All haplotypes are scattered (only supported by 1 read pair). Meaning this bam covers a region with barely no reads covered. In total only {len(hap_qname_info)} haplotypes are involved. Directly discard this region for further analysis.")
-        return set([]), set([])
+    # hid_cov_beds = {hid:bed for hid, bed in hid_cov_beds.items() if hid not in scatter_hid_dict}
+    # if len(hid_cov_beds) == 0:
+    #     logger.warning(f"All haplotypes are scattered (only supported by 1 read pair). Meaning this bam covers a region with barely no reads covered. In total only {len(hap_qname_info)} haplotypes are involved. Directly discard this region for further analysis.")
+    #     return set([]), set([])
     
-    sweep_regions = sweep_region_inspection(hid_cov_beds, sweep_region_bed, logger = logger)
+    sweep_regions = sweep_region_inspection(input_bam, sweep_region_bed, logger = logger)
     logger.info(f"Now the sweep regions are saved to {sweep_region_bed}.")
 
     '''
@@ -817,14 +835,14 @@ def inspect_by_haplotypes(input_bam,
         total_record_df = total_record_df.loc[np.logical_not(total_record_df["extreme_vard"]) & \
                                               np.logical_not(total_record_df["scatter_hap"]) & \
                                               (total_record_df["total_depth"] >= 5) & \
-                                              (total_record_df["hap_max_sim_scores"] <= 10), :]
+                                              (total_record_df["hap_max_sim_scores"] <= 7), :]
         # total_record_df.loc[:, "coefficient"] = np.clip(total_record_df["coefficient"] + total_record_df["hap_max_sim_scores"], 10e-3, None)
         if total_record_df.shape[0] == 0:
             failed_lp = True
 
         if not failed_lp:
             total_record_df.loc[total_record_df["hap_var_count"] == 0, "coefficient"] = -1
-            total_record_df = total_record_df.groupby(["chrom", "start", "end"]).filter(lambda x: len(x) > 5)
+            total_record_df = total_record_df.groupby(["chrom", "start", "end"]).filter(lambda x: len(x) >= 3)
 
             if total_record_df.shape[0] == 0:
                 failed_lp = True
@@ -842,7 +860,7 @@ def inspect_by_haplotypes(input_bam,
 
     if not failed_lp:
         mismap_hids.update(set([hid for hid in hid_extreme_vard if hid_extreme_vard[hid]]))
-        mismap_hids.update(set([hid for hid in hap_max_sim_scores if hap_max_sim_scores[hid] > 10]))
+        mismap_hids.update(set([hid for hid in hap_max_sim_scores if hap_max_sim_scores[hid] > 5]))
         mismap_hids.update(set([hid for hid in scatter_hid_dict if scatter_hid_dict[hid] and hid_var_count[hid] > 1]))
         correct_map_hids = correct_map_hids - mismap_hids
 
@@ -856,7 +874,7 @@ def inspect_by_haplotypes(input_bam,
     if failed_lp:
         mismap_hids = set([hid for hid in hid_extreme_vard if hid_extreme_vard[hid]])
         mismap_hids.update(set([hid for hid in scatter_hid_dict if scatter_hid_dict[hid] and hid_var_count[hid] > 1]))
-        mismap_hids.update(set([hid for hid in hap_max_sim_scores if hap_max_sim_scores[hid] > 10]))
+        mismap_hids.update(set([hid for hid in hap_max_sim_scores if hap_max_sim_scores[hid] > 5]))
         mismap_qnames = set([qname for hid in mismap_hids for qname in hap_qname_info[hid]])
         total_qnames = set([qname for qnames in hap_qname_info.values() for qname in qnames])
         correct_map_qnames = total_qnames - mismap_qnames

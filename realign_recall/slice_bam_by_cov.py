@@ -132,7 +132,7 @@ def process_target_regions_with_coverage(target_bed,
         list: Processed intervals for BAM splitting
     """
     # Load the target and coverage BEDs
-    target_regions = pb.BedTool(target_bed).sort().merge(d = delimiter_size)
+    target_regions = pb.BedTool(target_bed).sort().merge(d = 2 * delimiter_size)
     coverage_regions = pb.BedTool(cov_bed)
     
     # Track our processed intervals
@@ -158,7 +158,6 @@ def process_target_regions_with_coverage(target_bed,
                 # We found covered subregions - use these instead
                 logger.debug(f"  - Split into {len(covered_subregions)} covered subregions")
                 for subregion in covered_subregions:
-                    # Pad by 2* delimiter_size
                     processed_intervals.append((subregion.chrom, subregion.start, subregion.end))
             elif len(covered_subregions) == 1:
                 for subregion in covered_subregions:
@@ -200,9 +199,9 @@ def process_target_regions_with_coverage(target_bed,
             # cov_island is too large, just let pad the overlapping small intervals by delimiter_size and merge
             cov_small_regions = df[["chrom_target", "start_target", "end_target"]]
             cov_small_regions = pb.BedTool.from_dataframe(cov_small_regions)
-            cov_small_regions = cov_small_regions.sort().merge(d = 2 * delimiter_size)
+            cov_small_regions = cov_small_regions.sort().slop(b = delimiter_size, g = ref_genome + ".fai").merge()
             for region in cov_small_regions:
-                processed_intervals.append((region.chrom, region.start - delimiter_size, region.end + delimiter_size))
+                processed_intervals.append((region.chrom, region.start, region.end))
             
     result_bed = pb.BedTool(processed_intervals).sort()
     
