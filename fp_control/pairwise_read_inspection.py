@@ -313,7 +313,7 @@ def get_errorvector_from_cigar(read, cigar_tuples, logger=logger):
     base_qualities = np.array(read.query_qualities, dtype=np.int32)
     query_consume = 0
     ref_consume = 0
-    logger.debug(f"The input cigar string is {read.cigartuples} from read {get_read_id(read)}")
+    # logger.debug(f"The input cigar string is {read.cigartuples} from read {get_read_id(read)}")
 
     for operation, length in cigar_tuples:
         assert operation != 0, f"The CIGAR string require separate mismatch from match. But current one does not: {cigar_tuples}"
@@ -444,12 +444,33 @@ def extract_read_qseqs(read, read_ref_pos_dict):
 
 
 
+def check_noisy_read(read, read_hap_vector, read_error_vectors, logger = logger):
+    '''
+    Check whether the read haplotype is noisy for either read
+    '''
+    read_id = get_read_id(read)
+    if read_id in read_error_vectors:
+        read_error_vector = read_error_vectors[read_id]
+    else:
+        read_error_vector = get_errorvector_from_cigar(read, read.cigartuples, logger = logger)
+        read_error_vectors[read_id] = read_error_vector
+
+    mismatch_err_probs = read_error_vector[read_hap_vector != -1]
+    if numba_sum(mismatch_err_probs > 0.03) >= 3:
+        return True, read_error_vectors
+    
+    return False, read_error_vectors
+
+
+
 def determine_same_haplotype(read, other_read,
                              overlap_start, overlap_end,
                              score_arr,
                              read_hap_vectors = {},
+                             read_error_vectors = {},
                              nested_ad_dict = {},
                              read_ref_pos_dict = {},
+                             total_lowqual_qnames = set(),
                              mean_read_length = 148,
                              empty_dict = {},
                              logger = logger):
@@ -514,6 +535,9 @@ def determine_same_haplotype(read, other_read,
         read_hap_vector = get_hapvector_from_cigar(cigar_arr, query_sequence_encoded)
         read_hap_vectors[read_id] = read_hap_vector
 
+    noisy, read_error_vectors = check_noisy_read(read, read_hap_vector, read_error_vectors, logger = logger)
+    if noisy: total_lowqual_qnames.add(read.query_name)
+    
     other_read_id = get_read_id(other_read)
     other_start = np.int32(other_read.reference_start)
 
@@ -522,6 +546,9 @@ def determine_same_haplotype(read, other_read,
     else:
         other_read_hap_vector = get_hapvector_from_cigar(np.array(other_read.cigartuples, dtype=np.int32), other_query_sequence_encoded)
         read_hap_vectors[other_read_id] = other_read_hap_vector
+
+    noisy, read_error_vectors = check_noisy_read(other_read, other_read_hap_vector, read_error_vectors, logger = logger)
+    if noisy: total_lowqual_qnames.add(other_read.query_name)
 
     interval_hap_vector = numba_slicing(read_hap_vector, overlap_start, overlap_end, start)
     interval_other_hap_vector = numba_slicing(other_read_hap_vector, overlap_start, overlap_end, other_start)
@@ -533,7 +560,7 @@ def determine_same_haplotype(read, other_read,
     # First test whether there are too many mismatches between two reads that we wont tolerate
     if len(diff_indices) >= 3:
         # Cannot tolerate such mismatches
-        return False, read_ref_pos_dict, read_hap_vectors, None
+        return False, read_ref_pos_dict, read_hap_vectors, read_error_vectors, total_lowqual_qnames, None
 
     diff_pos_read = interval_hap_vector[diff_indices]
     diff_pos_oread = interval_other_hap_vector[diff_indices]
@@ -572,13 +599,13 @@ def determine_same_haplotype(read, other_read,
 
         # logger.debug(f"The qseq_ref_positions of read {read_id} starting from {read.reference_start} is {qseq_ref_positions}, and the ref_positions is {ref_positions}")
         # logger.debug(f"The qseq_ref_positions of read {other_read_id} starting from {other_read.reference_start} is {other_qseq_ref_positions}, and the ref_positions is {other_ref_positions}")
-        return True, read_ref_pos_dict, read_hap_vectors, weight
+        return True, read_ref_pos_dict, read_hap_vectors, read_error_vectors, total_lowqual_qnames, weight
     else:
         if len(read_seq) != len(other_seq) or interval_hap_vector.size != interval_other_hap_vector.size:
             # logger.debug(f"The two reads {read_id} and {other_read_id} are aligned to the same reference span {read.reference_name}:{overlap_start}-{overlap_end} with different size of sequence.")
             # logger.debug(f"The qseq_ref_positions of read {read_id} starting from {read.reference_start} is {qseq_ref_positions.tolist()}, and the ref_positions is {ref_positions.tolist()}")
             # logger.debug(f"The qseq_ref_positions of read {other_read_id} starting from {other_read.reference_start} is {other_qseq_ref_positions.tolist()}, and the ref_positions is {other_ref_positions.tolist()}")
-            return False, read_ref_pos_dict, read_hap_vectors, None
+            return False, read_ref_pos_dict, read_hap_vectors, read_error_vectors, total_lowqual_qnames, None
 
         # Here we know that there are only equal to or smaller than 2 mismatches between the two reads
         # Then we need to know whether the two mismatches are in-trans variants or in-cis variants, if its in-trans we cannot tolerate the two mismatches
@@ -595,7 +622,7 @@ def determine_same_haplotype(read, other_read,
             # logger.debug(f"Within in region {read.reference_name}:{overlap_start}-{overlap_end}, read {read_id} and read {other_read_id} have mismatches on indels, which make this two read pairs not intolerant to the mismatches")
             # logger.debug(f"The query sequence within this region for read {read_id} is {read_seq.tolist()}, and the mismatch indices relative to the query sequence are {q_diff_indices.tolist()}")
             # logger.debug(f"The query sequence within this region for read {other_read_id} is {other_seq.tolist()}, and the mismatch indices relative to the reference genome are {r_diff_indices.tolist()}")
-            return False, read_ref_pos_dict, read_hap_vectors, None
+            return False, read_ref_pos_dict, read_hap_vectors, read_error_vectors, total_lowqual_qnames, None
         read_package = (np.int32(read.reference_start), query_sequence_encoded, query_sequence_qualities, ref_positions)
         other_read_package = (np.int32(other_read.reference_start), other_query_sequence_encoded, other_query_sequence_qualities, other_ref_positions)
         # logger.info(f"The ref positions that two overlap reads are different are {r_diff_indices.tolist()}, while the read ref start is {read.reference_start} and the other read ref start is {other_read.reference_start}")
@@ -608,6 +635,6 @@ def determine_same_haplotype(read, other_read,
         if tolerate:
             # logger.debug(f"The two reads {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} are tolerant to {tolerated_count} mismatches, with a weight of {weight}")
             weight = weight - tolerated_count * 20
-            return True, read_ref_pos_dict, read_hap_vectors, weight
+            return True, read_ref_pos_dict, read_hap_vectors, read_error_vectors, total_lowqual_qnames, weight
         else:
-            return False, read_ref_pos_dict, read_hap_vectors, None
+            return False, read_ref_pos_dict, read_hap_vectors, read_error_vectors, total_lowqual_qnames, None

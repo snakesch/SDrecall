@@ -689,6 +689,7 @@ def inspect_by_haplotypes(input_bam,
     # Iterate over all the haplotypes
     for hid, qnames in hap_qname_info.items():
         # If only one read pair is in the iterating haplotype, it is a scattered haplotype, it should not be considered since the poor coverage
+        qnames = [ qn for qn in qnames if qn not in total_lowqual_qnames ]
         if len(qnames) < 3:
             scatter_hid_dict[hid] = True
             continue

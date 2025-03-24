@@ -125,7 +125,8 @@ def is_read_noisy(read, paired, mapq_filter, basequal_median_filter, filter_nois
         
         if read.query_qualities is not None:
             return (fast_median(np.array(read.query_qualities, dtype=np.uint8)) <= basequal_median_filter or
-                    numba_sum(np.array(read.query_qualities, dtype=np.uint8) < basequal_median_filter) >= 50) and filter_noisy
+                    numba_sum(np.array(read.query_qualities, dtype=np.uint8) < basequal_median_filter) >= 40 or 
+                    numba_sum(np.array([t[1] for t in read.cigartuples if t[0] == 4], dtype=np.uint16)) >= 20) and filter_noisy
     else:
         if read.is_secondary or \
            read.is_supplementary or \
@@ -138,7 +139,8 @@ def is_read_noisy(read, paired, mapq_filter, basequal_median_filter, filter_nois
             return True
         if read.query_qualities is not None:
             return (fast_median(np.array(read.query_qualities, dtype=np.uint8)) <= basequal_median_filter or
-                    numba_sum(np.array(read.query_qualities, dtype=np.uint8) < basequal_median_filter) >= 40) and filter_noisy
+                    numba_sum(np.array(read.query_qualities, dtype=np.uint8) < basequal_median_filter) >= 40 or 
+                    numba_sum(np.array([t[1] for t in read.cigartuples if t[0] == 4], dtype=np.uint16)) >= 20) and filter_noisy
     return False
 
 

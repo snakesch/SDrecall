@@ -446,10 +446,10 @@ function independent_minimap2_masked () {
         minimap2 -x ${mode} -d ${masked_genome/.fasta/.mmi} ${masked_genome}
     fi
 
-    log "Running minimap2 --eqx --MD -F 1000 -ax ${mode} --end-bonus 20 --no-end-flt -t ${threads} \
+    log "Running minimap2 --eqx --MD -F 1000 -ax ${mode} --end-bonus 5 --no-end-flt -t ${threads} \
     -R \"@RG\tID:${samp_ID}\tLB:SureSelectXT Library Prep Kit\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}\" \
     ${masked_genome/.fasta/.mmi} ${forward_reads} ${reverse_reads}" && \
-    minimap2 -ax ${mode} --eqx --MD -F 1000 --end-bonus 20 --no-end-flt -t ${threads} ${kwargs} -R "@RG\tID:${samp_ID}\tLB:SureSelectXT\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}" \
+    minimap2 -ax ${mode} --eqx --MD -F 1000 --end-bonus 5 --no-end-flt -t ${threads} ${kwargs} -R "@RG\tID:${samp_ID}\tLB:SureSelectXT\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}" \
     ${masked_genome/.fasta/.mmi} ${forward_reads} ${reverse_reads} > ${mid_align} && \
     modify_masked_genome_coords ${mid_align} ${ref_contig_sizes} ${rg_index} | \
     samtools view -S -u -@ ${threads} - | \

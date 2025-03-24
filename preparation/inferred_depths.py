@@ -6,6 +6,7 @@ from pybedtools import BedTool
 
 from src.utils import logger
 
+
 def filter_and_process_read(read, min_mapq, filter_tags, filter_logic):
     """Filters a single read and returns processed data or None if filtered."""
     if filter_tags:
@@ -23,16 +24,10 @@ def filter_and_process_read(read, min_mapq, filter_tags, filter_logic):
     if (read.mapping_quality >= min_mapq and not read.is_unmapped and not read.is_duplicate and
             not read.is_secondary and not read.is_supplementary and not read.is_qcfail and filter_pass):
 
-        chrom, start, end, query_name = read.reference_name, read.reference_start, read.reference_end, read.query_name
-        if read.is_paired and read.is_proper_pair and not read.mate_is_unmapped and read.is_read1:
-            next_ref_start = read.next_reference_start if read.next_reference_start is not None else start
-            inferred_end = max(end, next_ref_start + (150 if read.next_reference_name == chrom else 0))
-            return [chrom, min(start, next_ref_start), inferred_end, query_name]
-        elif read.is_paired:
-            return [chrom, start, end, query_name]
-        else:
-            return [chrom, start, end, query_name]
+        chrom, start, end, read_id = read.reference_name, read.reference_start, read.reference_end, f"{read.query_name}:{read.flag}"
+        return [chrom, start, end, read_id]
     return None
+
 
 def create_genome_dict(fai_file):
     """Creates a genome dictionary from a FASTA index file."""
@@ -42,6 +37,32 @@ def create_genome_dict(fai_file):
             chrom, length, *rest = line.strip().split('\t')
             genome_dict[chrom] = (0, int(length))
     return genome_dict
+
+
+def calculate_coverage(bam_file, min_mapq=10, filter_tags: list[str] = None,
+                       target_region="", target_tag="FCRs", genome_file="",
+                       filter_logic="and"):
+    """Calculates coverage from a BAM file."""
+    region_arg = f"samtools view -P -L {target_region} {bam_file}" if target_region else ""
+    filter_arg = f"-F \"[{filter_tags[0]}] != null\"" if filter_tags else ""
+    output_part = f"> {output_depth}" if output_depth else ""
+
+    if region_arg and filter_arg:
+        cmd = f"{region_arg} | sambamba view -q -f bam -h -t {threads} {filter_arg} /dev/stdin | samtools depth -J -a -q 13 -s -Q {MQ_threshold} -b {target_region} - {output_part}"
+    elif region_arg:
+        cmd = f"{region_arg} | samtools depth -J -a -q 13 -s -Q {MQ_threshold} -b {target_region} - {output_part}"
+    else:
+        cmd = f"samtools depth -J -a -q 13 -s -Q {MQ_threshold} {bam_file} {output_part}"
+    
+    depth_str = executeCmd(cmd, stdout_only=True, logger=logger)
+    if return_df:
+        return pd.read_table(StringIO(depth_str), header=None, names=["chrom", "pos", "depth"])
+    elif output_depth:
+        with open(output_depth, "r") as of:
+            of.write(depth_str)
+        return output_depth
+    
+    
 
 def calculate_inferred_coverage(bam_file, min_mapq=10, filter_tags: list[str] = None,
                                 target_region="", target_tag="FCRs", genome_file="",
@@ -58,7 +79,11 @@ def calculate_inferred_coverage(bam_file, min_mapq=10, filter_tags: list[str] = 
     output_tsv_base = bam_file.replace(".bam", f".infercov.minMQ_{min_mapq}{name_filter}{target_suffix}")
     output_tsv = output_tsv_base + ".tsv"
 
-    if os.path.exists(output_tsv) and os.path.getmtime(output_tsv) > os.path.getmtime(bam_file):
+    self_script = os.path.abspath(__file__)
+
+    if os.path.exists(output_tsv) and \
+       os.path.getmtime(output_tsv) > os.path.getmtime(bam_file) and \
+       os.path.getmtime(output_tsv) > os.path.getmtime(self_script):
         logger.info(f"Inferred coverage file {output_tsv} already exists. Skipping calculation.")
         return pd.read_csv(output_tsv, sep="\t", header=None, names=["chrom", "pos", "depth"])
 
@@ -89,7 +114,7 @@ def calculate_inferred_coverage(bam_file, min_mapq=10, filter_tags: list[str] = 
         logger.warning("No reads passed filtering. Creating empty output files.")
         coverage_df = pd.DataFrame(columns=['chrom', 'pos', 'depth'])
     else:
-        bed_df = pd.DataFrame(reads_list, columns=['chrom', 'start', 'end', 'read_query_name']).dropna().astype({'start': int, 'end': int})
+        bed_df = pd.DataFrame(reads_list, columns=['chrom', 'start', 'end', 'read_id']).dropna().astype({'start': int, 'end': int})
         logger.debug(f"BED DataFrame (first 5 rows):\n{bed_df.head(5).to_string(index=False)}")
 
         # Create the genome dictionary from the .fai file

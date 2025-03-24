@@ -233,12 +233,13 @@ def realign_filter_per_cov(bam,
 
     # Create the read-pair graph used for phasing
     # Detailed description of the graph construction can be found in the function docstring.
-    phased_graph, weight_matrix, qname_to_node, total_readhap_vector, read_ref_pos_dict = build_phasing_graph(bam,
-                                                                                                              ncls_dict,
-                                                                                                              read_dict,
-                                                                                                              qname_dict,
-                                                                                                              mean_read_length,
-                                                                                                              logger = logger)
+    phased_graph, weight_matrix, qname_to_node, total_readhap_vector, total_readerr_vector, read_ref_pos_dict, total_lowqual_qnames = build_phasing_graph(bam,
+                                                                                                                                                          ncls_dict,
+                                                                                                                                                          read_dict,
+                                                                                                                                                          qname_dict,
+                                                                                                                                                          mean_read_length,
+                                                                                                                                                          total_lowqual_qnames,
+                                                                                                                                                          logger = logger)
     if phased_graph is None:
         return None, None, None
 
@@ -264,7 +265,6 @@ def realign_filter_per_cov(bam,
         executeCmd(cmd, logger = logger)
 
     total_genomic_haps = {}
-    total_readerr_vector = {}
     compare_haplotype_meta_tab = bam.replace(".bam", ".haplotype_meta.tsv")
 
     if len(hap_qname_info) <= 2:

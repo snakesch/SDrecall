@@ -158,7 +158,7 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
 
     if len(vcf_list) > 0:
         # Create a temporary file with the list of VCFs to merge
-        vcf_list_file = os.path.join(sdrecall_paths.tmp_dir, "vcfs_to_merge.txt")
+        vcf_list_file = os.path.join(sdrecall_paths.tmp_dir, "raw_vcfs_to_merge.txt")
         with open(vcf_list_file, 'w') as f:
             for vcf in vcf_list:
                 f.write(f"{vcf}\n")

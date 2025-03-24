@@ -11,7 +11,7 @@ from src.utils import executeCmd
 from src.suppress_warning import *
 from fp_control.numba_operators import any_false_numba, numba_sum
 from fp_control.bam_ncls import overlap_qname_idx_iterator
-from fp_control.pairwise_read_inspection import determine_same_haplotype, get_read_id
+from fp_control.pairwise_read_inspection import determine_same_haplotype, get_read_id, get_hapvector_from_cigar, get_errorvector_from_cigar
 from src.log import logger
 
 
@@ -169,11 +169,13 @@ def find_uncovered_regions_numba(existing_starts, existing_ends, new_start, new_
 
 
 
+
 def build_phasing_graph(bam_file,
                         ncls_dict,
                         ncls_read_dict,
                         ncls_qname_dict,
                         mean_read_length,
+                        total_lowqual_qnames,
                         logger = logger):
     '''
     Construct a phasing graph from BAM data for efficient haplotype identification.
@@ -255,7 +257,7 @@ def build_phasing_graph(bam_file,
 
     # Create a set to store the hap_vectors corresponding to each read
     read_hap_vectors = {}
-
+    read_error_vectors = {}
     # Create a dictionary to store the start and end positions for each read pair
     read_ref_pos_dict = {}
 
@@ -264,7 +266,7 @@ def build_phasing_graph(bam_file,
     nested_ad_dict = stat_ad_to_dict(bam_file, empty_dict, logger = logger)
     if nested_ad_dict is None:
         logger.warning(f"No ALT allele found in this BAM file. Skip this entire script")
-        return None, None, None, None, None
+        return None, None, None, None, None, None, total_lowqual_qnames
 
     qname_check_dict = {}
     other_qnames = defaultdict(set)
@@ -339,15 +341,17 @@ def build_phasing_graph(bam_file,
                 # logger.debug(f"Found the uncovered regions {uncovered_overlaps} for the reads {read1.query_name} and {read2.query_name} in the overlap region ({chrom}:{overlap_start}-{overlap_end})")
                 for row_ind in range(uncovered_overlaps.shape[0]):
                     uncovered_start, uncovered_end = uncovered_overlaps[row_ind, 0], uncovered_overlaps[row_ind, 1]
-                    bool_res, read_ref_pos_dict, read_hap_vectors, read_weight = determine_same_haplotype(read1, read2,
-                                                                                                          uncovered_start, uncovered_end,
-                                                                                                          score_arr,
-                                                                                                          read_hap_vectors = read_hap_vectors,
-                                                                                                          nested_ad_dict = nested_ad_dict[chrom],
-                                                                                                          read_ref_pos_dict = read_ref_pos_dict,
-                                                                                                          mean_read_length = mean_read_length,
-                                                                                                          empty_dict = empty_dict,
-                                                                                                          logger = logger)
+                    bool_res, read_ref_pos_dict, read_hap_vectors, read_error_vectors, total_lowqual_qnames, read_weight = determine_same_haplotype(read1, read2,
+                                                                                                                                                    uncovered_start, uncovered_end,
+                                                                                                                                                    score_arr,
+                                                                                                                                                    read_hap_vectors = read_hap_vectors,
+                                                                                                                                                    read_error_vectors = read_error_vectors,
+                                                                                                                                                    nested_ad_dict = nested_ad_dict[chrom],
+                                                                                                                                                    read_ref_pos_dict = read_ref_pos_dict,
+                                                                                                                                                    total_lowqual_qnames = total_lowqual_qnames,
+                                                                                                                                                    mean_read_length = mean_read_length,
+                                                                                                                                                    empty_dict = empty_dict,
+                                                                                                                                                    logger = logger)
                     if np.isnan(bool_res):
                         qname_bools[n] = 0
                     elif bool_res:
@@ -391,4 +395,4 @@ def build_phasing_graph(bam_file,
     g.edge_properties["weight"] = weight
 
     logger.info(f"Now we finished building up the edges in the graph. There are currently {g.num_vertices()} vertices and {g.num_edges()} edges in the graph")
-    return g, weight_matrix, qname_to_node, read_hap_vectors, read_ref_pos_dict
+    return g, weight_matrix, qname_to_node, read_hap_vectors, read_error_vectors, read_ref_pos_dict, total_lowqual_qnames

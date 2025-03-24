@@ -56,7 +56,7 @@ def save_connected_qnodes_to_graphml(g, output_path, logger = logger):
 def prepare_recall_regions( paths: SDrecallPaths,
                             mq_threshold=41,
                             high_quality_depth=10,
-                            minimum_depth=3,
+                            minimum_depth=5,
                             multialign_frac=0.5,
                             threads=10):
     """
