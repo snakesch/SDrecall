@@ -140,17 +140,22 @@ def stat_ad_to_dict(bam_file, ref_genome, region = None, empty_dict={}, logger =
             chrom = ad_table.iloc[i, 0]
             pos = ad_table.iloc[i, 1] # position
             ref = ad_table.iloc[i, 2] # reference allele
+            ref_depth = float(ad_expanded.iloc[i, 0]) # reference depth
             alts = alt_expanded.iloc[i, :].dropna().unique().tolist() # alternative alleles
             allele_depths = ad_expanded.iloc[i, 1:].dropna().astype(int).tolist() # allele depths
 
             if pd.isna(allele_depths).all():
                 continue
 
+            if pd.isna(ref_depth):
+                logger.warning(f"The reference depth is null for the row {i} of the ad table: \n{ad_table.iloc[i, :].to_string(index=False)}\n")
+                continue
+
             if len(alts) == 0:
                 logger.warning(f"The ALT alleles are null for the row {i} of the ad table: \n{ad_table.iloc[i, :].to_string(index=False)}\n")
                 continue
 
-            total_dp = sum(allele_depths)
+            total_dp = sum(allele_depths) + ref_depth if ref_depth > 0 else sum(allele_depths)
 
             # Initialize the inner dictionary if the outer key is not present
             if pos not in nested_ad_dict[chrom]:
@@ -289,15 +294,14 @@ def main_function(golden_vcf, test_vcf, bam_300x, bam_30x, realigned_bam, refere
     logger.info(f"The final meta table is stored at {output_meta_table}. And it looks like:\n{output_df[:10].to_string(index=False)}\n")
 
     # Now we can use the table to identify the variants that are missing because lost of alternative alleles in the down-sample process
-    true_allele_absent = np.logical_and(output_df['REALIGNED_ALT'] <= 1, output_df['300x_ALT'] <= 1) | \
-                         np.logical_and(output_df['REALIGNED_ALT'].isna(), output_df['300x_ALT'].isna())
-    
-    true_allele_lost = np.logical_and(output_df['30x_ALT'] == 0, output_df['300x_ALT'] > 0) | \
-                       np.logical_and(output_df['30x_ALT'].isna(), output_df['300x_ALT'] > 0) | \
-                       np.logical_or(output_df['REALIGNED_ALT'] == 0, output_df['REALIGNED_ALT'].isna())
+    all_homo_absent = (output_df['REALIGNED_ALT'] <= 1) | output_df['REALIGNED_ALT'].isna() | (output_df['REALIGNED_ALT']/output_df['REALIGNED_DP'] <= 0.1)
+    ori_bam_absent = (output_df['300x_ALT'] <= 1) | output_df['300x_ALT'].isna() | (output_df['300x_ALT']/output_df['300x_DP'] <= 0.1)
+    ds_bam_absent = (output_df['30x_ALT'] <= 1) | output_df['30x_ALT'].isna() | (output_df['30x_ALT']/output_df['30x_DP'] <= 0.1)
 
-    serious_allele_bias = np.logical_and((output_df['30x_ALT']/(output_df['30x_DP']) <= 0.1), (output_df['REALIGNED_ALT']/(output_df['REALIGNED_DP']) <= 0.1))
-    excl_tp_bools = true_allele_absent | true_allele_lost | serious_allele_bias
+    true_allele_absent = all_homo_absent & ori_bam_absent  # The TP ALT allele is not well covered in the original BAM file
+    true_allele_lost = all_homo_absent & ds_bam_absent  # The TP ALT allele might be well covered in the original BAM file, but lost in the down-sample process
+
+    excl_tp_bools = true_allele_absent | true_allele_lost
     lost_alt_variants = output_df[excl_tp_bools]
 
     # Now we need to remove those variants from the golden_vcf and output a new golden vcf without them
