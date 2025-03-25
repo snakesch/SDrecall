@@ -21,11 +21,11 @@ def stat_ad_to_dict(bam_file, empty_dict, logger = logger):
     cmd = f"""bcftools mpileup -Ou --no-reference -a FORMAT/AD --indels-2.0 -q 10 -Q 15 {bam_file} | \
               bcftools query -f '%CHROM\\t%POS\\t%ALT\\t[%AD]\\n' - > {bam_ad_file}"""
     executeCmd(cmd, logger = logger)
-    ad_table = pd.read_table(bam_ad_file, header = None, sep = "\t", names = ["chrom", "pos", "alt", "ad"], dtype = {"chrom": str, "pos": int, "alt": str, "ad": str}, na_values=["", "<*>"])
-    ad_expanded = ad_table["ad"].str.split(",", expand=True).replace({None: np.nan, "": np.nan, "0": np.nan}).dropna(axis = 1, how="all").astype(float)
-    alt_expanded = ad_table["alt"].str.rstrip(",<*>").str.split(",", expand=True).replace({None: np.nan, "": np.nan}).dropna(axis = 1, how="all")
+    ad_table = pd.read_table(bam_ad_file, header = None, sep = "\t", names = ["chrom", "pos", "alt", "ad"], dtype = {"chrom": str, "pos": int, "alt": str, "ad": str}, na_values=["", "<*>"]).dropna(subset = ["alt"])
+    ad_expanded = ad_table["ad"].str.split(",", expand=True).replace({None: np.nan, "": np.nan, "0": np.nan}).astype(float).dropna(axis = 1, how = "all")
+    alt_expanded = ad_table["alt"].str.rstrip(",<*>").str.split(",", expand=True).replace({None: np.nan, "": np.nan}).dropna(axis = 1, how = "all")
 
-    if alt_expanded.shape[1] <= 1 or ad_expanded.shape[1] <= 1:
+    if alt_expanded.shape[1] < 1 or ad_expanded.shape[1] <= 1:
         logger.warning(f"No ALT allele found in this BAM file. Skip this entire script")
         logger.warning(f"Look at the two dataframes now: \n{alt_expanded.to_string(index=False)}\n{ad_expanded.to_string(index=False)}\n")
         return None
@@ -37,13 +37,14 @@ def stat_ad_to_dict(bam_file, empty_dict, logger = logger):
     nested_ad_dict = {chrom: {} for chrom in ad_table["chrom"].unique()}
     column_width = alt_expanded.shape[1]
 
+	# Not intended to handle insertions and deletions because they are rarely are due to low quality single bases. 
     base_dict = {"A": np.int8(0), "T": np.int8(1), "C": np.int8(2), "G": np.int8(3), "N": np.int8(4), "DP": np.int8(5)}
 
     # Iterate over the rows of dfA and dfB
     for i in range(len(ad_table)):
         chrom = ad_table.iloc[i, 0]
-        outer_key = ad_table.iloc[i, 1]
-        inner_key = base_dict.get(alt_expanded.iloc[i, 0], None)
+        outer_key = ad_table.iloc[i, 1] # position
+        inner_key = base_dict.get(alt_expanded.iloc[i, 0], None) # first allele
         value = np.int16(ad_expanded.iloc[i, 0])
 
         if pd.isna(value):

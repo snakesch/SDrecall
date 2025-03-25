@@ -1,5 +1,4 @@
 import pysam
-import numba
 import numpy as np
 import pandas as pd
 import argparse as ap
@@ -7,10 +6,7 @@ import logging
 import uuid
 import os
 import subprocess
-import sys
 import tempfile
-import glob
-import re
 from subprocess import PIPE
 bash_utils_hub = "/paedyl01/disk1/yangyxt/ngs_scripts/common_bash_utils.sh"
 
@@ -95,7 +91,108 @@ def extract_missing_tps(golden_vcf, test_vcf, output_dir):
 
 
 
-def extract_allele_depths(variant, bam_300x, bam_30x, reference_genome):
+def stat_ad_to_dict(bam_file, ref_genome, region = None, empty_dict={}, logger = logger):
+    # Build up an AD query dict by bcftools mpileup
+    
+    try:
+        if region is None:
+            bam_ad_file = f"{bam_file}.ad"
+            # If no region is specified, use the original approach
+            cmd = f"""bcftools mpileup -Ou --fasta-ref {ref_genome} -a FORMAT/AD --indels-2.0 -q 0 -Q 15 {bam_file} | \
+                  bcftools query -f '%CHROM\\t%POS\\t%REF\\t%ALT\\t[%AD]\\n' - > {bam_ad_file}"""
+        else:
+            bam_ad_file = f"{bam_file}.{region.replace(':', '_').replace('-', '_')}.ad"
+            # Use sambamba slice to extract the region first, then pipe to bcftools
+            cmd = f"""sambamba slice -q {bam_file} {region} | \
+                  bcftools mpileup -Ou --fasta-ref {ref_genome} -a FORMAT/AD --indels-2.0 -q 0 -Q 15 - | \
+                  bcftools query -f '%CHROM\\t%POS\\t%REF\\t%ALT\\t[%AD]\\n' - > {bam_ad_file}"""
+        
+        executeCmd(cmd, logger = logger)
+        
+        # Use pandas read_csv with optimized parameters
+        ad_table = pd.read_csv(
+            bam_ad_file, 
+            sep="\t", 
+            names=["chrom", "pos", "ref", "alt", "ad"],
+            dtype={"chrom": str, "pos": int, "ref": str, "alt": str, "ad": str},
+            na_values=["", "<*>"]
+        ).dropna(subset=["alt"])
+        
+        ad_table.loc[:, "alt"] = ad_table["alt"].str.rstrip(",<*>").str.upper()  # Convert all the bases to uppercase
+        ad_table.loc[:, "ref"] = ad_table["ref"].str.upper()  # Convert the reference allele to uppercase
+
+        ad_expanded = ad_table["ad"].str.split(",", expand=True).replace({None: np.nan, "": np.nan, "0": np.nan}).astype(float).dropna(axis=1, how="all")
+        alt_expanded = ad_table["alt"].str.split(",", expand=True).replace({None: np.nan, "": np.nan}).dropna(axis=1, how="all")
+
+        if alt_expanded.shape[1] < 1 or ad_expanded.shape[1] <= 1:
+            logger.warning(f"No ALT allele found in this BAM file: {bam_file} at region {region}. Skip this entire script")
+            logger.warning(f"Look at the ad table: \n{ad_table.to_string(index=False)}\n")
+            return None
+
+        logger.info("For bam {}, the original AD table looks like \n{}\nThe AD expanded table looks like: \n{}\nThe ALT expanded table looks like: \n{}\n".format(bam_file,
+                                                                                                                ad_table[:10].to_string(index=False),
+                                                                                                                ad_expanded[:10].to_string(index=False),
+                                                                                                                alt_expanded[:10].to_string(index=False)))
+
+        # Initialize the nested dictionary
+        nested_ad_dict = {chrom: {} for chrom in ad_table["chrom"].unique()}
+        column_width = alt_expanded.shape[1]
+
+        # Iterate over the rows of dfA and dfB
+        for i in range(len(ad_table)):
+            chrom = ad_table.iloc[i, 0]
+            pos = ad_table.iloc[i, 1] # position
+            ref = ad_table.iloc[i, 2] # reference allele
+            alts = alt_expanded.iloc[i, :].dropna().unique() # alternative alleles
+            allele_depth = ad_expanded.iloc[i, :].dropna().astype(int) # allele depths
+
+            if pd.isna(allele_depth).all():
+                continue
+
+            if len(alts) == 0:
+                logger.warning(f"The ALT alleles are null for the row {i} of the ad table: \n{ad_table.iloc[i, :].to_string(index=False)}\n")
+                continue
+
+            total_dp = allele_depth.sum()
+
+            # Initialize the inner dictionary if the outer key is not present
+            if pos not in nested_ad_dict[chrom]:
+                nested_ad_dict[chrom][pos] = empty_dict
+            
+            for alt in alts:
+                # Now we need to handle insertions
+                if len(alt) > len(ref) and len(ref) > 1:
+                    assert ref[0] == alt[0], f"The reference allele and the alternative allele have different first base: {ref} and {alt} at {chrom}:{pos} in bam file {bam_file}"
+                    # This is an insertion, we need to crop out the reference allele to have normalized format
+                    ref_pos = alt.find(ref)
+                    ins_pos = ref_pos + len(ref)
+                    alt = alt[ins_pos-1:]
+                    ref = ref[-1]
+                elif len(ref) > len(alt) and len(alt) > 1:
+                    assert ref[0] == alt[0], f"The reference allele and the alternative allele have different first base: {ref} and {alt} at {chrom}:{pos} in bam file {bam_file}"
+                    # This is a deletion, we need to crop out the alternative allele to have normalized format
+                    del_seq = ref[1:]
+                    alt_crop = alt[1:] # We need to crop out the sequence from the del_seq in the right most position
+                    crop_pos = del_seq.rfind(alt_crop)
+                    del_seq = del_seq[:crop_pos]
+                    ref = ref[0] + del_seq
+                    alt = alt[0]
+
+                # Add the pair of inner key-value
+                nested_ad_dict[chrom][pos][alt] = allele_depth
+
+            nested_ad_dict[chrom][pos]["DP"] = total_dp
+        
+        return nested_ad_dict
+    
+    finally:
+        # Clean up the temporary file
+        if os.path.exists(bam_ad_file):
+            os.remove(bam_ad_file)
+
+
+
+def extract_allele_depths(variant, bam_300x, bam_30x, realigned_bam, reference_genome):
     """
     Extract allele depths for a variant from two BAM files and a realigned BAM.
     
@@ -105,157 +202,88 @@ def extract_allele_depths(variant, bam_300x, bam_30x, reference_genome):
     :param reference_genome: Path to the reference genome file
     :return: Dictionary containing allele depths for both BAM files and realigned BAM
     """
-    realigned_bam = locate_chunk_raw_realigned_bam(reference_genome, bam_30x, variant)
     # Consider the edge case where realigned BAM is not found
     # Just skip the AD extraction in realigned BAM and fill NA to the corresponding fields
 
-    result = {'300x': {'ref':np.nan, 'alt_1':np.nan}, '30x': {'ref':np.nan, 'alt_1':np.nan}, 'realigned': {'ref': 0, 'alt': 0, 'misaligned_alt': 0}}
+    result = {'300x': {'DP':np.nan}, '30x': {'DP':np.nan}, 'realigned': {'DP':np.nan}}
     logger.info(f"Extracting allele depths for variant {variant.chrom}:{variant.start}-{variant.stop} among {bam_300x}, {bam_30x}, and {realigned_bam}")
-    if reference_genome == "/paedyl01/disk1/yangyxt/indexed_genome/ucsc.hg19.fasta":
-        nochr_genome = "/paedyl01/disk1/yangyxt/indexed_genome/GRCh37/human_g1k_v37.fasta"
-    else:
-        nochr_genome = reference_genome
+    region_str = f"{variant.chrom}:{variant.start - 10}-{variant.stop + 10}"
 
-    try:
-        with pysam.AlignmentFile(bam_300x, "rb", reference_filename=nochr_genome) as bam_300x_file, \
-             pysam.AlignmentFile(bam_30x, "rb", reference_filename=reference_genome) as bam_30x_file:
+    ad_300x_dict = stat_ad_to_dict(bam_300x, reference_genome, region = region_str)
+    ad_30x_dict = stat_ad_to_dict(bam_30x, reference_genome, region = region_str)
+    ad_realigned_dict = stat_ad_to_dict(realigned_bam, reference_genome, region = region_str)
+
+    if ad_300x_dict is not None:
+        dp = ad_300x_dict[variant.chrom].get(variant.pos, {'DP': np.nan})['DP']
+        result['300x']['DP'] = dp
+        for alt in variant.alts:
+            ad = ad_300x_dict[variant.chrom].get(variant.pos, {}).get(alt, 0)
+            if dp > 0:
+                result['300x'][alt] = ad
+            else:
+                result['300x'][alt] = np.nan
+
+    if ad_30x_dict is not None:
+        dp = ad_30x_dict[variant.chrom].get(variant.pos, {'DP': np.nan})['DP']
+        result['30x']['DP'] = dp
+        for alt in variant.alts:
+            ad = ad_30x_dict[variant.chrom].get(variant.pos, {}).get(alt, 0)
+            if dp > 0:
+                result['30x'][alt] = ad
+            else:
+                result['30x'][alt] = np.nan
+
+    if ad_realigned_dict is not None:
+        dp = ad_realigned_dict[variant.chrom].get(variant.pos, {'DP': np.nan})['DP']
+        result['realigned']['DP'] = dp
+        for alt in variant.alts:
+            ad = ad_realigned_dict[variant.chrom].get(variant.pos, {}).get(alt, 0)
+            if dp > 0:
+                result['realigned'][alt] = ad
+            else:
+                result['realigned'][alt] = np.nan
             
-            for bam_file, coverage in [(bam_300x_file, '300x'), (bam_30x_file, '30x')]:
-                if coverage == '300x' and nochr_genome != reference_genome:
-                    chrom = variant.chrom.replace("chr", "")
-                else:
-                    chrom = variant.chrom
-
-                pileup = bam_file.pileup(chrom, variant.pos - 1, variant.pos)
-                for pileupcolumn in pileup:
-                    if pileupcolumn.pos == variant.pos - 1:
-                        bases = pileupcolumn.get_query_sequences(add_indels=True)
-                        ref_count = bases.count(variant.ref)
-                        alt_counts = [bases.count(alt) for alt in variant.alts]
-                        
-                        result[coverage]['ref'] = ref_count
-                        for i, alt in enumerate(variant.alts):
-                            result[coverage][f'alt_{i+1}'] = alt_counts[i]
-            
-        # Process realigned BAM
-        if not realigned_bam:
-            result['realigned']['ref'] = np.nan
-            result['realigned']['alt'] = np.nan
-            result['realigned']['misaligned_alt'] = np.nan
-            return result
-
-        with pysam.AlignmentFile(realigned_bam, "rb", reference_filename=reference_genome) as realigned_bam_file:
-            for pileupcolumn in realigned_bam_file.pileup(variant.chrom, variant.pos - 1, variant.pos, truncate=True):
-                if pileupcolumn.pos == variant.pos - 1:
-                    for pileupread in pileupcolumn.pileups:
-                        if not pileupread.is_del and not pileupread.is_refskip:
-                            base = pileupread.alignment.query_sequence[pileupread.query_position]
-                            hp_tag = pileupread.alignment.get_tag('HP') if pileupread.alignment.has_tag('HP') else None
-                            
-                            is_misaligned = hp_tag and ('HIGHVD' in hp_tag or 'LOWQUAL' in hp_tag)
-                            
-                            if base == variant.ref:
-                                result['realigned']['ref'] += 1
-                            elif base in variant.alts:
-                                result['realigned']['alt'] += 1
-                                if is_misaligned:
-                                    result['realigned']['misaligned_alt'] += 1
-    
-    except Exception as e:
-        logger.error(f"Error extracting allele depths for variant {variant.chrom}:{variant.pos}: {str(e)}")
-        raise
-    
     return result
 
 
 
 
-def locate_chunk_raw_realigned_bam(ref_genome, bam_30x, pysam_variant):
-    assembly = os.path.basename(ref_genome).split(".")[1]
-    sample_ID = os.path.basename(bam_30x).split(".")[0]
-    region_str = f"{pysam_variant.chrom}:{pysam_variant.start}-{pysam_variant.stop}"
-
-    """
-    Locate the chunk ID by region.
-    
-    :param region_str: String representing the genomic region
-    :param sample_ID: Sample ID
-    :param assembly: Genome assembly (default: "hg19")
-    :return: Chunk ID if found, None otherwise
-    """
-    # Create a temporary BED file
-    with tempfile.NamedTemporaryFile(mode='w+t', delete=False, suffix='.bed') as temp_bed:
-        region_bed = temp_bed.name
-        
-        # Parse the region string
-        region_parts = region_str.split(':')
-        region_chr = region_parts[0]
-        region_start, region_end = map(int, region_parts[1].split('-'))
-        
-        # Adjust the region
-        region_start -= 20
-        region_end += 20
-        
-        # Write to the temporary BED file
-        temp_bed.write(f"{region_chr}\t{region_start}\t{region_end}\n")
-    
-    # Find chunk BED files
-    chunk_beds_pattern = f"/paedyl01/disk1/yangyxt/wgs/GIAB_samples/aligned_results/{assembly}/{sample_ID}.SD.deduped.pooled.raw.deduped.chunk*.bed"
-    logger.info(f"The chunk bed pattern is {chunk_beds_pattern}")
-    chunk_beds = glob.glob(chunk_beds_pattern)
-    
-    chunk_bed_overlap = None
-    for chunk_bed in chunk_beds:
-        if re.search(r'\.chunk(\d+)\.bed', os.path.basename(chunk_bed)) is None:
-            continue
-        # Use bedtools intersect
-        cmd = f"bedtools intersect -a {region_bed} -b {chunk_bed} | wc -l"
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        intersect_interval_count = int(result.stdout.strip())
-        
-        if intersect_interval_count > 0:
-            logger.info(f"{chunk_bed} is overlapping with the specified region {region_str}")
-            chunk_bed_overlap = chunk_bed
-            break
-    
-    # Clean up the temporary file
-    os.unlink(region_bed)
-    
-    if not chunk_bed_overlap:
-        logger.warning(f"No chunk bed file is overlapping with the specified region {region_str}")
-        return None
-    
-    # Extract chunk ID from the filename
-    chunk_id = re.search(r'\.chunk(\d+)\.bed', os.path.basename(chunk_bed_overlap)).group(1)
-    temp = "/paedyl01/disk1/yangyxt/wgs/GIAB_samples/aligned_results/{refgen_tag}/{sampID}.SD.deduped.pooled.raw.deduped.chunk{chunkID}.bam"
-    return temp.format(refgen_tag=assembly, sampID=sample_ID, chunkID=chunk_id)
-
-
-
-def main_function(golden_vcf, test_vcf, bam_300x, bam_30x, reference_genome):
+def main_function(golden_vcf, test_vcf, bam_300x, bam_30x, realigned_bam, reference_genome):
     tmp_tag = str(uuid.uuid4())
     gv_uniq_dir = os.path.join(os.path.dirname(golden_vcf), os.path.basename(golden_vcf).replace(".vcf.gz", f".uniq_vars.{tmp_tag}"))
     # Extract variants unique to the golden VCF
     unique_variants_file = extract_missing_tps(golden_vcf, test_vcf, gv_uniq_dir)
     logger.info(f"The unique variants in {golden_vcf} is stored in {unique_variants_file}\n")
+
+    if not os.path.exists(bam_300x):
+        raise FileNotFoundError(f"The 300x BAM file {bam_300x} does not exist")
+    
+    if not os.path.exists(bam_30x):
+        raise FileNotFoundError(f"The 30x BAM file {bam_30x} does not exist")
+    
+    if not os.path.exists(realigned_bam):
+        raise FileNotFoundError(f"The realigned BAM file {realigned_bam} does not exist")
+
+    if not os.path.exists(reference_genome):
+        raise FileNotFoundError(f"The reference genome {reference_genome} does not exist")
     
     # Load the unique variants into a pysam VCF file
     unique_variants = pysam.VariantFile(unique_variants_file)
     
     # Prepare the output DataFrame
-    output_df = pd.DataFrame(columns=['CHROM', 'POS', 'REF', 'ALT', '300x_REF', '300x_ALT', '30x_REF', '30x_ALT', 'REALIGNED_REF', 'REALIGNED_ALT', 'MISALIGNED_ALT'])
+    output_df = pd.DataFrame(columns=['CHROM', 'POS', 'REF', 'ALT', '300x_DP', '300x_ALT', '30x_DP', '30x_ALT', 'REALIGNED_DP', 'REALIGNED_ALT'])
     
     # Iterate over the unique variants and extract allele depths
     idx = 0
     for variant in unique_variants:
-        allele_depths = extract_allele_depths(variant, bam_300x, bam_30x, reference_genome)
+        allele_depths = extract_allele_depths(variant, bam_300x, bam_30x, realigned_bam, reference_genome)
         
-        output_df.loc[idx] = [variant.chrom, variant.pos, variant.ref, variant.alts[0], 
-                              allele_depths['300x']['ref'], allele_depths['300x']['alt_1'], 
-                              allele_depths['30x']['ref'], allele_depths['30x']['alt_1'], 
-                              allele_depths['realigned']['ref'], allele_depths['realigned']['alt'], 
-                              allele_depths['realigned']['misaligned_alt']]
-        idx += 1
+        for alt in variant.alts:
+            output_df.loc[idx] = [variant.chrom, variant.pos, variant.ref, alt, 
+                                  allele_depths['300x']['DP'], allele_depths['300x'].get(alt, 0) if allele_depths['300x']['DP'] > 0 else np.nan, 
+                                  allele_depths['30x']['DP'], allele_depths['30x'].get(alt, 0) if allele_depths['30x']['DP'] > 0 else np.nan, 
+                                  allele_depths['realigned']['DP'], allele_depths['realigned'].get(alt, 0) if allele_depths['realigned']['DP'] > 0 else np.nan]
+            idx += 1
     
     # Use test_vcf to offer a column of GT
     output_meta_table = test_vcf.replace(".vcf.gz", ".missing_TP_meta.tsv")
@@ -263,10 +291,16 @@ def main_function(golden_vcf, test_vcf, bam_300x, bam_30x, reference_genome):
     logger.info(f"The final meta table is stored at {output_meta_table}. And it looks like:\n{output_df[:10].to_string(index=False)}\n")
 
     # Now we can use the table to identify the variants that are missing because lost of alternative alleles in the down-sample process
-    lost_alt_variant_bools = (output_df['30x_ALT'] == 0) | \
-                             (output_df['REALIGNED_ALT'] == 0) | \
-                             (output_df['30x_ALT'].isna())
-    lost_alt_variants = output_df[lost_alt_variant_bools]
+    true_allele_absent = np.logical_and(output_df['REALIGNED_ALT'] <= 1, output_df['300x_ALT'] <= 1) | \
+                         np.logical_and(output_df['REALIGNED_ALT'].isna(), output_df['300x_ALT'].isna())
+    
+    true_allele_lost = np.logical_and(output_df['30x_ALT'] == 0, output_df['300x_ALT'] > 0) | \
+                       np.logical_and(output_df['30x_ALT'].isna(), output_df['300x_ALT'] > 0) | \
+                       np.logical_or(output_df['REALIGNED_ALT'] == 0, output_df['REALIGNED_ALT'].isna())
+
+    serious_allele_bias = np.logical_and((output_df['30x_ALT']/(output_df['30x_DP']) <= 0.1), (output_df['REALIGNED_ALT']/(output_df['REALIGNED_DP']) <= 0.1))
+    excl_tp_bools = true_allele_absent | true_allele_lost | serious_allele_bias
+    lost_alt_variants = output_df[excl_tp_bools]
 
     # Now we need to remove those variants from the golden_vcf and output a new golden vcf without them
     lost_alt_variants_df = lost_alt_variants[['CHROM', 'POS', 'REF', 'ALT']]
@@ -291,23 +325,25 @@ def main_function(golden_vcf, test_vcf, bam_300x, bam_30x, reference_genome):
 
 if __name__ == "__main__":
     # Just use argparse to parse the command line arguments
-    # Allow 6 arguments: 
+    # Allow 7 arguments: 
     # 1. The path to the golden_vcf file
     # 2. The path to the vcf file to be tested
     # 3. The path to the output directory of the vcf file uniq to golden_vcf (the output of bcftools isec)
     # 4. The path to the BAM file with 300x coverage
     # 5. The path to the BAM file with downsampled 30x coverage
-    # 6. The path to the reference genome
+    # 6. The path to the realigned BAM file
+    # 7. The path to the reference genome
     # Thats all
     parser = ap.ArgumentParser(description="Identify allele bias in a VCF file")
     parser.add_argument("-gv", "--golden_vcf", type=str, help="Path to the golden VCF file")
     parser.add_argument("-tv", "--test_vcf", type=str, help="Path to the VCF file to be tested")
     parser.add_argument("--bam_300x", type=str, help="Path to the BAM file with 300x coverage")
     parser.add_argument("--bam_30x", type=str, help="Path to the BAM file with 30x coverage")
+    parser.add_argument("--realigned_bam", type=str, help="Path to the realigned BAM file")
     parser.add_argument("-rg", "--reference_genome", type=str, help="Path to the reference genome")
     args = parser.parse_args()
 
     # Call the main function with the parsed arguments
-    main_function(args.golden_vcf, args.test_vcf, args.bam_300x, args.bam_30x, args.reference_genome)
+    main_function(args.golden_vcf, args.test_vcf, args.bam_300x, args.bam_30x, args.realigned_bam, args.reference_genome)
 
 
