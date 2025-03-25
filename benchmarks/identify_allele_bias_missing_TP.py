@@ -134,7 +134,6 @@ def stat_ad_to_dict(bam_file, ref_genome, region = None, empty_dict={}, logger =
 
         # Initialize the nested dictionary
         nested_ad_dict = {chrom: {} for chrom in ad_table["chrom"].unique()}
-        column_width = alt_expanded.shape[1]
 
         # Iterate over the rows of dfA and dfB
         for i in range(len(ad_table)):
