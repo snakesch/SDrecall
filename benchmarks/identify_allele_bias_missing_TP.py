@@ -8,8 +8,6 @@ import os
 import subprocess
 import tempfile
 from subprocess import PIPE
-bash_utils_hub = "/paedyl01/disk1/yangyxt/ngs_scripts/common_bash_utils.sh"
-
 
 
 logger = logging.getLogger(__name__)
@@ -143,23 +141,24 @@ def stat_ad_to_dict(bam_file, ref_genome, region = None, empty_dict={}, logger =
             chrom = ad_table.iloc[i, 0]
             pos = ad_table.iloc[i, 1] # position
             ref = ad_table.iloc[i, 2] # reference allele
-            alts = alt_expanded.iloc[i, :].dropna().unique() # alternative alleles
-            allele_depth = ad_expanded.iloc[i, :].dropna().astype(int) # allele depths
+            alts = alt_expanded.iloc[i, :].dropna().unique().tolist() # alternative alleles
+            allele_depths = ad_expanded.iloc[i, :].dropna().astype(int).tolist() # allele depths
 
-            if pd.isna(allele_depth).all():
+            if pd.isna(allele_depths).all():
                 continue
 
             if len(alts) == 0:
                 logger.warning(f"The ALT alleles are null for the row {i} of the ad table: \n{ad_table.iloc[i, :].to_string(index=False)}\n")
                 continue
 
-            total_dp = allele_depth.sum()
+            total_dp = allele_depths.sum()
 
             # Initialize the inner dictionary if the outer key is not present
             if pos not in nested_ad_dict[chrom]:
                 nested_ad_dict[chrom][pos] = empty_dict
             
-            for alt in alts:
+            assert len(alts) == len(allele_depths), f"The number of alternative alleles and the number of allele depths are not the same at {chrom}:{pos} in bam file {bam_file}"
+            for alt, allele_depth in zip(alts, allele_depths):
                 # Now we need to handle insertions
                 if len(alt) > len(ref) and len(ref) > 1:
                     assert ref[0] == alt[0], f"The reference allele and the alternative allele have different first base: {ref} and {alt} at {chrom}:{pos} in bam file {bam_file}"
