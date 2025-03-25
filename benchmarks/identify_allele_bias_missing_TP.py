@@ -142,7 +142,7 @@ def stat_ad_to_dict(bam_file, ref_genome, region = None, empty_dict={}, logger =
             pos = ad_table.iloc[i, 1] # position
             ref = ad_table.iloc[i, 2] # reference allele
             alts = alt_expanded.iloc[i, :].dropna().unique().tolist() # alternative alleles
-            allele_depths = ad_expanded.iloc[i, :].dropna().astype(int).tolist() # allele depths
+            allele_depths = ad_expanded.iloc[i, 1:].dropna().astype(int).tolist() # allele depths
 
             if pd.isna(allele_depths).all():
                 continue
@@ -151,7 +151,7 @@ def stat_ad_to_dict(bam_file, ref_genome, region = None, empty_dict={}, logger =
                 logger.warning(f"The ALT alleles are null for the row {i} of the ad table: \n{ad_table.iloc[i, :].to_string(index=False)}\n")
                 continue
 
-            total_dp = allele_depths.sum()
+            total_dp = sum(allele_depths)
 
             # Initialize the inner dictionary if the outer key is not present
             if pos not in nested_ad_dict[chrom]:

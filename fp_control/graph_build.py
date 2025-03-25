@@ -11,7 +11,7 @@ from src.utils import executeCmd
 from src.suppress_warning import *
 from fp_control.numba_operators import any_false_numba, numba_sum
 from fp_control.bam_ncls import overlap_qname_idx_iterator
-from fp_control.pairwise_read_inspection import determine_same_haplotype, get_read_id, get_hapvector_from_cigar, get_errorvector_from_cigar
+from fp_control.pairwise_read_inspection import determine_same_haplotype
 from src.log import logger
 
 
@@ -19,9 +19,9 @@ def stat_ad_to_dict(bam_file, empty_dict, logger = logger):
     # Build up an AD query dict by bcftools mpileup
     bam_ad_file = f"{bam_file}.ad"
     cmd = f"""bcftools mpileup -Ou --no-reference -a FORMAT/AD --indels-2.0 -q 10 -Q 15 {bam_file} | \
-              bcftools query -f '%CHROM\\t%POS\\t%ALT\\t[%AD]\\n' - > {bam_ad_file}"""
+              bcftools query -f '%CHROM\\t%POS\\t%REF\\t%ALT\\t[%AD]\\n' - > {bam_ad_file}"""
     executeCmd(cmd, logger = logger)
-    ad_table = pd.read_table(bam_ad_file, header = None, sep = "\t", names = ["chrom", "pos", "alt", "ad"], dtype = {"chrom": str, "pos": int, "alt": str, "ad": str}, na_values=["", "<*>"]).dropna(subset = ["alt"])
+    ad_table = pd.read_table(bam_ad_file, header = None, sep = "\t", names = ["chrom", "pos", "ref", "alt", "ad"], dtype = {"chrom": str, "pos": int, "ref": str, "alt": str, "ad": str}, na_values=["", "<*>"]).dropna(subset = ["alt"])
     ad_expanded = ad_table["ad"].str.split(",", expand=True).replace({None: np.nan, "": np.nan, "0": np.nan}).astype(float).dropna(axis = 1, how = "all")
     alt_expanded = ad_table["alt"].str.rstrip(",<*>").str.split(",", expand=True).replace({None: np.nan, "": np.nan}).dropna(axis = 1, how = "all")
 
@@ -37,39 +37,55 @@ def stat_ad_to_dict(bam_file, empty_dict, logger = logger):
     nested_ad_dict = {chrom: {} for chrom in ad_table["chrom"].unique()}
     column_width = alt_expanded.shape[1]
 
-	# Not intended to handle insertions and deletions because they are rarely are due to low quality single bases. 
+    # Not intended to handle insertions and deletions because they are rarely are due to low quality single bases. 
     base_dict = {"A": np.int8(0), "T": np.int8(1), "C": np.int8(2), "G": np.int8(3), "N": np.int8(4), "DP": np.int8(5)}
 
     # Iterate over the rows of dfA and dfB
     for i in range(len(ad_table)):
         chrom = ad_table.iloc[i, 0]
-        outer_key = ad_table.iloc[i, 1] # position
-        inner_key = base_dict.get(alt_expanded.iloc[i, 0], None) # first allele
-        value = np.int16(ad_expanded.iloc[i, 0])
+        position = ad_table.iloc[i, 1] # position
+        ref_allele = ad_table.iloc[i, 2]
+        alt_alleles = alt_expanded.iloc[i, :] # first allele
+        ref_depth = np.int16(ad_expanded.iloc[i, 0])
+        alt_depths = np.int16(ad_expanded.iloc[i, 1:])
 
-        if pd.isna(value):
+        if pd.isna(ref_depth):
+            logger.warning(f"The reference depth is NA for the row {i} at {chrom}:{position} of the ad table which is: \n{ad_table.iloc[i, :].to_string(index=False)}\n")
             continue
 
-        if inner_key is None:
-            logger.warning(f"The inner key is None for the row {i} of the ad table: \n{ad_table.iloc[i, :].to_string(index=False)}\n")
-            continue
+        total_dp = ad_expanded.iloc[i, :].dropna().sum()
 
-        total_dp = value
+        if total_dp == 0 or pd.isna(total_dp):
+            logger.warning(f"The total depth is 0 for the row {i} at {chrom}:{position} of the ad table which is: \n{ad_table.iloc[i, :].to_string(index=False)}\n")
+            continue
 
         # Initialize the inner dictionary if the outer key is not present
-        if outer_key not in nested_ad_dict[chrom]:
-            nested_ad_dict[chrom][outer_key] = empty_dict
-        # Add the first pair of inner key-value
-        nested_ad_dict[chrom][outer_key][inner_key] = value
+        if position not in nested_ad_dict[chrom]:
+            nested_ad_dict[chrom][position] = empty_dict
 
-        # Check for the second pair of inner key-value
-        for c in range(1, column_width):
-            if not pd.isna(ad_expanded.iloc[i, c]) and not pd.isna(alt_expanded.iloc[i, c]):
-                nested_ad_dict[chrom][outer_key][base_dict[alt_expanded.iloc[i, c]]] = np.int16(ad_expanded.iloc[i, c])
-                total_dp += np.int16(ad_expanded.iloc[i, c])
-
-        nested_ad_dict[chrom][outer_key][base_dict["DP"]] = np.int16(total_dp)
+        nested_ad_dict[chrom][position][base_dict["DP"]] = np.int16(total_dp)
     
+        # Check for the second pair of inner key-value
+        for c in range(0, column_width):
+            alt_allele = alt_alleles[c]
+            if pd.isna(alt_allele):
+                continue
+            if pd.isna(alt_depths[c]):
+                continue
+            if len(ref_allele) > len(alt_allele):
+                continue
+            if len(ref_allele) < len(alt_allele):
+                continue
+            if len(ref_allele) == len(alt_allele) and len(alt_allele) > 1:
+                diff_indx = [i for i in range(len(ref_allele)) if ref_allele[i] != alt_allele[i]]
+                assert len(diff_indx) == 1, f"The reference allele and the alternate allele are of the same length but there are more than one difference at {chrom}:{position} of the ad table which is: \n{ad_table.iloc[i, :].to_string(index=False)}\n"
+                logger.warning(f"The reference allele and the alternate allele are of the same length but there are more than 1 bases at the allele and they should differ at {chrom}:{position} of the ad table which is: \n{ad_table.iloc[i, :].to_string(index=False)}\n")
+                diff_indx = diff_indx[0]
+                alt_allele = alt_allele[diff_indx]
+
+            # Now the remaining ref-alt pair is a SNV
+            nested_ad_dict[chrom][position][base_dict[alt_allele]] = np.int16(alt_depths[c])
+
     return nested_ad_dict
 
 
