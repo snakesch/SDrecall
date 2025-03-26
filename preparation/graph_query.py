@@ -138,6 +138,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                                         avg_frag_size = 500, 
                                         std_frag_size = 150, 
                                         threads = 12,
+                                        mean_read_length = 147,
                                         logger = logger):
     '''
     Returns:
@@ -154,7 +155,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
 
     unfiltered_graph = directed_graph.copy()
     # Filter out small SDs
-    cutoff = max(140, avg_frag_size - 1 * std_frag_size)
+    cutoff = max(mean_read_length, avg_frag_size - 1 * std_frag_size)
     tobe_removed_nodes = []
     for node in directed_graph.nodes(data=True):
         size = float(node[0][2]) - float(node[0][1])
@@ -209,7 +210,8 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
                                               repeat(reference_fasta),
                                               repeat(tmp_dir),
                                               repeat(avg_frag_size), 
-                                              repeat(std_frag_size)))
+                                              repeat(std_frag_size),
+                                              repeat(mean_read_length)))
 
         # Instead of creating a NetworkX graph, create a graph-tool graph directly
         connected_qnodes_gt = gt.Graph(directed=False)

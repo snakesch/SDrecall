@@ -583,7 +583,7 @@ def determine_same_haplotype(read, other_read,
     # We need to cut N output comparison for read_seq and other_seq
     
     total_match = compare_sequences(read_seq, other_seq, np.int8(4))
-    logger.debug(f"The total match between {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} is {total_match}, the query sequence of {read_id} is {read_seq.tolist()}, and the query sequence of {other_read_id} is {other_seq.tolist()}")
+    # logger.debug(f"The total match between {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} is {total_match}, the query sequence of {read_id} is {read_seq.tolist()}, and the query sequence of {other_read_id} is {other_seq.tolist()}")
 
     identical_idx = numba_compare(interval_hap_vector, interval_other_hap_vector)
     identical_part = numba_bool_indexing(interval_hap_vector, identical_idx)

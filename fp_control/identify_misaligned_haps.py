@@ -673,8 +673,7 @@ def inspect_by_haplotypes(input_bam,
                           total_genomic_haps,
                           read_ref_pos_dict,
                           compare_haplotype_meta_tab = "",
-                          mean_read_length = 150,
-                          tmp_dir = "/tmp",
+                          mean_read_length = 148,
                           logger = logger):
     _, read_dict, _, qname_idx_dict, _ = bam_ncls
     record_dfs = []

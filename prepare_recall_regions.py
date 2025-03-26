@@ -11,8 +11,9 @@ from preparation import *
 from src.log import logger, configure_logger
 from src.suppress_warning import *
 from src.utils import is_file_up_to_date, executeCmd
-
 from src.const import SDrecallPaths
+
+from fp_control.bam_ncls import calculate_mean_read_length
 
 
 def save_connected_qnodes_to_graphml(g, output_path, logger = logger):
@@ -195,6 +196,7 @@ def prepare_recall_regions( paths: SDrecallPaths,
 
     # Step 5. Pool all SD nodes and the corresponding paralogous regions from the SD + PO graph
     final_graph_path = paths.annotated_graph_path()
+    mean_read_length = calculate_mean_read_length(input_bam)
     sd_paralog_pairs, connected_qnode_graph = extract_SD_paralog_pairs_from_graph( query_nodes, 
                                                                                     graph, 
                                                                                     graph_path = final_graph_path, 
@@ -202,6 +204,7 @@ def prepare_recall_regions( paths: SDrecallPaths,
                                                                                     tmp_dir = paths.tmp_dir,
                                                                                     avg_frag_size = avg_frag_size, 
                                                                                     std_frag_size = std_frag_size, 
+                                                                                    mean_read_length = mean_read_length,
                                                                                     threads=threads )
     # Save the connected qnodes graph (graph-tool graph) to a GRAPHML file
     connected_qnodes_graph_path = paths.qnode_grouping_graph()

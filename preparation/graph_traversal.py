@@ -15,6 +15,7 @@ def inspect_cnode_along_route(graph,
                               edges, 
                               avg_frag_size = 500, 
                               std_frag_size = 150,
+                              mean_read_length = 147,
                               logger = logger):
     qnode = HOMOSEQ_REGION(verts[0], graph)
     for i in range(0, len(edges)):
@@ -49,7 +50,7 @@ def inspect_cnode_along_route(graph,
             qnode.rela_start = qnode_overlap_start
             qnode.rela_end = qnode_overlap_end
             
-            if qnode_overlap_size <= max(avg_frag_size - 2 * std_frag_size, 140):
+            if qnode_overlap_size <= max(mean_read_length, avg_frag_size - 2 * std_frag_size):
                 # 0.05 quantile in insert size distribution
                 logger.debug(f"The overlapping region for (cnode is {cnode}) query node {qnode}, ({qnode.chrom}:{qnode.start + qnode_overlap_start}-{qnode.start + qnode_overlap_end}) is too small, the traverse route ends here: {list(qnode.traverse_route) + [(qnode, 'overlap')]}")
                 return None
@@ -63,7 +64,7 @@ def inspect_cnode_along_route(graph,
                 cnode.rela_start = cnode_rela_start
                 cnode.rela_end = cnode_rela_end
 
-                if cnode_rela_end - cnode_rela_start <= max(avg_frag_size - 2 * std_frag_size, 140):
+                if cnode_rela_end - cnode_rela_start <= max(mean_read_length, avg_frag_size - 2 * std_frag_size):
                     logger.debug(f"The cnode segment ({cnode}) is too small. Skipping ... ")
                     return None
                     
@@ -214,6 +215,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
                                           tmp_dir = "/tmp",
                                           avg_frag_size = 500, 
                                           std_frag_size = 150,
+                                          mean_read_length = 147,
                                           logger = logger):
     '''
     ori_qnode: HOMOSEQ_REGION object
@@ -269,6 +271,7 @@ def summarize_shortest_paths_per_subgraph(ori_qnode,
                                           shortest_path_edges, 
                                           avg_frag_size, 
                                           std_frag_size, 
+                                          mean_read_length,
                                           logger = logger)
         
         if cnode:
@@ -307,6 +310,7 @@ def traverse_network_to_get_homology_counterparts(qnode,
                                                   tmp_dir = "/tmp",
                                                   avg_frag_size=500, 
                                                   std_frag_size=150,
+                                                  mean_read_length = 147,
                                                   logger = logger):
     '''
     The input directed graph is only the subgraph that containing the qnode (which is a tuple instead of an integer index)
@@ -340,6 +344,7 @@ def traverse_network_to_get_homology_counterparts(qnode,
                                                                             tmp_dir = tmp_dir,
                                                                             avg_frag_size = avg_frag_size, 
                                                                             std_frag_size = std_frag_size,
+                                                                            mean_read_length = mean_read_length,
                                                                             logger = logger)
         counterparts_nodes += [t[0] for t in cnodes if t[1] >= 0.95]
         total_query_counter_nodes += query_counter_nodes  # Use loosen similarity threshold to include more query nodes, improving graph coloring for better partitioning the realign groups

@@ -70,6 +70,8 @@ def stat_ad_to_dict(bam_file, empty_dict, logger = logger):
             alt_allele = alt_alleles[c]
             if pd.isna(alt_allele):
                 continue
+            if c >= alt_depths.size:
+                continue
             if pd.isna(alt_depths[c]):
                 continue
             if len(ref_allele) > len(alt_allele):
