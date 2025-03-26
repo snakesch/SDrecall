@@ -562,9 +562,6 @@ def determine_same_haplotype(read, other_read,
         # Cannot tolerate such mismatches
         return False, read_ref_pos_dict, read_hap_vectors, read_error_vectors, total_lowqual_qnames, None
 
-    diff_pos_read = interval_hap_vector[diff_indices]
-    diff_pos_oread = interval_other_hap_vector[diff_indices]
-
     # Now use overlap_start and overlap_end to extract the sequence
     read_seq, qr_idx_arr = get_interval_seq(np.int32(read.reference_start), 
                                             np.int32(overlap_start), 

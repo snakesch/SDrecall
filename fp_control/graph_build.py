@@ -288,7 +288,6 @@ def build_phasing_graph(bam_file,
         return None, None, None, None, None, None, total_lowqual_qnames
 
     qname_check_dict = {}
-    other_qnames = defaultdict(set)
     # Use NCLS read dict to iterate through all the reads to build a graph. One good thing is that every key: value stores a pair of read objects
     total_qname_num = len(ncls_read_dict)
     weight_matrix = np.eye(total_qname_num, dtype=np.float32)
@@ -297,7 +296,6 @@ def build_phasing_graph(bam_file,
     for qname_idx, paired_reads in ncls_read_dict.items():
         qname = ncls_qname_dict[qname_idx]
         assert len(dict.fromkeys(r.query_name for r in paired_reads)) == 1, f"The query names of the reads in the paired_reads are not the same: {paired_reads}"
-
         # Check if the query name already exists in the graph
         if qname not in qname_to_node:
             # Add a new node to the graph
@@ -319,7 +317,7 @@ def build_phasing_graph(bam_file,
             other_reads = ncls_read_dict[qidx]
             # Get the query name
             other_qname = other_reads[0].query_name
-            other_qnames[qname].add(other_qname)
+
             if qname == other_qname:
                 continue
                 
@@ -338,6 +336,11 @@ def build_phasing_graph(bam_file,
                 continue
 
             qname_check_dict[(int(qv), int(oqv))] = True
+
+            if qname in total_lowqual_qnames or other_qname in total_lowqual_qnames:
+                weight_matrix[int(qv), int(oqv)] = -1
+                weight_matrix[int(oqv), int(qv)] = -1
+                continue
 
             # Inspect the overlap between the two pairs of reads
             overlap_intervals = get_overlap_intervals(paired_reads, other_reads, logger = logger)
@@ -359,6 +362,8 @@ def build_phasing_graph(bam_file,
                                                                   overlap_start, overlap_end)
                 # logger.debug(f"Found the uncovered regions {uncovered_overlaps} for the reads {read1.query_name} and {read2.query_name} in the overlap region ({chrom}:{overlap_start}-{overlap_end})")
                 for row_ind in range(uncovered_overlaps.shape[0]):
+                    if other_qname in total_lowqual_qnames or qname in total_lowqual_qnames:
+                        break
                     uncovered_start, uncovered_end = uncovered_overlaps[row_ind, 0], uncovered_overlaps[row_ind, 1]
                     bool_res, read_ref_pos_dict, read_hap_vectors, read_error_vectors, total_lowqual_qnames, read_weight = determine_same_haplotype(read1, read2,
                                                                                                                                                     uncovered_start, uncovered_end,
@@ -371,6 +376,7 @@ def build_phasing_graph(bam_file,
                                                                                                                                                     mean_read_length = mean_read_length,
                                                                                                                                                     empty_dict = empty_dict,
                                                                                                                                                     logger = logger)
+                    
                     if np.isnan(bool_res):
                         qname_bools[n] = 0
                     elif bool_res:
@@ -394,6 +400,12 @@ def build_phasing_graph(bam_file,
                     
                 inspected_overlaps.add(overlap_start, overlap_end)
                 n += 1
+
+            if other_qname in total_lowqual_qnames or qname in total_lowqual_qnames:
+                weight_matrix[int(qv), int(oqv)] = -1
+                weight_matrix[int(oqv), int(qv)] = -1
+                continue
+
             qname_bools = qname_bools[:n]
             pair_weight = 0 if pair_weight is None else pair_weight
             pair_weight = pair_weight if pair_weight > 0 else 1e-4
