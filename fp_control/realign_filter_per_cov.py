@@ -239,6 +239,7 @@ def realign_filter_per_cov(bam,
                                                                                                                                                           qname_dict,
                                                                                                                                                           mean_read_length,
                                                                                                                                                           total_lowqual_qnames,
+                                                                                                                                                          ref_genome,
                                                                                                                                                           logger = logger)
     if phased_graph is None:
         return None, None, None

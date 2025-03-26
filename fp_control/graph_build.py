@@ -15,20 +15,30 @@ from fp_control.pairwise_read_inspection import determine_same_haplotype
 from src.log import logger
 
 
-def stat_ad_to_dict(bam_file, empty_dict, logger = logger):
+def stat_ad_to_dict(bam_file, empty_dict, reference_genome, logger = logger):
     # Build up an AD query dict by bcftools mpileup
     bam_ad_file = f"{bam_file}.ad"
-    cmd = f"""bcftools mpileup -Ou --no-reference -a FORMAT/AD --indels-2.0 -q 10 -Q 15 {bam_file} | \
+    cmd = f"""bcftools mpileup -Ou --fasta-ref {reference_genome} -a FORMAT/AD --indels-2.0 -q 10 -Q 15 {bam_file} | \
               bcftools query -f '%CHROM\\t%POS\\t%REF\\t%ALT\\t[%AD]\\n' - > {bam_ad_file}"""
     executeCmd(cmd, logger = logger)
-    ad_table = pd.read_table(bam_ad_file, header = None, sep = "\t", names = ["chrom", "pos", "ref", "alt", "ad"], dtype = {"chrom": str, "pos": int, "ref": str, "alt": str, "ad": str}, na_values=["", "<*>"]).dropna(subset = ["alt"])
-    ad_expanded = ad_table["ad"].str.split(",", expand=True).replace({None: np.nan, "": np.nan, "0": np.nan}).astype(float).dropna(axis = 1, how = "all")
-    alt_expanded = ad_table["alt"].str.rstrip(",<*>").str.split(",", expand=True).replace({None: np.nan, "": np.nan}).dropna(axis = 1, how = "all")
-
-    if alt_expanded.shape[1] < 1 or ad_expanded.shape[1] <= 1:
+    ad_table = pd.read_table(bam_ad_file, header = None, sep = "\t", names = ["chrom", "pos", "ref", "alt", "ad"], dtype = {"chrom": str, "pos": int, "ref": str, "alt": str, "ad": str}, na_values=["", "<*>"])
+    if ad_table.dropna(subset = ["alt"]).shape[0] < 1:
         logger.warning(f"No ALT allele found in this BAM file. Skip this entire script")
-        logger.warning(f"Look at the two dataframes now: \n{alt_expanded.to_string(index=False)}\n{ad_expanded.to_string(index=False)}\n")
+        logger.warning(f"Check the {bam_ad_file} or take a look at the original dataframes now: \n{ad_table.to_string(index=False)}\n")
         return None
+    ad_table.dropna(subset = ["alt"], inplace = True)
+    ad_expanded = ad_table["ad"].str.split(",", expand=True).replace({None: np.nan, "": np.nan, "0": np.nan}).astype(float)
+    
+    # Fix: Instead of using subset, we'll filter columns directly
+    if ad_expanded.shape[1] > 1:
+        # Keep column 0 (reference) and any non-alt columns that have at least one non-NA value
+        cols_to_keep = [0]  # Always keep reference column
+        for col in ad_expanded.columns[1:]:
+            if not ad_expanded[col].isna().all():
+                cols_to_keep.append(col)
+        ad_expanded = ad_expanded[cols_to_keep]
+    
+    alt_expanded = ad_table["alt"].str.rstrip(",<*>").str.split(",", expand=True).replace({None: np.nan, "": np.nan}).dropna(axis = 1, how = "all")
 
     logger.debug("The AD expanded table looks like: \n{}\nThe ALT expanded table looks like: \n{}\n".format(ad_expanded.loc[~ad_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False),
                                                                                                             alt_expanded.loc[~alt_expanded.iloc[:, -1].isna(), :][:10].to_string(index=False)))
@@ -195,6 +205,7 @@ def build_phasing_graph(bam_file,
                         ncls_qname_dict,
                         mean_read_length,
                         total_lowqual_qnames,
+                        reference_genome,
                         logger = logger):
     '''
     Construct a phasing graph from BAM data for efficient haplotype identification.
@@ -282,7 +293,7 @@ def build_phasing_graph(bam_file,
 
     # Create a dictionary to store Allele Depth for each position
     empty_dict = Dict.empty(key_type=types.int8, value_type=types.int16)
-    nested_ad_dict = stat_ad_to_dict(bam_file, empty_dict, logger = logger)
+    nested_ad_dict = stat_ad_to_dict(bam_file, empty_dict, reference_genome, logger = logger)
     if nested_ad_dict is None:
         logger.warning(f"No ALT allele found in this BAM file. Skip this entire script")
         return None, None, None, None, None, None, total_lowqual_qnames
