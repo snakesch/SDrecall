@@ -501,7 +501,7 @@ def psv_shared_snvs(interval_hap_vector, interval_other_hap_vector,
     snv_indices = numba_find_shared_snvs(interval_hap_vector, interval_other_hap_vector)
     
     if len(snv_indices) == 0:
-        return []
+        return 0, 0
     
     # Convert to genomic coordinates
     genomic_positions = overlap_start + snv_indices
