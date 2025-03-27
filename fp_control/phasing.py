@@ -116,7 +116,7 @@ def find_cliques_in_components(graph, weight_matrix, ew_cutoff = 0.201, logger =
                     continue
                 else:
                     # logger.info(f"The clique is big enough to be directly yielded")
-                    yield clique
+                    yield "main_round", clique
 
     logger.info(f"Remaining {len(small_row_indices)} vertices that are not included in the cliques. Here we find cliques again among them:\n{small_row_indices}")
 
@@ -130,7 +130,7 @@ def find_cliques_in_components(graph, weight_matrix, ew_cutoff = 0.201, logger =
         cliques_iter = gce_algorithm(selected_indices, small_weight_matrix, cutoff = ew_cutoff/2, logger = logger)
         for clique in cliques_iter:
             # logger.debug(f"Second round (edge weight cutoff = {ew_cutoff/2}): Receiving a clique containing {[graph.vertex_properties['qname'][qid] for qid in clique]} in the small weight matrix")
-            yield clique
+            yield "second_round", clique
 
 
 
@@ -149,7 +149,7 @@ def find_components_inside_filtered_cliques(final_cliques,
     '''
 
     haplotype_idx = 0
-    for clique in final_cliques:
+    for round, clique in final_cliques:
         # Prepare a boolean v property map used for vfilt
         vertex_filter = graph.new_vertex_property("bool", val=False)
         # Set the filter to True for vertices in the list
@@ -179,7 +179,7 @@ def find_components_inside_filtered_cliques(final_cliques,
             for v in vs:
                 final_components[v] = haplotype_idx
             qnames = "\n".join([graph.vertex_properties['qname'][graph.vertex(v)] for v in vs])
-            # logger.debug(f"Assigning \n{qnames}\nto the haplotype group {haplotype_idx}")
+            logger.debug(f"Assigning \n{qnames}\nto the haplotype group {haplotype_idx}, which is identified in the {round} round")
             haplotype_idx += 1
 
     # logger.info(f"This is the final components: {final_components}")

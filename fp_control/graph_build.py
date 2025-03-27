@@ -15,10 +15,10 @@ from fp_control.pairwise_read_inspection import determine_same_haplotype
 from src.log import logger
 
 
-def stat_ad_to_dict(bam_file, empty_dict, reference_genome, logger = logger):
+def stat_ad_to_dict(bam_file, empty_dict, reference_genome, base_dict = {"A": np.int8(0), "T": np.int8(1), "C": np.int8(2), "G": np.int8(3), "N": np.int8(4)}, logger = logger):
     # Build up an AD query dict by bcftools mpileup
     bam_ad_file = f"{bam_file}.ad"
-    cmd = f"""bcftools mpileup -Ou --fasta-ref {reference_genome} -a FORMAT/AD --indels-2.0 -q 10 -Q 15 {bam_file} | \
+    cmd = f"""bcftools mpileup -Ou --fasta-ref {reference_genome} -a FORMAT/AD --indels-2.0 -q 10 -Q 10 {bam_file} | \
               bcftools query -f '%CHROM\\t%POS\\t%REF\\t%ALT\\t[%AD]\\n' - > {bam_ad_file}"""
     executeCmd(cmd, logger = logger)
     ad_table = pd.read_table(bam_ad_file, header = None, sep = "\t", names = ["chrom", "pos", "ref", "alt", "ad"], dtype = {"chrom": str, "pos": int, "ref": str, "alt": str, "ad": str}, na_values=["", "<*>"])
@@ -28,7 +28,6 @@ def stat_ad_to_dict(bam_file, empty_dict, reference_genome, logger = logger):
         return None
     ad_table.dropna(subset = ["alt"], inplace = True)
     ad_expanded = ad_table["ad"].str.split(",", expand=True).replace({None: np.nan, "": np.nan, "0": np.nan}).astype(float)
-    
     # Fix: Instead of using subset, we'll filter columns directly
     if ad_expanded.shape[1] > 1:
         # Keep column 0 (reference) and any non-alt columns that have at least one non-NA value
@@ -48,7 +47,7 @@ def stat_ad_to_dict(bam_file, empty_dict, reference_genome, logger = logger):
     column_width = alt_expanded.shape[1]
 
     # Not intended to handle insertions and deletions because they are rarely are due to low quality single bases. 
-    base_dict = {"A": np.int8(0), "T": np.int8(1), "C": np.int8(2), "G": np.int8(3), "N": np.int8(4), "DP": np.int8(5)}
+    base_dict["DP"] = np.int8(5)
 
     # Iterate over the rows of dfA and dfB
     for i in range(len(ad_table)):
@@ -75,7 +74,7 @@ def stat_ad_to_dict(bam_file, empty_dict, reference_genome, logger = logger):
 
         # Initialize the inner dictionary if the outer key is not present
         if position not in nested_ad_dict[chrom]:
-            nested_ad_dict[chrom][position] = empty_dict
+            nested_ad_dict[chrom][position] = empty_dict.copy()
 
         nested_ad_dict[chrom][position][base_dict["DP"]] = np.int16(total_dp)
     
@@ -102,6 +101,7 @@ def stat_ad_to_dict(bam_file, empty_dict, reference_genome, logger = logger):
 
             # Now the remaining ref-alt pair is a SNV
             nested_ad_dict[chrom][position][base_dict[alt_allele]] = np.int16(alt_depth)
+            # logger.debug(f"The allele depth for base {alt_allele} at {chrom}:{position} is {alt_depth} and the allele depth looks like {nested_ad_dict[chrom][position]}")
 
     return nested_ad_dict
 
@@ -212,6 +212,7 @@ def build_phasing_graph(bam_file,
                         mean_read_length,
                         total_lowqual_qnames,
                         reference_genome,
+                        base_dict = {"A": np.int8(0), "T": np.int8(1), "C": np.int8(2), "G": np.int8(3), "N": np.int8(4)},
                         logger = logger):
     '''
     Construct a phasing graph from BAM data for efficient haplotype identification.
@@ -299,12 +300,15 @@ def build_phasing_graph(bam_file,
 
     # Create a dictionary to store Allele Depth for each position
     empty_dict = Dict.empty(key_type=types.int8, value_type=types.int16)
-    nested_ad_dict = stat_ad_to_dict(bam_file, empty_dict, reference_genome, logger = logger)
+    # Make sure every value is 0 to initiate the empty dict
+    for key in empty_dict.keys():
+        empty_dict[key] = np.int16(0)
+    nested_ad_dict = stat_ad_to_dict(bam_file, empty_dict, reference_genome, base_dict, logger = logger)
     if nested_ad_dict is None:
         logger.warning(f"No ALT allele found in this BAM file. Skip this entire script")
         return None, None, None, None, None, None, total_lowqual_qnames
     
-    intrinsic_ad_dict = stat_ad_to_dict(intrinsic_bam, empty_dict, reference_genome, logger = logger)
+    intrinsic_ad_dict = stat_ad_to_dict(intrinsic_bam, empty_dict, reference_genome, base_dict, logger = logger)
     if intrinsic_ad_dict is None: intrinsic_ad_dict = {}
 
     qname_check_dict = {}
@@ -357,9 +361,16 @@ def build_phasing_graph(bam_file,
 
             qname_check_dict[(int(qv), int(oqv))] = True
 
-            if qname in total_lowqual_qnames or other_qname in total_lowqual_qnames:
+            if qname in total_lowqual_qnames:
                 weight_matrix[int(qv), int(oqv)] = -1
                 weight_matrix[int(oqv), int(qv)] = -1
+                # logger.debug(f"The read pair {qname} is low quality, skip inspecting this pair of fragments")
+                continue
+
+            if other_qname in total_lowqual_qnames:
+                weight_matrix[int(qv), int(oqv)] = -1
+                weight_matrix[int(oqv), int(qv)] = -1
+                # logger.debug(f"The read pair {other_qname} is low quality, skip inspecting this pair of fragments")
                 continue
 
             # Inspect the overlap between the two pairs of reads
@@ -382,7 +393,11 @@ def build_phasing_graph(bam_file,
                                                                   overlap_start, overlap_end)
                 # logger.debug(f"Found the uncovered regions {uncovered_overlaps} for the reads {read1.query_name} and {read2.query_name} in the overlap region ({chrom}:{overlap_start}-{overlap_end})")
                 for row_ind in range(uncovered_overlaps.shape[0]):
-                    if other_qname in total_lowqual_qnames or qname in total_lowqual_qnames:
+                    if other_qname in total_lowqual_qnames:
+                        # logger.debug(f"The read pair {other_qname} is low quality, skip this pair of reads")
+                        break
+                    if qname in total_lowqual_qnames:
+                        # logger.debug(f"The read pair {qname} is low quality, skip this pair of reads")
                         break
                     uncovered_start, uncovered_end = uncovered_overlaps[row_ind, 0], uncovered_overlaps[row_ind, 1]
                     bool_res, read_ref_pos_dict, read_hap_vectors, read_error_vectors, total_lowqual_qnames, read_weight = determine_same_haplotype(read1, read2,
@@ -396,6 +411,7 @@ def build_phasing_graph(bam_file,
                                                                                                                                                     mean_read_length = mean_read_length,
                                                                                                                                                     empty_dict = empty_dict,
                                                                                                                                                     intrinsic_ad_dict = intrinsic_ad_dict.get(chrom, {}),
+                                                                                                                                                    base_dict = base_dict,
                                                                                                                                                     logger = logger)
                     
                     if np.isnan(bool_res):

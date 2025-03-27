@@ -399,8 +399,8 @@ def tolerate_mismatches_two_seq(read1_package,
     also:
     {A: 0, T: 1, C: 2, G: 3, N: 4}
     '''
-    read1_start, read1_qseq_encoded, read1_qseq_qualities, read1_ref_positions = read1_package
-    read2_start, read2_qseq_encoded, read2_qseq_qualities, read2_ref_positions = read2_package
+    read1_start, read1_qseq_encoded, read1_qseq_qualities, read1_ref_positions, read1_id = read1_package
+    read2_start, read2_qseq_encoded, read2_qseq_qualities, read2_ref_positions, read2_id = read2_package
 
     tolerate_mismatches = []
     for diff_ind in abs_diff_indices:
@@ -410,13 +410,20 @@ def tolerate_mismatches_two_seq(read1_package,
                                              read1_ref_positions,
                                              diff_ind,
                                              nested_ad_dict.get(diff_ind, empty_dict))
-
+        # if seq_err1:
+        #     logger.debug(f"The read {read1_id} has a sequencing artifact at {diff_ind}, which is at base {read1_ref_positions[diff_ind - read1_start]} on the reference genome with base {read1_qseq_encoded[read1_ref_positions[diff_ind - read1_start]]} and base quality {read1_qseq_qualities[read1_ref_positions[diff_ind - read1_start]]}. The allele depth at this position looks like {nested_ad_dict.get(diff_ind, empty_dict)}")
+        # else:
+        #     logger.debug(f"The read {read1_id} does not have a sequencing artifact at {diff_ind}, which is at base {read1_ref_positions[diff_ind - read1_start]} on the reference genome with base {read1_qseq_encoded[read1_ref_positions[diff_ind - read1_start]]} and base quality {read1_qseq_qualities[read1_ref_positions[diff_ind - read1_start]]}. The allele depth at this position looks like {nested_ad_dict.get(diff_ind, empty_dict)}")
         seq_err2 = seq_err_det_stacked_bases(read2_start,
                                              read2_qseq_encoded,
                                              read2_qseq_qualities,
                                              read2_ref_positions,
                                              diff_ind,
                                              nested_ad_dict.get(diff_ind, empty_dict))
+        # if seq_err2:
+        #     logger.debug(f"The read {read2_id} has a sequencing artifact at {diff_ind}, which is at base {read2_ref_positions[diff_ind - read2_start]} on the reference genome with base {read2_qseq_encoded[read2_ref_positions[diff_ind - read2_start]]} and base quality {read2_qseq_qualities[read2_ref_positions[diff_ind - read2_start]]}. The allele depth at this position looks like {nested_ad_dict.get(diff_ind, empty_dict)}")
+        # else:
+        #     logger.debug(f"The read {read2_id} does not have a sequencing artifact at {diff_ind}, which is at base {read2_ref_positions[diff_ind - read2_start]} on the reference genome with base {read2_qseq_encoded[read2_ref_positions[diff_ind - read2_start]]} and base quality {read2_qseq_qualities[read2_ref_positions[diff_ind - read2_start]]}. The allele depth at this position looks like {nested_ad_dict.get(diff_ind, empty_dict)}")
         tolerate_mismatches.append(seq_err1 or seq_err2)
 
     if all(tolerate_mismatches):
@@ -426,7 +433,7 @@ def tolerate_mismatches_two_seq(read1_package,
 
 
 
-def extract_read_qseqs(read, read_ref_pos_dict):
+def extract_read_qseqs(read, read_ref_pos_dict, base_dict = {"A": np.int8(0), "T": np.int8(1), "C": np.int8(2), "G": np.int8(3), "N": np.int8(4)}):
     read_id = get_read_id(read)
     read_start = read.reference_start
 
@@ -435,7 +442,6 @@ def extract_read_qseqs(read, read_ref_pos_dict):
     else:
         qseq_ref_positions = np.array([ idx if idx is not None else -1 for idx in read.get_reference_positions(full_length=True) ], dtype=np.int32)  # An numpy array mapping query sequence index to reference genome index, they are 0-based!
         ref_positions = prepare_ref_query_idx_map(qseq_ref_positions, read_start) # An numpy array mapping reference genome index to query sequence index
-        base_dict = {"A": 0, "C": 1, "G": 2, "T": 3, "N": 4}
         query_sequence_encoded = np.array([ base_dict[base] for base in read.query_sequence ], dtype=np.int8)
         query_sequence_qualities = np.array(read.query_qualities, dtype=np.int8) if read.query_qualities is not None else np.array([np.int8(x) for x in range(0)], dtype=np.int8)
         read_ref_pos_dict[read_id] = (ref_positions, qseq_ref_positions, query_sequence_encoded, query_sequence_qualities)
@@ -455,8 +461,10 @@ def check_noisy_read(read, read_hap_vector, read_error_vectors, logger = logger)
         read_error_vector = get_errorvector_from_cigar(read, read.cigartuples, logger = logger)
         read_error_vectors[read_id] = read_error_vector
 
-    mismatch_err_probs = read_error_vector[read_hap_vector != -1]
-    if numba_sum(mismatch_err_probs > 0.03) >= 3:
+    mismatch_err_probs = read_error_vector[read_hap_vector == -4]
+    err_snvs = numba_sum(mismatch_err_probs > 0.03)
+    if err_snvs >= 3:
+        logger.debug(f"The read {read_id} is noisy, there are {err_snvs} SNVs that are not possible rooted from sequencing errors, mark this pair of reads as low quality")
         return True, read_error_vectors
     
     return False, read_error_vectors
@@ -476,10 +484,11 @@ def numba_find_shared_snvs(vec1, vec2):
 
 
 def psv_shared_snvs(interval_hap_vector, interval_other_hap_vector, 
-                    overlap_start, intrinsic_ad_dict,
+                    overlap_start, overlap_end, intrinsic_ad_dict,
                     read_start, other_start,
                     ref_positions, qseq_ref_positions, query_sequence_encoded,
-                    other_ref_positions, other_qseq_ref_positions, other_query_sequence_encoded):
+                    other_ref_positions, other_qseq_ref_positions, other_query_sequence_encoded,
+                    read_id, other_read_id):
     """
     Extract positions where two overlapping reads share the same SNV and check if supported by AD data.
     Uses get_interval_seq for proper sequence extraction.
@@ -547,11 +556,15 @@ def psv_shared_snvs(interval_hap_vector, interval_other_hap_vector,
             
         # Check if this alt allele is supported in the AD dict
         ad_support = False
+        # logger.debug(f"The read {read_id} and {other_read_id} within {overlap_start}-{overlap_end} have a shared SNV at {pos}")
+        # logger.debug(f"The read {read_id} has an encoded ALT allele {alt_base1} at {pos}, while the read {other_read_id} has an encoded ALT allele {alt_base2} at {pos}")
         if pos in intrinsic_ad_dict:
+            # logger.debug(f"The position (0-indexed) {pos} is in the intrinsic AD dict, which looks like {intrinsic_ad_dict[pos]}")
             if alt_base1 in intrinsic_ad_dict[pos]:
                 ad = intrinsic_ad_dict[pos][alt_base1]
-                if ad > 0: ad_support = True
-            
+                if ad > 0: 
+                    ad_support = True
+                    
         if ad_support: psv_snvs += 1
         
     return psv_snvs, shared_snvs
@@ -569,6 +582,7 @@ def determine_same_haplotype(read, other_read,
                              mean_read_length = 148,
                              empty_dict = {},
                              intrinsic_ad_dict = {},
+                             base_dict = {"A": np.int8(0), "T": np.int8(1), "C": np.int8(2), "G": np.int8(3), "N": np.int8(4)},
                              logger = logger):
     '''
     Determine if two reads belong to the same haplotype based on their overlapping region.
@@ -617,8 +631,8 @@ def determine_same_haplotype(read, other_read,
     read_id = get_read_id(read)
     start = np.int32(read.reference_start)
 
-    ref_positions, qseq_ref_positions, query_sequence_encoded, query_sequence_qualities, read_ref_pos_dict = extract_read_qseqs(read, read_ref_pos_dict)
-    other_ref_positions, other_qseq_ref_positions, other_query_sequence_encoded, other_query_sequence_qualities, read_ref_pos_dict = extract_read_qseqs(other_read, read_ref_pos_dict)
+    ref_positions, qseq_ref_positions, query_sequence_encoded, query_sequence_qualities, read_ref_pos_dict = extract_read_qseqs(read, read_ref_pos_dict, base_dict)
+    other_ref_positions, other_qseq_ref_positions, other_query_sequence_encoded, other_query_sequence_qualities, read_ref_pos_dict = extract_read_qseqs(other_read, read_ref_pos_dict, base_dict)
 
     # qseq_ref_positions is a numpy array mapping query sequence index to reference genome index, it looks like: [1000, 1001, 1002, 1003, -1, -1, 1004, 1005, 1007, 1008] for a CIGAR str 4=2I2=1D2=
     # qseq_seq_encoded is just a numpy array of integers. A:0, C:1, G:2, T:3, N:4
@@ -656,6 +670,7 @@ def determine_same_haplotype(read, other_read,
     # First test whether there are too many mismatches between two reads that we wont tolerate
     if len(diff_indices) >= 3:
         # Cannot tolerate such mismatches
+        # logger.debug(f"The two reads {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} have more than 3 mismatches, which make this two read pairs not tolerant to the mismatches")
         return False, read_ref_pos_dict, read_hap_vectors, read_error_vectors, total_lowqual_qnames, None
 
     # Now use overlap_start and overlap_end to extract the sequence
@@ -678,18 +693,21 @@ def determine_same_haplotype(read, other_read,
     total_match = compare_sequences(read_seq, other_seq, np.int8(4))
     # logger.debug(f"The total match between {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} is {total_match}, the query sequence of {read_id} is {read_seq.tolist()}, and the query sequence of {other_read_id} is {other_seq.tolist()}")
     psv_snv_count, shared_snv_count = psv_shared_snvs(interval_hap_vector, interval_other_hap_vector, 
-                                                      overlap_start, intrinsic_ad_dict,
+                                                      overlap_start, overlap_end,intrinsic_ad_dict,
                                                       start, other_start,
                                                       ref_positions, qseq_ref_positions, query_sequence_encoded,
-                                                      other_ref_positions, other_qseq_ref_positions, other_query_sequence_encoded)
+                                                      other_ref_positions, other_qseq_ref_positions, other_query_sequence_encoded,
+                                                      read_id, other_read_id)
+    
     identical_idx = numba_compare(interval_hap_vector, interval_other_hap_vector)
     identical_part = numba_bool_indexing(interval_hap_vector, identical_idx)
     overlap_span = identical_part.size
     indel_num = count_continuous_indel_blocks(identical_part)
 
     weight = overlap_span + numba_sum(score_arr[:shared_snv_count])
-    weight = weight + mean_read_length * (shared_snv_count - psv_snv_count) / 2
+    weight = weight + mean_read_length * (shared_snv_count - psv_snv_count) * 0.75
     weight = weight + mean_read_length * 3 * indel_num
+    # logger.debug(f"The weight of the read {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} is {weight}, sharing {shared_snv_count} SNVs, {psv_snv_count} PSVs, and {indel_num} indels")
 
     if total_match:
         # logger.debug(f"The two reads {read_id} and {other_read_id} are identical in the overlapping region. The overlap span is {read.reference_name}:{overlap_start}-{overlap_end}. With a weight of {weight}, shared variant count is {var_count}, and shared indel count is {indel_num}. The identical part looks like {identical_part.tolist()}\nThe interval hapvector within overlap region for {read_id} is {interval_hap_vector.tolist()}\nAnd the interval hapvector within overlap region for {other_read_id} is {interval_other_hap_vector.tolist()}")
@@ -720,8 +738,8 @@ def determine_same_haplotype(read, other_read,
             # logger.debug(f"The query sequence within this region for read {read_id} is {read_seq.tolist()}, and the mismatch indices relative to the query sequence are {q_diff_indices.tolist()}")
             # logger.debug(f"The query sequence within this region for read {other_read_id} is {other_seq.tolist()}, and the mismatch indices relative to the reference genome are {r_diff_indices.tolist()}")
             return False, read_ref_pos_dict, read_hap_vectors, read_error_vectors, total_lowqual_qnames, None
-        read_package = (np.int32(read.reference_start), query_sequence_encoded, query_sequence_qualities, ref_positions)
-        other_read_package = (np.int32(other_read.reference_start), other_query_sequence_encoded, other_query_sequence_qualities, other_ref_positions)
+        read_package = (np.int32(read.reference_start), query_sequence_encoded, query_sequence_qualities, ref_positions, read_id)
+        other_read_package = (np.int32(other_read.reference_start), other_query_sequence_encoded, other_query_sequence_qualities, other_ref_positions, other_read_id)
         # logger.info(f"The ref positions that two overlap reads are different are {r_diff_indices.tolist()}, while the read ref start is {read.reference_start} and the other read ref start is {other_read.reference_start}")
         tolerate, tolerated_count = tolerate_mismatches_two_seq(read_package,
                                                                 other_read_package,
@@ -730,8 +748,9 @@ def determine_same_haplotype(read, other_read,
                                                                 empty_dict )
 
         if tolerate:
-            # logger.debug(f"The two reads {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} are tolerant to {tolerated_count} mismatches, with a weight of {weight}")
             weight = weight - tolerated_count * 20
+            # logger.debug(f"The two reads {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} are tolerant to {tolerated_count} mismatches, with a weight of {weight}")
             return True, read_ref_pos_dict, read_hap_vectors, read_error_vectors, total_lowqual_qnames, weight
         else:
+            # logger.debug(f"The two reads {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} are not tolerant to {r_diff_indices.size} mismatches at {r_diff_indices.tolist()}, with a weight of {weight}")
             return False, read_ref_pos_dict, read_hap_vectors, read_error_vectors, total_lowqual_qnames, None

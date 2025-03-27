@@ -107,7 +107,7 @@ def calculate_mean_read_length(bam_file_path, sample_size=100000):
 
 
 
-def is_read_noisy(read, paired, mapq_filter, basequal_median_filter, filter_noisy = True):
+def is_read_noisy(read, paired, mapq_filter, basequal_median_filter=15, filter_noisy = True):
     """Helper function to determine if a read is noisy based on various criteria."""
     if paired:
         # Use short circuit evaluation to speed up the function
@@ -125,7 +125,7 @@ def is_read_noisy(read, paired, mapq_filter, basequal_median_filter, filter_nois
         
         if read.query_qualities is not None:
             return (fast_median(np.array(read.query_qualities, dtype=np.uint8)) <= basequal_median_filter or
-                    numba_sum(np.array(read.query_qualities, dtype=np.uint8) < basequal_median_filter) >= 40 or 
+                    numba_sum(np.array(read.query_qualities, dtype=np.uint8) < basequal_median_filter) >= 50 or 
                     numba_sum(np.array([t[1] for t in read.cigartuples if t[0] == 4], dtype=np.uint16)) >= 20) and filter_noisy
     else:
         if read.is_secondary or \
@@ -139,7 +139,7 @@ def is_read_noisy(read, paired, mapq_filter, basequal_median_filter, filter_nois
             return True
         if read.query_qualities is not None:
             return (fast_median(np.array(read.query_qualities, dtype=np.uint8)) <= basequal_median_filter or
-                    numba_sum(np.array(read.query_qualities, dtype=np.uint8) < basequal_median_filter) >= 40 or 
+                    numba_sum(np.array(read.query_qualities, dtype=np.uint8) < basequal_median_filter) >= 50 or 
                     numba_sum(np.array([t[1] for t in read.cigartuples if t[0] == 4], dtype=np.uint16)) >= 20) and filter_noisy
     return False
 
