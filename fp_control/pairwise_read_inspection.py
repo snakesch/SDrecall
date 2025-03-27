@@ -433,7 +433,7 @@ def extract_read_qseqs(read, read_ref_pos_dict):
     if read_id in read_ref_pos_dict:
         ref_positions, qseq_ref_positions, query_sequence_encoded, query_sequence_qualities = read_ref_pos_dict[read_id]
     else:
-        qseq_ref_positions = np.array([ idx if idx is not None else -1 for idx in read.get_reference_positions(full_length=True) ], dtype=np.int32)  # An numpy array mapping query sequence index to reference genome index
+        qseq_ref_positions = np.array([ idx if idx is not None else -1 for idx in read.get_reference_positions(full_length=True) ], dtype=np.int32)  # An numpy array mapping query sequence index to reference genome index, they are 0-based!
         ref_positions = prepare_ref_query_idx_map(qseq_ref_positions, read_start) # An numpy array mapping reference genome index to query sequence index
         base_dict = {"A": 0, "C": 1, "G": 2, "T": 3, "N": 4}
         query_sequence_encoded = np.array([ base_dict[base] for base in read.query_sequence ], dtype=np.int8)
@@ -463,6 +463,101 @@ def check_noisy_read(read, read_hap_vector, read_error_vectors, logger = logger)
 
 
 
+@numba.njit(types.int16[:](types.int16[:], types.int16[:]), fastmath=True)
+def numba_find_shared_snvs(vec1, vec2):
+    """Find indices where both vectors have value -4 (SNV)"""
+    indices = np.empty(len(vec1), dtype=np.int16)
+    snv_count = 0
+    for i in range(len(vec1)):
+        if vec1[i] == -4 and vec2[i] == -4:
+            indices[snv_count] = i
+            snv_count += 1
+    return indices[:snv_count]
+
+
+def psv_shared_snvs(interval_hap_vector, interval_other_hap_vector, 
+                    overlap_start, intrinsic_ad_dict,
+                    read_start, other_start,
+                    ref_positions, qseq_ref_positions, query_sequence_encoded,
+                    other_ref_positions, other_qseq_ref_positions, other_query_sequence_encoded):
+    """
+    Extract positions where two overlapping reads share the same SNV and check if supported by AD data.
+    Uses get_interval_seq for proper sequence extraction.
+    
+    Args:
+        interval_hap_vector: Haplotype vector for first read in overlapping region
+        interval_other_hap_vector: Haplotype vector for second read in overlapping region
+        overlap_start: 0-indexed genomic coordinate where overlap starts
+        chrom: Chromosome name
+        intrinsic_ad_dict: Nested dictionary with allele depth info
+        read_start, other_start: Reference start positions of reads
+        ref_positions, qseq_ref_positions, query_sequence_encoded: Data for first read
+        other_ref_positions, other_qseq_ref_positions, other_query_sequence_encoded: Data for second read
+        
+    Returns:
+        shared_snvs: List of tuples (position, alt_base, ad_support) 
+    """
+    # Get indices where both vectors have SNVs (-4)
+    snv_indices = numba_find_shared_snvs(interval_hap_vector, interval_other_hap_vector)
+    
+    if len(snv_indices) == 0:
+        return []
+    
+    # Convert to genomic coordinates
+    genomic_positions = overlap_start + snv_indices
+    
+    shared_snvs = snv_indices.size
+    psv_snvs = 0 # PSV stands for paralogous sequence variants
+    
+    # Process each shared SNV position 
+    for pos in genomic_positions:
+        # Extract one base at the SNV position using get_interval_seq
+        # Note: get_interval_seq needs interval_end to be inclusive, so we use pos for both start and end
+        read1_seq, _ = get_interval_seq(
+            np.int32(read_start), 
+            np.int32(pos), 
+            np.int32(pos + 1), 
+            ref_positions, 
+            qseq_ref_positions, 
+            query_sequence_encoded
+        )
+        
+        read2_seq, _ = get_interval_seq(
+            np.int32(other_start), 
+            np.int32(pos), 
+            np.int32(pos + 1), 
+            other_ref_positions, 
+            other_qseq_ref_positions, 
+            other_query_sequence_encoded
+        )
+        
+        # Skip if either sequence is empty (positions in deletions, etc.)
+        if len(read1_seq) == 0 or len(read2_seq) == 0:
+            continue
+
+        assert read1_seq.size == read2_seq.size == 1
+            
+        # Get the bases (should be single base)
+        alt_base1 = read1_seq[0]
+        alt_base2 = read2_seq[0]
+        
+        # Verify both reads have the same alt base
+        if alt_base1 != alt_base2 or alt_base1 == 4:  # Skip if not matching or is N
+            continue
+            
+        # Check if this alt allele is supported in the AD dict
+        ad_support = False
+        if pos in intrinsic_ad_dict:
+            if alt_base1 in intrinsic_ad_dict[pos]:
+                ad = intrinsic_ad_dict[pos][alt_base1]
+                if ad > 0: ad_support = True
+            
+        if ad_support: psv_snvs += 1
+        
+    return psv_snvs, shared_snvs
+
+
+
 def determine_same_haplotype(read, other_read,
                              overlap_start, overlap_end,
                              score_arr,
@@ -473,6 +568,7 @@ def determine_same_haplotype(read, other_read,
                              total_lowqual_qnames = set(),
                              mean_read_length = 148,
                              empty_dict = {},
+                             intrinsic_ad_dict = {},
                              logger = logger):
     '''
     Determine if two reads belong to the same haplotype based on their overlapping region.
@@ -563,14 +659,14 @@ def determine_same_haplotype(read, other_read,
         return False, read_ref_pos_dict, read_hap_vectors, read_error_vectors, total_lowqual_qnames, None
 
     # Now use overlap_start and overlap_end to extract the sequence
-    read_seq, qr_idx_arr = get_interval_seq(np.int32(read.reference_start), 
+    read_seq, qr_idx_arr = get_interval_seq(np.int32(start), 
                                             np.int32(overlap_start), 
                                             np.int32(overlap_end - 1), 
                                             ref_positions, 
                                             qseq_ref_positions, 
                                             query_sequence_encoded)
     
-    other_seq, other_qr_idx_arr = get_interval_seq( np.int32(other_read.reference_start), 
+    other_seq, other_qr_idx_arr = get_interval_seq( np.int32(other_start), 
                                                     np.int32(overlap_start), 
                                                     np.int32(overlap_end - 1), 
                                                     other_ref_positions, 
@@ -581,14 +677,18 @@ def determine_same_haplotype(read, other_read,
     
     total_match = compare_sequences(read_seq, other_seq, np.int8(4))
     # logger.debug(f"The total match between {read_id} and {other_read_id} within {read.reference_name}:{overlap_start}-{overlap_end} is {total_match}, the query sequence of {read_id} is {read_seq.tolist()}, and the query sequence of {other_read_id} is {other_seq.tolist()}")
-
+    psv_snv_count, shared_snv_count = psv_shared_snvs(interval_hap_vector, interval_other_hap_vector, 
+                                                      overlap_start, intrinsic_ad_dict,
+                                                      start, other_start,
+                                                      ref_positions, qseq_ref_positions, query_sequence_encoded,
+                                                      other_ref_positions, other_qseq_ref_positions, other_query_sequence_encoded)
     identical_idx = numba_compare(interval_hap_vector, interval_other_hap_vector)
     identical_part = numba_bool_indexing(interval_hap_vector, identical_idx)
     overlap_span = identical_part.size
-    var_count = count_var(identical_part)
     indel_num = count_continuous_indel_blocks(identical_part)
 
-    weight = overlap_span + numba_sum(score_arr[:var_count])
+    weight = overlap_span + numba_sum(score_arr[:shared_snv_count])
+    weight = weight + mean_read_length * (shared_snv_count - psv_snv_count) / 2
     weight = weight + mean_read_length * 3 * indel_num
 
     if total_match:

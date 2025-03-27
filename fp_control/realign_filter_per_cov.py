@@ -234,6 +234,7 @@ def realign_filter_per_cov(bam,
     # Create the read-pair graph used for phasing
     # Detailed description of the graph construction can be found in the function docstring.
     phased_graph, weight_matrix, qname_to_node, total_readhap_vector, total_readerr_vector, read_ref_pos_dict, total_lowqual_qnames = build_phasing_graph(bam,
+                                                                                                                                                          intrinsic_bam,
                                                                                                                                                           ncls_dict,
                                                                                                                                                           read_dict,
                                                                                                                                                           qname_dict,
@@ -312,7 +313,7 @@ def realign_filter_per_cov(bam,
                         hap_id = f"{hap_id}_HIGHVD"
 
                     if qname in total_lowqual_qnames:
-                        hap_id = f"{hap_id}_LOWQUAL"
+                        hap_id = f"LOWQUAL"
 
                     # Filter out reads with oddly high editing distance that breakthrough the cutoff
                     if read.is_mapped and read.mapping_quality > 10:

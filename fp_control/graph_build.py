@@ -53,7 +53,7 @@ def stat_ad_to_dict(bam_file, empty_dict, reference_genome, logger = logger):
     # Iterate over the rows of dfA and dfB
     for i in range(len(ad_table)):
         chrom = ad_table.iloc[i, 0]
-        position = ad_table.iloc[i, 1] # position
+        position = ad_table.iloc[i, 1] - 1 # position, output of bcftools mpileup is 1-based, now needs to be 0-based
         ref_allele = ad_table.iloc[i, 2]
         alt_alleles = alt_expanded.iloc[i, :] # first allele
         ref_depth = np.int16(ad_expanded.iloc[i, 0])
@@ -61,6 +61,10 @@ def stat_ad_to_dict(bam_file, empty_dict, reference_genome, logger = logger):
 
         if pd.isna(ref_depth):
             logger.warning(f"The reference depth is NA for the row {i} at {chrom}:{position} of the ad table which is: \n{ad_table.iloc[i, :].to_string(index=False)}\n")
+            continue
+
+        if pd.isna(alt_depths).all():
+            logger.warning(f"The alt depths are all NA for the row {i} at {chrom}:{position} of the ad table which is: \n{ad_table.iloc[i, :].to_string(index=False)}\n")
             continue
 
         total_dp = ad_expanded.iloc[i, :].dropna().sum()
@@ -78,11 +82,12 @@ def stat_ad_to_dict(bam_file, empty_dict, reference_genome, logger = logger):
         # Check for the second pair of inner key-value
         for c in range(0, column_width):
             alt_allele = alt_alleles[c]
+            alt_depth = alt_depths[c]
             if pd.isna(alt_allele):
                 continue
             if c >= alt_depths.size:
                 continue
-            if pd.isna(alt_depths[c]):
+            if pd.isna(alt_depth):
                 continue
             if len(ref_allele) > len(alt_allele):
                 continue
@@ -96,7 +101,7 @@ def stat_ad_to_dict(bam_file, empty_dict, reference_genome, logger = logger):
                 alt_allele = alt_allele[diff_indx]
 
             # Now the remaining ref-alt pair is a SNV
-            nested_ad_dict[chrom][position][base_dict[alt_allele]] = np.int16(alt_depths[c])
+            nested_ad_dict[chrom][position][base_dict[alt_allele]] = np.int16(alt_depth)
 
     return nested_ad_dict
 
@@ -200,6 +205,7 @@ def find_uncovered_regions_numba(existing_starts, existing_ends, new_start, new_
 
 
 def build_phasing_graph(bam_file,
+                        intrinsic_bam,
                         ncls_dict,
                         ncls_read_dict,
                         ncls_qname_dict,
@@ -297,6 +303,9 @@ def build_phasing_graph(bam_file,
     if nested_ad_dict is None:
         logger.warning(f"No ALT allele found in this BAM file. Skip this entire script")
         return None, None, None, None, None, None, total_lowqual_qnames
+    
+    intrinsic_ad_dict = stat_ad_to_dict(intrinsic_bam, empty_dict, reference_genome, logger = logger)
+    if intrinsic_ad_dict is None: intrinsic_ad_dict = {}
 
     qname_check_dict = {}
     # Use NCLS read dict to iterate through all the reads to build a graph. One good thing is that every key: value stores a pair of read objects
@@ -386,6 +395,7 @@ def build_phasing_graph(bam_file,
                                                                                                                                                     total_lowqual_qnames = total_lowqual_qnames,
                                                                                                                                                     mean_read_length = mean_read_length,
                                                                                                                                                     empty_dict = empty_dict,
+                                                                                                                                                    intrinsic_ad_dict = intrinsic_ad_dict.get(chrom, {}),
                                                                                                                                                     logger = logger)
                     
                     if np.isnan(bool_res):
