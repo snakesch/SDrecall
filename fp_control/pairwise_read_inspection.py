@@ -47,6 +47,12 @@ def count_snv(array):
     return count_continuous_blocks(snv_bools)
 
 
+@numba.njit(types.float16[:](types.float16[:], types.int16[:]), fastmath=True)
+def snv_err_probs(read_err_vector, read_hap_vector):
+    snv_bools = read_hap_vector == -4
+    return read_err_vector[snv_bools]
+
+
 @numba.njit(types.int32(types.int16[:]), fastmath=True)
 def count_continuous_indel_blocks(array):
     """
@@ -461,7 +467,7 @@ def check_noisy_read(read, read_hap_vector, read_error_vectors, logger = logger)
         read_error_vector = get_errorvector_from_cigar(read, read.cigartuples, logger = logger)
         read_error_vectors[read_id] = read_error_vector
 
-    mismatch_err_probs = read_error_vector[read_hap_vector == -4]
+    mismatch_err_probs = snv_err_probs(read_error_vector, read_hap_vector)
     err_snvs = numba_sum(mismatch_err_probs > 0.03)
     if err_snvs >= 3:
         logger.debug(f"The read {read_id} is noisy, there are {err_snvs} SNVs that are not possible rooted from sequencing errors, mark this pair of reads as low quality")

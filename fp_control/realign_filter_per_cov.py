@@ -9,6 +9,8 @@ from realign_recall.annotate_HP_tag_to_vars import annotate_vcf as annotate_vcf_
 from src.const import shell_utils
 from src.log import logger
 
+from fp_control.bam_ncls import migrate_bam_to_ncls, calculate_mean_read_length
+
 
 def imap_filter_out(args):
     """Worker function that processes a single region and returns results with log file path"""
@@ -186,7 +188,6 @@ def realign_filter_per_cov(bam,
     the quality of genomic alignments and identify potential misalignments.
     '''
 
-    from fp_control.bam_ncls import migrate_bam_to_ncls, calculate_mean_read_length
     from fp_control.graph_build import build_phasing_graph
     from fp_control.identify_misaligned_haps import inspect_by_haplotypes
     from fp_control.phasing import phasing_realigned_reads
