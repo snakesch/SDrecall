@@ -47,7 +47,7 @@ def count_snv(array):
     return count_continuous_blocks(snv_bools)
 
 
-@numba.njit(types.float16[:](types.float16[:], types.int16[:]), fastmath=True)
+@numba.njit(types.float32[:](types.float32[:], types.int16[:]), fastmath=True)
 def snv_err_probs(read_err_vector, read_hap_vector):
     snv_bools = read_hap_vector == -4
     return read_err_vector[snv_bools]
@@ -314,7 +314,7 @@ def get_errorvector_from_cigar(read, cigar_tuples, logger=logger):
     >>> print(error_vector)
     [0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.001 0.0 0.001 0.001 0.001 0.001 0.001]
     '''
-    errorvector = np.empty(read.reference_end - read.reference_start, dtype=float)
+    errorvector = np.empty(read.reference_end - read.reference_start, dtype=np.float32)
     # An array of phred-scaled integer quality scores
     base_qualities = np.array(read.query_qualities, dtype=np.int32)
     query_consume = 0
