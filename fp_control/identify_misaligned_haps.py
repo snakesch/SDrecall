@@ -208,7 +208,7 @@ def judge_misalignment_by_extreme_vardensity(seq):
         if max_indel_count > 1:
             return True
     
-    if numba_sum(read_vard >= 11/148) > 0:
+    if numba_sum(read_vard >= 12/148) > 0:
         return True
     
     return False
@@ -222,7 +222,7 @@ def calculate_coefficient(arr2d):
     span = (arr2d[:, 1] - arr2d[:, 0])
     depth_frac = (1 - arr2d[:, 4]/arr2d[:, 2]).astype(types.float32)
 
-    return rank * np.sqrt(span * depth_frac)
+    return rank * span * np.sqrt(depth_frac)
 
 
 
@@ -835,7 +835,7 @@ def inspect_by_haplotypes(input_bam,
         total_record_df = total_record_df.loc[np.logical_not(total_record_df["extreme_vard"]) & \
                                               np.logical_not(total_record_df["scatter_hap"]) & \
                                               (total_record_df["total_depth"] >= 5) & \
-                                              (total_record_df["hap_max_sim_scores"] <= 7), :]
+                                              (total_record_df["hap_max_sim_scores"] <= 8), :]
         # total_record_df.loc[:, "coefficient"] = np.clip(total_record_df["coefficient"] + total_record_df["hap_max_sim_scores"], 10e-3, None)
         if total_record_df.shape[0] == 0:
             failed_lp = True

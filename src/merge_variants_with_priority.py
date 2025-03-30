@@ -10,9 +10,9 @@ import time
 import traceback
 import sys
 
-from .log import logger, log_command
-from .const import shell_utils
-from .utils import executeCmd
+from src.log import logger, log_command
+from src.const import shell_utils
+from src.utils import executeCmd
 
 
 class VariantRecordWrapper:
@@ -73,20 +73,7 @@ def modify_gt_based_on_ad_gq(record, rrecord):
         # logger.info(f"The hps returned by get is {hps} and its type is {type(hps)}")
         num_hps = len(hps[0].split(";"))
 
-        # Example criterion: Set GT to "1/1" if GQ is below 30 and alt_depth > ref_depth
-        if gq < 30 and alt > ref:
-            rrecord.samples[sample_name]['GT'] = (1, 1) # Set GT to "1/1"
-        elif rgq < 30 and ralt > rref:
-            rrecord.samples[sample_name]['GT'] = (1, 1)
-        else:
-            # Here you can add more complex logic to modify GT based on AD and GQ
-            pass
-
         if rrecord.samples[sample_name]['GT'] == (1, 1):
-            continue
-
-        if record.samples[sample_name]['GT'] == (1, 1):
-            rrecord.samples[sample_name]['GT'] = (1, 1)
             continue
 
         if num_hps >= 4 and ralt/(ralt + rref) >= 0.8:
@@ -94,6 +81,8 @@ def modify_gt_based_on_ad_gq(record, rrecord):
             logger.info(f"Setting the GT to (1, 1) due to the num_hps {num_hps} and alt/dp ratio {ralt/(ralt + rref)} for the variant {record.chrom}:{record.pos}:{record.ref} -> {record.alts}")
             continue
 
+        if rgq <= 5 and ralt > rref:
+            rrecord.samples[sample_name]['GT'] = (1, 1)
 
     return rrecord
 
@@ -101,7 +90,8 @@ def modify_gt_based_on_ad_gq(record, rrecord):
 def process_target_records( qrecord, 
                             rrecord, 
                             qv_tag=None,
-                            rv_tag=None, ):
+                            rv_tag=None,
+                            modify_gt = True ):
     qrecord = qrecord.record
     rrecord = rrecord.record
 
@@ -113,7 +103,10 @@ def process_target_records( qrecord,
         if rv_tag not in rrecord.filter:
             rrecord.filter.add(rv_tag)
 
-    mrecord = modify_gt_based_on_ad_gq(qrecord, rrecord)
+    if modify_gt:
+        mrecord = modify_gt_based_on_ad_gq(qrecord, rrecord)
+    else:
+        mrecord = rrecord
     return VariantRecordWrapper(mrecord)
 
 
@@ -232,6 +225,7 @@ def process_region(region,
                    added_filter, 
                    qv_tag,
                    rv_tag,
+                   modify_gt = True,
                    logger=logger):
     '''
     The function is not only used to return the modified overlapping records
@@ -323,6 +317,7 @@ def process_region(region,
                                                                                                                                 non_overlap_rrecs,
                                                                                                                                 merged_records,
                                                                                                                                 process_target_records,
+                                                                                                                                modify_gt = modify_gt,
                                                                                                                                 logger = logger,
                                                                                                                                 qv_tag=qv_tag,
                                                                                                                                 rv_tag=rv_tag)
@@ -365,7 +360,8 @@ def process_region(region,
                                                                                                                                         process_target_records,
                                                                                                                                         logger = logger,
                                                                                                                                         qv_tag=qv_tag,
-                                                                                                                                        rv_tag=rv_tag)
+                                                                                                                                        rv_tag=rv_tag,
+                                                                                                                                        modify_gt = modify_gt)
                         reference_record = None
                         break
     return (frozenset([ r.pickable() for r in merged_records ]), 
@@ -430,6 +426,7 @@ def merge_with_priority(query_vcf = "",
                         qv_tag = None,
                         rv_tag = None, 
                         ref_genome = "",
+                        modify_gt = True,
                         threads = 4):
     # Sort the query VCF file
     sorted_query_vcf = sort_vcf(query_vcf, ref_genome, logger = logger)
@@ -457,6 +454,7 @@ def merge_with_priority(query_vcf = "",
     # Get the list of regions to process
     regions = list(dict.fromkeys(list(bcf_query.header.contigs.keys()) + list(bcf_reference.header.contigs.keys())))
     
+    logger.info(f"Whether modify the GT field: {modify_gt}")
     logger.info(f"The query VCF file has records across {len(regions)} chromosomes, they are: {regions}")
 
     # Create a multiprocessing pool
@@ -468,7 +466,8 @@ def merge_with_priority(query_vcf = "",
                                                                  sorted_reference_vcf, 
                                                                  added_filter,
                                                                  qv_tag,
-                                                                 rv_tag) for region in regions])
+                                                                 rv_tag,
+                                                                 modify_gt) for region in regions])
     i=0
     for success, result, log_contents in result_iterator:
         i+=1
@@ -577,6 +576,8 @@ if __name__ == '__main__':
     parser.add_argument("-fl", "--filter_tag", type=str, help="The filter tag you want to added to the matched query VCF records", required=False, default="")
     parser.add_argument("-qt", "--query_vcf_tag", type=str, help="The tag added to the FILTERs to show the source of the variant from query_vcf_file", required=False, default="RAW")
     parser.add_argument("-rt", "--reference_tag", type=str, help="The tag added to the FILTERs to show the source of the variant from reference_vcf_file", required=False, default="CLEAN")
+    parser.add_argument("-rg", "--ref_genome", type=str, help="The reference genome file", required=False, default="")
+    parser.add_argument("-mg", "--modify_gt", action="store_false", help="Whether to modify the GT field", required=False, default=True)
     parser.add_argument('--threads', type=int, default=4, help='Number of threads for parallel processing', required=False)
 
     args = parser.parse_args()
@@ -587,4 +588,6 @@ if __name__ == '__main__':
                         added_filter = args.filter_tag, 
                         qv_tag = args.query_vcf_tag,
                         rv_tag = args.reference_tag,
+                        ref_genome = args.ref_genome,
+                        modify_gt = args.modify_gt,
                         threads = args.threads)

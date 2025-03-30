@@ -207,6 +207,7 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
                         qv_tag = "RAW", 
                         rv_tag = "CLEAN", 
                         ref_genome = ref_genome, 
+                        modify_gt = False,
                         threads = threads)
     
     # Only keep the variants within the target recall regions
