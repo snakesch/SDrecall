@@ -36,7 +36,7 @@ def set_numerical_thread_limits(threads):
     logger.info(f"Numerical library thread limits set to {threads}")
 
 
-def post_process_vcf(sdrecall_vcf, args):
+def post_process_vcf(sdrecall_vcf, args, paths):
     """
     Process the final VCF - potentially merging with conventional VCF
     
@@ -100,6 +100,9 @@ def post_process_vcf(sdrecall_vcf, args):
         # Update the final VCF to be the merged one
         final_vcf = merged_vcf
         logger.info(f"Merged with conventional VCF: {final_vcf}")
+
+    # Remove intermediate file folder
+    os.rmdir(paths.tmp_dir)
     
     return final_vcf
 
@@ -161,7 +164,7 @@ def run_full_pipeline(args):
     logger.info(f"Final recalled variants: {sdrecall_vcf}")
     
     # Process and return final VCF
-    return post_process_vcf(sdrecall_vcf, args)
+    return post_process_vcf(sdrecall_vcf, args, paths)
 
 
 def run_preparation_only(args):
@@ -261,7 +264,7 @@ def run_realign_only(args):
     logger.info(f"Final recalled variants: {sdrecall_vcf}")
     
     # Process and return final VCF
-    return post_process_vcf(sdrecall_vcf, args)
+    return post_process_vcf(sdrecall_vcf, args, paths)
 
 
 def main():
@@ -325,6 +328,7 @@ def main():
     
     if final_vcf:
         logger.info(f"Final output: {final_vcf}")
+
 
 
 def _add_common_args(parser):
