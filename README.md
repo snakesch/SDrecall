@@ -64,7 +64,7 @@ SDrecall run \
   --caller_name DeepVariant \
   --cohort_vcf /path/to/control_cohort.vcf \
   --inhouse_common_cutoff 0.01 \
-  --cohort_conf_level 0.999
+  --cohort_conf_level 0.99
 ```
 
 ### Without Supplementary VCF and Cohort Annotation
@@ -147,8 +147,8 @@ Final steps may include:
 - **Reference genome**: FASTA format (hg19 or hg38 supported)
 - **Reference SD map**: BED file with segmental duplication coordinates (Two gzipped bed files are offered in data/hg19(hg38)/ref_SD)
 - **Target BED** : Specific regions to analyze (the targeting regions you want to ensure detection sensitivity. For molecular diagnosis of Mendelian diseases, this can be the whole exome, or the coding regions of functionally relevant genes.)
-- **Supplementary VCF** (optional): Conventional caller results to merge with (The VCF file of the same sample, called by other conventional callers like GATK and DeepVariant. If provided, SDrecall will try to merge its own output with this VCF file to offer a final output VCF for downstream analysis)
-- **Cohort VCF** (optional): Population data for identifying common variants ( It is recommended to perform SDrecall on dozens of control samples with the similar coverage profile. Then merge them with bcftools and have AC and AN INFO tags calculated in the final merged VCF. This way, the AN, AC info for each variant called by SDrecall within your inhouse control cohort can be exploited to estimate whether it is truly a common variant in the general population. This is important because traditional population databases like gnomAD and 1000g is based on NGS data, therefore having gaps on the regions like segmental duplications due to the mapping ambiguity)
+- **Supplementary VCF** (optional but recommended): Conventional caller results to merge with (The VCF file of the same sample, called by other conventional callers like GATK and DeepVariant. If provided, SDrecall will try to merge its own output with this VCF file to offer a final output VCF for downstream analysis)
+- **Cohort VCF** (optional but recommended): Population data for identifying common variants ( It is recommended to perform SDrecall on dozens of control samples with the similar coverage profile. Then merge them with bcftools and have AC and AN INFO tags calculated in the final merged VCF. This way, the AN, AC info for each variant called by SDrecall within your inhouse control cohort can be exploited to estimate whether it is truly a common variant in the general population. This is important because traditional population databases like gnomAD and 1000g is based on NGS data, therefore having gaps on the regions like segmental duplications due to the mapping ambiguity)
 
 ## Outputs
 
