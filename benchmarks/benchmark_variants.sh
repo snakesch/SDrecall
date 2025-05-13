@@ -5,7 +5,7 @@ central_scripts=${project_dir}/shell_utils.sh
 source ${central_scripts}
 
 # This script is a showcase of how we performed the benchmarking for the SDrecall results.
-# Due to extended requirements of environments and dependency files, we cannot offer a fully portable benchmark workflow to reproduce the entire benchmarking process
+# Due to extended requirements of environments and dependency files, we cannot offer all the files (like the reference genome) to reproduce the entire benchmarking process
 # This script is the main entry point of the benchmarking workflow, while the dependent scripts and functions are either stored in the same directory or defined in the same script. 
 function annotate_cadd() {
     local called_vcf=${1}
