@@ -72,6 +72,7 @@ class SDrecallPaths:
                 target_bed: str = "",
                 sample_id: str = None, 
                 target_tag: str = None,
+                ref_genome_tag: str = None,
                 clean_dirs: bool = True):
         """
         Initialize the path manager with key inputs.
@@ -95,7 +96,7 @@ class SDrecallPaths:
         self.repo_dir = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
         
         # Extract assembly version primarily from reference_sd_map path
-        self.assembly = self._extract_assembly_version(reference_sd_map, ref_genome)
+        self.assembly = self._extract_assembly_version(reference_sd_map, ref_genome) if ref_genome_tag is None else ref_genome_tag
         self.avg_frag_size, self.median_frag_size, self.frag_size_std = get_insert_size_distribution(self.input_bam)
         
         # Extract sample ID

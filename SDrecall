@@ -83,7 +83,7 @@ def post_process_vcf(sdrecall_vcf, args, paths):
             merged_vcf = args.merged_vcf
         else:
             # Derive from conventional VCF path
-            merged_vcf = args.conventional_vcf.replace('.vcf.gz', '.sdrecall.vcf.gz')
+            merged_vcf = args.conventional_vcf.replace('.vcf.gz', f'.sdrecall.{args.target_tag}.vcf.gz')
             
         logger.info(f"Merged VCF will be written to: {merged_vcf}, from {final_vcf} and {args.conventional_vcf}")
         
@@ -353,6 +353,8 @@ def _add_common_args(parser):
                         help='Sample ID (extracted from BAM filename if not provided)')
     parser.add_argument('--target_tag', type=str, default="exome", 
                         help='Target region tag')
+    parser.add_argument('--ref_genome_tag', type=str, default="hg38", 
+                        help='Reference genome tag')
     parser.add_argument('-t', '--threads', type=int, default=10, 
                         help='Number of threads to use')
     parser.add_argument('--mq_cutoff', type=int, default=41, 
