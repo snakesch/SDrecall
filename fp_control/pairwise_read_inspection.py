@@ -47,7 +47,7 @@ def count_snv(array):
     return count_continuous_blocks(snv_bools)
 
 
-@numba.njit(types.float32[:](types.float32[:], types.int16[:]), fastmath=True)
+@numba.njit(types.float32[:](types.float32[:], types.int16[:]), fastmath=True, parallel=True)
 def snv_err_probs(read_err_vector, read_hap_vector):
     snv_bools = read_hap_vector == -4
     return read_err_vector[snv_bools]
@@ -680,16 +680,16 @@ def determine_same_haplotype(read, other_read,
         return False, read_ref_pos_dict, read_hap_vectors, read_error_vectors, total_lowqual_qnames, None
 
     # Now use overlap_start and overlap_end to extract the sequence
-    read_seq, qr_idx_arr = get_interval_seq(np.int32(start), 
-                                            np.int32(overlap_start), 
-                                            np.int32(overlap_end - 1), 
+    read_seq, qr_idx_arr = get_interval_seq(start, 
+                                            overlap_start, 
+                                            overlap_end - np.int32(1), 
                                             ref_positions, 
                                             qseq_ref_positions, 
                                             query_sequence_encoded)
     
-    other_seq, other_qr_idx_arr = get_interval_seq( np.int32(other_start), 
-                                                    np.int32(overlap_start), 
-                                                    np.int32(overlap_end - 1), 
+    other_seq, other_qr_idx_arr = get_interval_seq( other_start, 
+                                                    overlap_start, 
+                                                    overlap_end - np.int32(1), 
                                                     other_ref_positions, 
                                                     other_qseq_ref_positions, 
                                                     other_query_sequence_encoded )

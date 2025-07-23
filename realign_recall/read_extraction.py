@@ -3,6 +3,23 @@ import os
 from src.utils import executeCmd
 from src.log import logger
 
+# Try to import Rust module
+RUST_AVAILABLE = False
+rust_bam_to_fastq = None
+
+try:
+    # Try to import the compiled extension directly
+    import read_extraction
+    if hasattr(read_extraction, 'bam_to_fastq_biobambam'):
+        rust_bam_to_fastq = read_extraction.bam_to_fastq_biobambam
+        RUST_AVAILABLE = True
+        logger.info("Rust module loaded successfully")
+except ImportError:
+    pass
+    
+if not RUST_AVAILABLE:
+    logger.warning("Rust module not available, falling back to shell commands")
+
 
 def bam_to_fastq_biobambam(input_bam, 
                            region_bed, 
@@ -11,7 +28,8 @@ def bam_to_fastq_biobambam(input_bam,
                            multi_aligned=False,
                            threads=1, 
                            tmp_dir="/tmp",
-                           logger=logger):
+                           logger=logger,
+                           use_rust=True):
     """
     Extract read pairs where at least one read overlaps the region using biobambam2.
     
@@ -24,10 +42,29 @@ def bam_to_fastq_biobambam(input_bam,
         threads: Number of threads to use
         tmp_dir: Temporary directory for intermediate files
         logger: Logger object
+        use_rust: Whether to use Rust implementation if available
     
     Returns:
         Tuple containing paths to output R1 and R2 FASTQ files
     """
+    # Use Rust implementation if available and requested
+    if use_rust and RUST_AVAILABLE:
+        try:
+            logger.info("Using Rust implementation for BAM to FASTQ conversion")
+            return rust_bam_to_fastq( input_bam, 
+                                      region_bed, 
+                                      output_freads, 
+                                      output_rreads,
+                                      multi_aligned, 
+                                      threads, 
+                                      tmp_dir
+                                    )
+        except Exception as e:
+            logger.error(f"Rust implementation failed: {e}")
+            logger.info("Falling back to shell command implementation")
+    
+    # Original shell command implementation
+    logger.info("Using shell command implementation for BAM to FASTQ conversion")
     # Ensure output directories exist
     os.makedirs(os.path.dirname(output_freads), exist_ok=True)
     os.makedirs(os.path.dirname(output_rreads), exist_ok=True)
@@ -37,6 +74,7 @@ def bam_to_fastq_biobambam(input_bam,
 
     if multi_aligned:
         # Filter expression for multi-aligned reads (converted to samtools syntax)
+        # Note: Rust implementation uses ![SA] && [XA] && abs(AS-XS) <= 5
         filter_expr = "![SA] && ([XA] || mapq < 50)"
         
         # Samtools command with -P for fetching pairs

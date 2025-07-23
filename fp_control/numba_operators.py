@@ -8,7 +8,7 @@ def fast_median(data):
     return np.median(data)
 
 
-@numba.njit
+@numba.njit(fastmath=True, parallel=True)
 def numba_sum(data):
     return np.sum(data)
 

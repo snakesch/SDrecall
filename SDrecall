@@ -10,6 +10,7 @@ import os
 import sys
 import argparse
 import shutil
+import subprocess
 
 from src.const import SDrecallPaths
 from src.log import logger, configure_logger
@@ -146,16 +147,26 @@ def run_full_pipeline(args):
     logger.info(f"  Input BAM: {paths.input_bam}")
     logger.info(f"  Working directory: {paths.work_dir}")
     
-    # Preparation phase
-    logger.info(f"Starting preparation phase, calling function prepare_recall_regions(paths={paths}, mq_threshold={args.mq_cutoff}, high_quality_depth={args.high_quality_depth}, minimum_depth={args.minimum_depth}, multialign_frac={args.multialign_frac}, threads={args.threads})")
-    paths = prepare_recall_regions(
-        paths=paths,
-        mq_threshold=args.mq_cutoff,
-        high_quality_depth=args.high_quality_depth,
-        minimum_depth=args.minimum_depth,
-        multialign_frac=args.multialign_frac,
-        threads=args.threads
-    )
+    # Check if preparation outputs are already valid and up-to-date
+    if paths.check_preparation_validity():
+        logger.info("Preparation outputs are valid and up-to-date, skipping preparation phase")
+    else:
+        # Preparation phase
+        logger.info(f"Starting preparation phase, calling function prepare_recall_regions(paths={paths}, mq_threshold={args.mq_cutoff}, high_quality_depth={args.high_quality_depth}, minimum_depth={args.minimum_depth}, multialign_frac={args.multialign_frac}, threads={args.threads})")
+        paths = prepare_recall_regions(
+            paths=paths,
+            mq_threshold=args.mq_cutoff,
+            high_quality_depth=args.high_quality_depth,
+            minimum_depth=args.minimum_depth,
+            multialign_frac=args.multialign_frac,
+            threads=args.threads
+        )
+    
+    # Check if final VCF already exists and is up-to-date
+    if paths.check_final_vcf_validity():
+        logger.info(f"Final VCF already exists and is up-to-date: {paths.final_recall_vcf_path()}")
+        logger.info(f"Skipping realignment and recall phase.")
+        return post_process_vcf(paths.final_recall_vcf_path(), args, paths)
     
     # Realignment and recall phase
     logger.info(f"Starting realignment and recall phase, calling function SDrecall_per_sample(sdrecall_paths={paths}, threads={args.threads}, numba_threads={args.numba_threads}, mq_cutoff={args.mq_cutoff}, conf_level={args.conf_level})")
@@ -206,6 +217,17 @@ def run_preparation_only(args):
     logger.info(f"  Input BAM: {paths.input_bam}")
     logger.info(f"  Working directory: {paths.work_dir}")
     
+    # Check if preparation outputs are already valid and up-to-date
+    if paths.check_preparation_validity():
+        logger.info("Preparation outputs are already valid and up-to-date")
+        logger.info("Skipping preparation phase as all outputs are current")
+        return paths
+
+    if paths.final_recall_vcf_path():
+        logger.info(f"Final VCF already exists: {paths.final_recall_vcf_path()}")
+        logger.info(f"Skipping preparation, realignment and recall phase.")
+        return paths
+    
     # Preparation phase
     paths = prepare_recall_regions(
         paths=paths,
@@ -250,6 +272,12 @@ def run_realign_only(args):
         logger.error(f"Preparation has not been completed. Please run the preparation step first.")
         sys.exit(1)
     
+    # Check whether the final_recall_vcf_path exists and is updated
+    if paths.check_final_vcf_validity():
+        logger.info(f"Final VCF already exists and is up-to-date: {paths.final_recall_vcf_path()}")
+        logger.info(f"Skipping realignment and recall phase.")
+        return post_process_vcf(paths.final_recall_vcf_path(), args, paths)
+
     # Log configuration
     logger.info(f"Running SDrecall realignment with:")
     logger.info(f"  Sample ID: {paths.sample_id}")

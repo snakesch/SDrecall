@@ -401,7 +401,7 @@ def build_phasing_graph(bam_file,
                         break
                     uncovered_start, uncovered_end = uncovered_overlaps[row_ind, 0], uncovered_overlaps[row_ind, 1]
                     bool_res, read_ref_pos_dict, read_hap_vectors, read_error_vectors, total_lowqual_qnames, read_weight = determine_same_haplotype(read1, read2,
-                                                                                                                                                    uncovered_start, uncovered_end,
+                                                                                                                                                    np.int32(uncovered_start), np.int32(uncovered_end),
                                                                                                                                                     score_arr,
                                                                                                                                                     read_hap_vectors = read_hap_vectors,
                                                                                                                                                     read_error_vectors = read_error_vectors,

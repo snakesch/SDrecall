@@ -41,4 +41,5 @@ def calculate_NM_distribution_poisson(bam, conf_level=0.01, sample_size=3000000,
         cutoff += 1
     logger.info(f"NM distribution for {bam} has mean {nm_mean}, the value for {1-conf_level} percentile is {cutoff}")
 
+    cutoff = 4 if cutoff < 4 else cutoff
     return cutoff, nm_mean
