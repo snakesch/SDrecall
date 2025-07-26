@@ -13,13 +13,13 @@ use anyhow::{Result, Context};
 fn read_bed_regions(bed_path: &str) -> Result<Vec<(String, u64, u64)>> {
     use std::io::{BufRead, BufReader};
     
-    let file = File::open(bed_path)
+    let file: File = File::open(bed_path)
         .with_context(|| format!("Failed to open BED file: {}", bed_path))?;
-    let reader = BufReader::new(file);
+    let reader: BufReader<File> = BufReader::new(file);
     
-    let mut regions = Vec::new();
+    let mut regions: Vec<(String, u64, u64)> = Vec::new();
     for line in reader.lines() {
-        let line = line?;
+        let line: String = line?;
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
@@ -51,7 +51,7 @@ fn should_include_read(record: &bam::Record, multi_aligned: bool) -> bool {
     
     // Filter: ![SA] && [XA] && abs(AS - XS) <= 5
     // Check for SA tag (should NOT exist)
-    let has_sa = match record.aux(b"SA") {
+    let has_sa: bool = match record.aux(b"SA") {
         Ok(_) => true,
         Err(_) => false,
     };
@@ -61,7 +61,7 @@ fn should_include_read(record: &bam::Record, multi_aligned: bool) -> bool {
     }
     
     // Check for XA tag (should exist)
-    let has_xa = match record.aux(b"XA") {
+    let has_xa: bool = match record.aux(b"XA") {
         Ok(_) => true,
         Err(_) => false,
     };
@@ -71,7 +71,7 @@ fn should_include_read(record: &bam::Record, multi_aligned: bool) -> bool {
     }
     
     // Check AS tag
-    let as_score_opt = match record.aux(b"AS") {
+    let as_score_opt: Option<i32> = match record.aux(b"AS") {
         Ok(Aux::I32(score)) => Some(score),
         Ok(Aux::I16(score)) => Some(score as i32),
         Ok(Aux::I8(score)) => Some(score as i32),
@@ -244,13 +244,13 @@ for (chr, start, end) in regions {
                 {
                     let mut writer = r2_writer.lock().unwrap();
                     writeln!(writer, "@{}", std::str::from_utf8(r2.qname()).unwrap())
-                        .map_err(|e| PyIOError::new_err(format!("Failed to write R2: {}", e)))?;
+                        .map_err(|e: std::io::Error| PyIOError::new_err(format!("Failed to write R2: {}", e)))?;
                     writeln!(writer, "{}", std::str::from_utf8(&r2.seq().as_bytes()).unwrap())
-                        .map_err(|e| PyIOError::new_err(format!("Failed to write R2: {}", e)))?;
+                        .map_err(|e: std::io::Error| PyIOError::new_err(format!("Failed to write R2: {}", e)))?;
                     writeln!(writer, "+")
-                        .map_err(|e| PyIOError::new_err(format!("Failed to write R2: {}", e)))?;
+                        .map_err(|e: std::io::Error| PyIOError::new_err(format!("Failed to write R2: {}", e)))?;
                     writeln!(writer, "{}", quality_to_string(r2.qual()))
-                        .map_err(|e| PyIOError::new_err(format!("Failed to write R2: {}", e)))?;
+                        .map_err(|e: std::io::Error| PyIOError::new_err(format!("Failed to write R2: {}", e)))?;
                 }
             }
         }
