@@ -1,0 +1,10 @@
+[workspace]
+members = ["read_extraction"]
+resolver = "2"
+
+[workspace.dependencies]
+pyo3 = { version = "0.20", features = ["extension-module"] }
+rust-htslib = "0.47"
+rayon = "1.8"
+thiserror = "1.0"
+anyhow = "1.0" 

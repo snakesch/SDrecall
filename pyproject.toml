@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "realign_recall"
+version = "0.1.0"
+requires-python = ">=3.8"
+dependencies = []
+
+[tool.maturin]
+# Tell maturin where to find the Rust workspace
+manifest-path = "rust_modules/Cargo.toml"
+module-name = "realign_recall.rust_modules"
+python-source = "." 

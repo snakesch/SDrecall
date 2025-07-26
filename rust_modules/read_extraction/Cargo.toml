@@ -1,0 +1,16 @@
+[package]
+name = "rust_read_extraction"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "rust_read_extraction"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { workspace = true }
+rust-htslib = { workspace = true }
+rayon = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+flate2 = "1.0"  # For GZIP compression/decompression 
