@@ -9,9 +9,9 @@ rust_bam_to_fastq = None
 
 try:
     # Try to import the compiled extension directly
-    import read_extraction
-    if hasattr(read_extraction, 'bam_to_fastq_biobambam'):
-        rust_bam_to_fastq = read_extraction.bam_to_fastq_biobambam
+    import rust_read_extraction
+    if hasattr(rust_read_extraction, 'bam_to_fastq_biobambam'):
+        rust_bam_to_fastq = rust_read_extraction.bam_to_fastq_biobambam
         RUST_AVAILABLE = True
         logger.info("Rust module loaded successfully")
 except ImportError:
