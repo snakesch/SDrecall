@@ -13,4 +13,4 @@ rust-htslib = { workspace = true }
 rayon = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
-flate2 = "1.0"  # For GZIP compression/decompression 
+flate2 = "1.0"  # Module-specific dependency 
