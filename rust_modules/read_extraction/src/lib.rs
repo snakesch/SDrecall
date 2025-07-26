@@ -194,8 +194,8 @@ for (chr, start, end) in regions {
             if read.is_paired() && !read.is_mate_unmapped() {
                 let mtid = read.mtid();
                 let mpos = read.mpos();
-                let window_start = (mpos - 1500).max(0);
-                let window_end = mpos + 1500 + read.seq_len() as i64;
+                let window_start = (mpos - 5).max(0);
+                let window_end = mpos + 5 + read.seq_len() as i64;
                 
                 bam_reader.fetch((mtid, window_start, window_end))
                     .map_err(|e| PyIOError::new_err(format!("Failed to fetch mate region: {}", e)))?;
