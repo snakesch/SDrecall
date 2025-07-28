@@ -1,0 +1,9 @@
+[package]
+name = "build_phasing_graph"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rust-htslib = "0.40"
+# Add a mature statistics crate for median calculation
+statrs = "0.16"
