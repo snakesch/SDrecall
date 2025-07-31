@@ -13,3 +13,4 @@ realign_recall/.ipynb_checkpoints/
 fp_control/.ipynb_checkpoints/
 rust_modules/target/*
 rust_modules/target
+.vscode/settings.json
