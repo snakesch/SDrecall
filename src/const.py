@@ -3,8 +3,10 @@ import re
 import shutil
 import sys
 from typing import Dict, List, Set
+import subprocess
 
 from src.insert_size import get_insert_size_distribution
+from src.log import logger
 
 shell_utils = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'shell_utils.sh')
 
@@ -28,14 +30,14 @@ class SDrecallPaths:
     
     @classmethod
     def initialize(cls, 
-                  ref_genome: str, 
-                  input_bam: str, 
-                  reference_sd_map: str, 
-                  output_dir: str,
-                  target_bed: str = "",
-                  sample_id: str = None, 
-                  target_tag: str = None,
-                  clean_dirs: bool = True):
+                   ref_genome: str, 
+                   input_bam: str, 
+                   reference_sd_map: str, 
+                   output_dir: str,
+                   target_bed: str = "",
+                   sample_id: str = None, 
+                   target_tag: str = None,
+                   clean_dirs: bool = False):
         """
         Initialize the singleton instance with the provided parameters.
         
@@ -133,12 +135,20 @@ class SDrecallPaths:
             return "hg19"
         elif "hg38" in sd_map_name or "GRCh38" in sd_map_name:
             return "hg38"
+        elif "chm13" in sd_map_name or "CHM13" in sd_map_name:
+            return "chm13"
+        elif "t2t" in sd_map_name or "T2T" in sd_map_name:
+            return "chm13"
         
         # As fallback, try ref_genome
         if "hg19" in ref_genome or "GRCh37" in ref_genome:
             return "hg19"
         elif "hg38" in ref_genome or "GRCh38" in ref_genome:
             return "hg38"
+        elif "chm13" in ref_genome or "CHM13" in ref_genome:
+            return "chm13"
+        elif "t2t" in ref_genome or "T2T" in ref_genome:
+            return "chm13"
         
         # Default to extracting from filename
         filename = os.path.basename(ref_genome)
@@ -146,6 +156,10 @@ class SDrecallPaths:
             return "hg19"
         elif "hg38" in filename or "GRCh38" in filename:
             return "hg38"
+        elif "chm13" in sd_map_name or "CHM13" in sd_map_name:
+            return "chm13"
+        elif "t2t" in sd_map_name or "T2T" in sd_map_name:
+            return "chm13"
         else:
             raise ValueError(f"Could not determine assembly version from {reference_sd_map} or {ref_genome}")
     
@@ -199,12 +213,12 @@ class SDrecallPaths:
         # Create directories if they don't exist and clean if requested
         for dir_name, dir_path in dirs.items():
             os.makedirs(dir_path, exist_ok=True)
-            if clean_dirs:  # Don't clean root dir
+            if clean_dirs:  # Dont clean root dir
                 if dir_name != "root":
                     self._clean_directory(dir_path, file_only=True)
                 else:
                     self._clean_directory(dir_path, file_only=False)
-            elif dir_name == "recall_results" or dir_name == "intermediates":
+            elif dir_name == "intermediates":
                 self._clean_directory(dir_path, file_only=True)
 
         if not clean_dirs:
@@ -281,7 +295,7 @@ class SDrecallPaths:
                 
         # Log what we found
         if self.realign_groups:
-            print(f"Discovered {len(self.realign_groups)} existing realign groups: {', '.join(sorted(self.realign_groups))}", file=sys.stderr)
+            logger.info(f"Discovered {len(self.realign_groups)} existing realign groups: {', '.join(sorted(self.realign_groups))}")
 
     
     def _normalize_rg_label(self, rg_label_or_index) -> str:
@@ -458,3 +472,194 @@ class SDrecallPaths:
     def total_homo_regions_bed_path(self) -> str:
         """Get path to all homologous regions bed file"""
         return os.path.join(self.work_dir, "all_RG_related_homo_regions.bed")
+
+    def check_final_vcf_validity(self) -> bool:
+        """
+        Check if the final VCF is ready, valid, and updated compared to preparation outputs.
+        
+        Returns:
+            bool: True if the final VCF is valid and up-to-date, False otherwise
+        """
+        final_vcf = self.final_recall_vcf_path()
+        
+        # Check if file exists
+        if not os.path.exists(final_vcf):
+            logger.info(f"Final VCF does not exist: {final_vcf}")
+            return False
+        
+        # Check file size (should be more than just headers)
+        if os.path.getsize(final_vcf) < 1000:
+            logger.info(f"Final VCF appears too small: {os.path.getsize(final_vcf)} bytes")
+            return False
+        
+        # Check if it's newer than key preparation outputs
+        preparation_outputs = [
+            self.multiplex_graph_path(),
+            self.annotated_graph_path(),
+            self.multi_align_bed_path()
+        ]
+        
+        # Add all RG-specific files if they exist
+        for rg in self.realign_groups:
+            rg_bed = self.rg_query_bed_path(rg)
+            if os.path.exists(rg_bed):
+                preparation_outputs.append(rg_bed)
+        
+        # Check if final VCF is newer than all preparation outputs
+        final_vcf_mtime = os.path.getmtime(final_vcf)
+        for prep_file in preparation_outputs:
+            if os.path.exists(prep_file):
+                if os.path.getmtime(prep_file) > final_vcf_mtime:
+                    logger.info(f"Final VCF is older than {prep_file}")
+                    return False
+        
+        # Use shell utility to check VCF format validity
+        cmd = f"bash {shell_utils} check_vcf_validity {final_vcf} 1"
+        try:
+            result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+            if result.returncode != 0:
+                logger.info(f"VCF validity check failed: {result.stderr}")
+                return False
+        except Exception as e:
+            logger.warning(f"Could not run VCF validity check: {str(e)}")
+            # If we can't run the check, at least verify with bcftools
+            try:
+                bcftools_check = subprocess.run(
+                    f"bcftools view -H {final_vcf} | head -1",
+                    shell=True, capture_output=True, text=True
+                )
+                if bcftools_check.returncode != 0:
+                    logger.info(f"BCFtools check failed: {bcftools_check.stderr}")
+                    return False
+            except Exception as e2:
+                logger.warning(f"Could not run bcftools check: {str(e2)}")
+                return False
+        
+        logger.info(f"Final VCF is valid and up-to-date: {final_vcf}")
+        return True
+
+    def check_bed_validity(self, bed_path: str, min_lines: int = 1) -> bool:
+        """
+        Check if a BED file is valid
+        
+        Args:
+            bed_path: Path to the BED file
+            min_lines: Minimum number of lines expected (default: 1)
+            
+        Returns:
+            bool: True if the BED file is valid, False otherwise
+        """
+        if not os.path.exists(bed_path):
+            return False
+            
+        # Check file size
+        if os.path.getsize(bed_path) < 10:  # Less than 10 bytes is likely empty
+            return False
+            
+        try:
+            # Count lines and check format
+            line_count = 0
+            with open(bed_path, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):  # Skip empty lines and comments
+                        continue
+                    
+                    # Basic BED format check - at least 3 tab-separated fields
+                    fields = line.split('\t')
+                    if len(fields) < 3:
+                        logger.warning(f"Invalid BED format in {bed_path}: {line}")
+                        return False
+                    
+                    # Check that coordinates are numeric
+                    try:
+                        int(fields[1])  # start
+                        int(fields[2])  # end
+                    except ValueError:
+                        logger.warning(f"Non-numeric coordinates in {bed_path}: {line}")
+                        return False
+                    
+                    line_count += 1
+                    
+            if line_count < min_lines:
+                logger.info(f"BED file {bed_path} has only {line_count} lines, expected at least {min_lines}")
+                return False
+                
+            return True
+            
+        except Exception as e:
+            logger.warning(f"Error checking BED file {bed_path}: {str(e)}")
+            return False
+
+    def check_preparation_validity(self) -> bool:
+        """
+        Check if preparation phase outputs are valid and up-to-date compared to inputs
+        
+        Returns:
+            bool: True if preparation outputs are valid and up-to-date, False otherwise
+        """
+        # Key input files that should trigger re-preparation if changed
+        input_files = [
+            self.input_bam,
+            self.target_bed,
+            self.reference_sd_map
+        ]
+        
+        # Key output files from preparation phase that are used in realignment
+        key_outputs = [
+            self.multi_align_bed_path(),
+            self.total_intrinsic_bam_path()
+        ]
+        
+        # Check if all key output files exist
+        for output_file in key_outputs:
+            if not os.path.exists(output_file):
+                logger.info(f"Preparation output missing: {output_file}")
+                return False
+        
+        # Check if outputs are newer than inputs
+        newest_input_mtime = max(os.path.getmtime(f) for f in input_files if os.path.exists(f))
+        
+        for output_file in key_outputs:
+            if os.path.getmtime(output_file) < newest_input_mtime:
+                logger.info(f"Preparation output {output_file} is older than input files")
+                return False
+        
+        # Check multi_align_bed validity
+        if not self.check_bed_validity(self.multi_align_bed_path(), min_lines=1):
+            logger.info(f"Invalid multi-align BED file: {self.multi_align_bed_path()}")
+            return False
+        
+        # Check RG-specific files
+        for rg in self.realign_groups:
+            # Check RG query bed
+            rg_bed = self.rg_query_bed_path(rg)
+            if not self.check_bed_validity(rg_bed, min_lines=1):
+                logger.info(f"Invalid or missing RG bed file: {rg_bed}")
+                return False
+            
+            # Check if RG bed is newer than inputs
+            if os.path.getmtime(rg_bed) < newest_input_mtime:
+                logger.info(f"RG bed {rg_bed} is older than input files")
+                return False
+            
+            # Check masked genome
+            masked_genome = self.masked_genome_path(rg)
+            if not os.path.exists(masked_genome):
+                logger.info(f"Missing masked genome: {masked_genome}")
+                return False
+            
+            # Masked genome should be substantial
+            if os.path.getsize(masked_genome) < 1000:  # Less than 1KB is suspicious
+                logger.info(f"Masked genome appears too small: {masked_genome}")
+                return False
+        
+        # Check if total recall SD region bed exists and is valid
+        total_bed = self.total_recall_SD_region_bed_path()
+        if os.path.exists(total_bed):
+            if not self.check_bed_validity(total_bed, min_lines=1):
+                logger.info(f"Invalid total recall SD region bed: {total_bed}")
+                return False
+        
+        logger.info("All preparation outputs are valid and up-to-date")
+        return True
