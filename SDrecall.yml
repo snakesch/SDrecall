@@ -1,0 +1,42 @@
+name: SDrecall
+channels:
+  - conda-forge
+  - bioconda
+  - r
+  - defaults
+dependencies:
+  - python=3.12
+  - graph-tool
+  - ipython
+  - ca-certificates
+  - openssl
+  - minimap2
+  - certifi
+  - sambamba
+  - samtools
+  - bcftools
+  - pysam
+  - bioconda::pybedtools=0.11.0
+  - numba
+  - seqtk
+  - biopython
+  - cigar
+  - fuzzywuzzy
+  - highspy
+  - mawk
+  - ncls
+  - networkx
+  - requests
+  - multiprocess
+  - gffutils
+  - intervaltree
+  - pyfaidx
+  - bioconda::tsv-utils
+  - bioconda::biobambam
+  - conda-forge::git-lfs
+  - git-filter-repo
+  - maturin
+  - rust
+  - clangdev
+  - cmake
+  - patchelf
