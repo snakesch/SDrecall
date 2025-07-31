@@ -1,8 +1,11 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use rust_htslib::bam::{self, Read, Record};
-use crate::structs::{ReadPair, SortedVecIntervals, Interval, ReadPairMap};
+use crate::structs::{ReadPair, SortedVecIntervals, Interval, ReadPairMap, AlleleDepthMap, PositionAlleleDepth};
 use statrs::statistics::OrderStatistics; // For median calculation
-
+use polars::prelude::*;
+use std::process::Command;
+use rustc_hash::FxHashMap; // Faster HashMap for integer keys
+use ahash::AHashMap; // Faster HashMap for string keys
 
 #[derive(Debug, PartialEq)]
 enum ReadPairStatus {
@@ -68,11 +71,11 @@ pub fn migrate_bam_to_sorted_intervals(
     
     let mut result = ReadPairMap::new();
     let mut qname_idx_counter = 0usize;
-    let mut read_pair_status: HashMap<usize, ReadPairStatus> = HashMap::new();
-    let mut temp_readpairs: HashMap<usize, ReadPair> = HashMap::new();
+    let mut read_pair_status: FxHashMap<usize, ReadPairStatus> = FxHashMap::default();
+    let mut temp_readpairs: FxHashMap<usize, ReadPair> = FxHashMap::default();
     let mut incomplete_qname_indices: HashSet<usize> = HashSet::new();
 
-    // Pre-allocate HashMap with estimated capacity based on chromosome count
+    // Pre-allocate AHashMap with estimated capacity based on chromosome count
     let chrom_count = header.target_count() as usize;
     result.interval_trees.reserve(chrom_count);
 
@@ -95,13 +98,13 @@ pub fn migrate_bam_to_sorted_intervals(
         
         let qname = String::from_utf8_lossy(read.qname()).to_string();
         
-        if result.noisy_qnames.contains(&qname) {
+        if result.noisy_qnames.contains_key(&qname) {
             continue;
         }
 
         // Only check for noise in primary alignments
         if is_read_noisy(&read, mapq_filter, basequal_median_filter, filter_noisy) {
-            result.noisy_qnames.insert(qname.clone());
+            result.noisy_qnames.insert(qname.clone(), ());
             // Efficiently remove all intervals for this qname_idx from all chromosomes
             if let Some(&qname_idx) = result.qname_to_idx.get(&qname) {
                 read_pair_status.remove(&qname_idx);
@@ -157,7 +160,7 @@ pub fn migrate_bam_to_sorted_intervals(
                 let incomplete_readpair = ReadPair::new_incomplete(read, qname, qname_idx);
                 temp_readpairs.insert(qname_idx, incomplete_readpair);
                 read_pair_status.insert(qname_idx, ReadPairStatus::Incomplete);
-                incomplete_qname_indices.insert(&qname_idx);
+                incomplete_qname_indices.insert(qname_idx);
             }
         }
     }
@@ -260,7 +263,7 @@ fn fetch_mate_read(
 
 /// Generalized function to add interval for any read record
 fn add_read_interval(
-    interval_trees: &mut HashMap<String, SortedVecIntervals>,
+    interval_trees: &mut AHashMap<String, SortedVecIntervals>,
     chrom: &str,
     read: &Record,
     qname_idx: usize,
@@ -272,6 +275,152 @@ fn add_read_interval(
         interval_tree.add_interval(start, end, qname_idx)
     } else {
         Err(format!("Chromosome {} not found in interval trees", chrom))
+    }
+}
+
+/// Equivalent to Python's stat_ad_to_dict function
+/// 
+/// Builds allele depth information using bcftools mpileup and processes with Polars
+/// Returns a more efficient Rust data structure instead of nested HashMaps
+pub async fn build_allele_depth_map(
+    bam_file: &str,
+    reference_genome: &str,
+    mapq_filter: u8,
+    base_qual_filter: u8,
+) -> Result<AlleleDepthMap, Box<dyn std::error::Error>> {
+    let ad_file = format!("{}.ad", bam_file);
+    
+    // Use bcftools mpileup (keeping the efficient C implementation)
+    let output = Command::new("bcftools")
+        .args([
+            "mpileup", "-Ou", 
+            "--fasta-ref", reference_genome,
+            "-a", "FORMAT/AD",
+            "--indels-2.0",
+            "-q", &mapq_filter.to_string(),
+            "-Q", &base_qual_filter.to_string(),
+            bam_file
+        ])
+        .output()
+        .await?;
+    
+    if !output.status.success() {
+        return Err(format!("bcftools mpileup failed: {}", String::from_utf8_lossy(&output.stderr)).into());
+    }
+    
+    // Pipe to bcftools query
+    let query_output = Command::new("bcftools")
+        .args([
+            "query", "-f", "%CHROM\\t%POS\\t%REF\\t%ALT\\t[%AD]\\n", "-"
+        ])
+        .input(output.stdout)
+        .output()
+        .await?;
+    
+    if !query_output.status.success() {
+        return Err(format!("bcftools query failed: {}", String::from_utf8_lossy(&query_output.stderr)).into());
+    }
+    
+    // Write to temporary file for Polars to read
+    std::fs::write(&ad_file, &query_output.stdout)?;
+    
+    // Use Polars for efficient data processing (much faster than pandas)
+    let mut df = LazyFrame::scan_csv(
+        &ad_file,
+        ScanArgsCSV::default()
+            .with_separator(b'\t')
+            .with_has_header(false)
+            .with_column_names(Some(vec![
+                "chrom".to_string(),
+                "pos".to_string(), 
+                "ref".to_string(),
+                "alt".to_string(),
+                "ad".to_string()
+            ]))
+    )?
+    .filter(col("alt").is_not_null())
+    .filter(col("alt").neq(lit("<*>")))
+    .collect()?;
+    
+    // Convert to efficient Rust data structure
+    let mut allele_depth_map = AlleleDepthMap::new();
+    
+    for row in df.iter() {
+        let chrom: &str = row.get(0)?.try_extract()?;
+        let pos: u32 = (row.get(1)?.try_extract::<i64>()? - 1) as u32; // Convert to 0-based u32
+        let ref_allele: &str = row.get(2)?.try_extract()?;
+        let alt_alleles: &str = row.get(3)?.try_extract()?;
+        let ad_str: &str = row.get(4)?.try_extract()?;
+        
+        // Parse AD values
+        let ad_values: Vec<u16> = ad_str
+            .split(',')
+            .filter_map(|s| s.parse().ok())
+            .collect();
+            
+        if ad_values.is_empty() {
+            continue;
+        }
+        
+        let ref_depth = ad_values[0];
+        let total_depth: u16 = ad_values.iter().sum();
+        
+        if total_depth == 0 {
+            continue;
+        }
+        
+        // Parse ALT alleles  
+        let alt_list: Vec<&str> = alt_alleles
+            .trim_end_matches(",<*>")
+            .split(',')
+            .collect();
+            
+        // Create position entry - just a simple array
+        let mut position_data = AlleleDepthMap::new_position_data(total_depth);
+        
+        // Add reference depth
+        AlleleDepthMap::set_allele_depth(
+            &mut position_data, 
+            base_to_index(ref_allele.chars().next().unwrap_or('N')), 
+            ref_depth
+        );
+        
+        // Add alt allele depths
+        for (i, &alt_allele) in alt_list.iter().enumerate() {
+            if i + 1 < ad_values.len() && !alt_allele.is_empty() {
+                let alt_depth = ad_values[i + 1];
+                if alt_depth > 0 {
+                    // Only handle SNVs for now (same as Python version)
+                    if alt_allele.len() == 1 && ref_allele.len() == 1 {
+                        let alt_char = alt_allele.chars().next().unwrap();
+                        AlleleDepthMap::set_allele_depth(
+                            &mut position_data,
+                            base_to_index(alt_char), 
+                            alt_depth
+                        );
+                    }
+                }
+            }
+        }
+        
+        allele_depth_map.insert(chrom, pos, position_data);
+    }
+    
+    // Clean up temporary file
+    std::fs::remove_file(&ad_file).ok();
+    
+    Ok(allele_depth_map)
+}
+
+/// Convert DNA base to array index (more efficient than HashMap lookups)
+#[inline]
+fn base_to_index(base: char) -> usize {
+    match base.to_ascii_uppercase() {
+        'A' => 0,
+        'T' => 1, 
+        'C' => 2,
+        'G' => 3,
+        _ => 4,  // N or any other base
     }
 }
 

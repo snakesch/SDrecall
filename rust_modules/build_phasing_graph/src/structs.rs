@@ -1,5 +1,9 @@
-use std::collections::HashMap;
+use std::collections::HashSet;
 use rust_htslib::bam::Record;
+use rustc_hash::FxHashMap;
+use ahash::AHashMap;
+use petgraph::Graph;
+use petgraph::Undirected;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Interval {
@@ -15,8 +19,8 @@ impl Interval {
 }
 
 pub struct SortedVecIntervals {
-    // Use fixed-size arrays instead of Vec for exactly 2 intervals per qname_idx
-    interval_map: HashMap<usize, [Option<Interval>; 2]>,
+    // Use FxHashMap for integer keys (qname_idx)
+    interval_map: FxHashMap<usize, [Option<Interval>; 2]>,
     // For querying phase: pre-allocated vector for fast overlap queries
     sorted_intervals: Option<Vec<Interval>>,
     is_finalized: bool,
@@ -25,7 +29,7 @@ pub struct SortedVecIntervals {
 impl SortedVecIntervals {
     pub fn new() -> Self {
         Self {
-            interval_map: HashMap::new(),
+            interval_map: FxHashMap::default(),
             sorted_intervals: None,
             is_finalized: false,
         }
@@ -196,23 +200,27 @@ impl ReadPair {
     }
 }
 
-
 pub struct ReadPairMap {
-    pub interval_trees: HashMap<String, SortedVecIntervals>,
-    pub readpair_dict: HashMap<usize, ReadPair>,
-    pub qname_to_idx: HashMap<String, usize>,
-    pub idx_to_qname: HashMap<usize, String>,
-    pub noisy_qnames: HashSet<String>,
+    // Use AHashMap for string keys (chromosome names)
+    pub interval_trees: AHashMap<String, SortedVecIntervals>,
+    // Use FxHashMap for integer keys (qname_idx)
+    pub readpair_dict: FxHashMap<usize, ReadPair>,
+    // Use AHashMap for string keys (qname)
+    pub qname_to_idx: AHashMap<String, usize>,
+    // Use FxHashMap for integer keys (qname_idx)
+    pub idx_to_qname: FxHashMap<usize, String>,
+    // Use AHashMap for string keys (qname)
+    pub noisy_qnames: AHashMap<String, ()>, // Use HashMap as HashSet with () values
 }
 
 impl ReadPairMap {
     pub fn new() -> Self {
         Self {
-            interval_trees: HashMap::new(),
-            readpair_dict: HashMap::new(),
-            qname_to_idx: HashMap::new(),
-            idx_to_qname: HashMap::new(),
-            noisy_qnames: HashSet::new(),
+            interval_trees: AHashMap::new(),
+            readpair_dict: FxHashMap::default(),
+            qname_to_idx: AHashMap::new(),
+            idx_to_qname: FxHashMap::default(),
+            noisy_qnames: AHashMap::new(),
         }
     }
 
@@ -235,5 +243,205 @@ impl ReadPairMap {
             .unwrap_or_default()
             .into_iter()
             .filter_map(move |idx| self.readpair_dict.get(&idx))
+    }
+}
+
+/// Simple array for allele depths: [A, T, C, G, N, total_depth]
+/// Much simpler than a custom struct for just storing 6 u16 values
+pub type PositionAlleleDepth = [u16; 6];
+
+/// Efficient nested structure for chromosome -> position -> allele depths
+/// Uses specialized HashMaps for better performance
+pub struct AlleleDepthMap {
+    /// Outer map: chromosome name -> inner map
+    /// Using AHashMap for string keys (chromosome names)
+    /// Using FxHashMap with u32 for genomic positions (max ~250M for human genome)
+    chromosomes: AHashMap<String, FxHashMap<u32, PositionAlleleDepth>>,
+}
+
+impl AlleleDepthMap {
+    pub fn new() -> Self {
+        Self {
+            chromosomes: AHashMap::new(),
+        }
+    }
+    
+    pub fn insert(&mut self, chrom: &str, pos: u32, data: PositionAlleleDepth) {
+        self.chromosomes
+            .entry(chrom.to_string())
+            .or_insert_with(FxHashMap::default)
+            .insert(pos, data);
+    }
+    
+    pub fn get(&self, chrom: &str, pos: u32) -> Option<&PositionAlleleDepth> {
+        self.chromosomes.get(chrom)?.get(&pos)
+    }
+    
+    pub fn get_mut(&mut self, chrom: &str, pos: u32) -> Option<&mut PositionAlleleDepth> {
+        self.chromosomes.get_mut(chrom)?.get_mut(&pos)
+    }
+    
+    /// Iterator over all positions in a chromosome
+    pub fn chromosome_positions(&self, chrom: &str) -> Option<impl Iterator<Item = (&u32, &PositionAlleleDepth)>> {
+        self.chromosomes.get(chrom).map(|pos_map| pos_map.iter())
+    }
+}
+
+/// Helper functions for working with PositionAlleleDepth arrays
+impl AlleleDepthMap {
+    /// Create a new allele depth array with total depth
+    pub fn new_position_data(total_depth: u16) -> PositionAlleleDepth {
+        [0, 0, 0, 0, 0, total_depth] // [A, T, C, G, N, total]
+    }
+    
+    /// Set allele depth at given index
+    pub fn set_allele_depth(data: &mut PositionAlleleDepth, allele_index: usize, depth: u16) {
+        if allele_index < 5 {
+            data[allele_index] = depth;
+        }
+    }
+    
+    /// Get allele depth at given index
+    pub fn get_allele_depth(data: &PositionAlleleDepth, allele_index: usize) -> u16 {
+        if allele_index < 5 {
+            data[allele_index]
+        } else {
+            0
+        }
+    }
+    
+    /// Get total depth
+    pub fn total_depth(data: &PositionAlleleDepth) -> u16 {
+        data[5]
+    }
+}
+
+/// Overlap interval between two reads
+/// Represents a genomic region where two reads overlap
+#[derive(Debug, Clone)]
+pub struct OverlapInterval {
+    pub start: i64,
+    pub end: i64,
+    pub read1_ref: String,  // Reference to first read (could be qname or read_id)
+    pub read2_ref: String,  // Reference to second read
+}
+
+/// Read haplotype vector - stores variant information for a read
+/// This is equivalent to the Python read_hap_vectors dictionary
+pub type ReadHaplotypeVector = Vec<i8>;  // Could be variant calls, error flags, etc.
+
+/// Read error vector - stores error information for a read  
+pub type ReadErrorVector = Vec<f32>;     // Error probabilities or quality scores
+
+/// Fast interval storage for tracking inspected overlaps
+/// Equivalent to Python's FastIntervals class
+#[derive(Debug)]
+pub struct FastIntervals {
+    starts: Vec<i64>,
+    ends: Vec<i64>,
+    max_size: usize,
+    current_size: usize,
+}
+
+impl FastIntervals {
+    pub fn new(max_size: usize) -> Self {
+        Self {
+            starts: Vec::with_capacity(max_size),
+            ends: Vec::with_capacity(max_size),
+            max_size,
+            current_size: 0,
+        }
+    }
+    
+    pub fn add(&mut self, start: i64, end: i64) {
+        if self.current_size < self.max_size {
+            self.starts.push(start);
+            self.ends.push(end);
+            self.current_size += 1;
+        }
+    }
+    
+    pub fn clear(&mut self) {
+        self.starts.clear();
+        self.ends.clear();
+        self.current_size = 0;
+    }
+    
+    pub fn get_intervals(&self) -> (&[i64], &[i64]) {
+        (&self.starts[..self.current_size], &self.ends[..self.current_size])
+    }
+}
+
+/// Phasing graph structure using petgraph
+/// This replaces graph-tool's Graph in Python
+pub type PhasingGraph = Graph<String, f32, Undirected>;  // Node: qname, Edge: weight
+
+/// Complete phasing graph result
+/// Contains all the data structures returned by the Python function
+pub struct PhasingGraphResult {
+    /// The main graph structure (equivalent to Python's phased_graph)
+    pub graph: PhasingGraph,
+    
+    /// Weight matrix for fast lookups (equivalent to Python's weight_matrix)
+    /// Using FxHashMap for better performance with integer keys
+    pub weight_matrix: FxHashMap<(usize, usize), f32>,
+    
+    /// Mapping from qname to graph node index (equivalent to Python's qname_to_node)
+    pub qname_to_node: AHashMap<String, petgraph::graph::NodeIndex>,
+    
+    /// Read haplotype vectors (equivalent to Python's read_hap_vectors)
+    pub read_hap_vectors: AHashMap<String, ReadHaplotypeVector>,
+    
+    /// Read error vectors (equivalent to Python's read_error_vectors)  
+    pub read_error_vectors: AHashMap<String, ReadErrorVector>,
+    
+    /// Read reference position dictionary (equivalent to Python's read_ref_pos_dict)
+    pub read_ref_pos_dict: AHashMap<String, (i64, i64)>,  // (start, end) positions
+}
+
+impl PhasingGraphResult {
+    pub fn new() -> Self {
+        Self {
+            graph: Graph::new_undirected(),
+            weight_matrix: FxHashMap::default(),
+            qname_to_node: AHashMap::new(),
+            read_hap_vectors: AHashMap::new(),
+            read_error_vectors: AHashMap::new(),
+            read_ref_pos_dict: AHashMap::new(),
+        }
+    }
+    
+    /// Get number of vertices in the graph
+    pub fn vertex_count(&self) -> usize {
+        self.graph.node_count()
+    }
+    
+    /// Get number of edges in the graph  
+    pub fn edge_count(&self) -> usize {
+        self.graph.edge_count()
+    }
+}
+
+/// Configuration for haplotype determination
+/// Groups all the parameters needed for the determine_same_haplotype function
+#[derive(Debug, Clone)]
+pub struct HaplotypeConfig {
+    pub mean_read_length: f32,
+    pub edge_weight_cutoff: f32,
+    pub score_array: Vec<f32>,  // Equivalent to Python's score_arr
+}
+
+impl HaplotypeConfig {
+    pub fn new(mean_read_length: f32) -> Self {
+        // Create score array equivalent to Python: [mean_read_length + mean_read_length * i for i in range(50)]
+        let score_array: Vec<f32> = (0..50)
+            .map(|i| mean_read_length + mean_read_length * i as f32)
+            .collect();
+            
+        Self {
+            mean_read_length,
+            edge_weight_cutoff: 0.201,  // Default heuristic cutoff from Python
+            score_array,
+        }
     }
 }
