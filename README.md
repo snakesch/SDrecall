@@ -23,7 +23,7 @@ Users should first clone this repository to a local directory.
 
 For mamba/conda users, create an environment from YAML:
 ```bash
-mamba env create -f ./env/SDrecall.yml
+mamba env create -f ./SDrecall.yml --channel-priority flexible
 mamba activate SDrecall
 ```
 
