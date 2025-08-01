@@ -6,12 +6,14 @@ use crate::structs::{
     ReadPairMap, AlleleDepthMap, PhasingGraphResult, HaplotypeConfig, 
     FastIntervals, OverlapInterval, ReadHaplotypeVector, ReadErrorVector
 };
+use crate::haplotype_determination::{determine_same_haplotype, HaplotypeResult};
 use rustc_hash::FxHashMap;
 use ahash::AHashMap;
+use rust_htslib::bam::Record;
 
 /// Build a phasing graph from BAM data for efficient haplotype identification.
 ///
-/// This function builds a graph where each vertex represents a read pair and each edge
+/// This function constructs a graph where each vertex represents a read pair and each edge
 /// represents the confidence that two read pairs originated from the same haplotype.
 /// The graph is used for subsequent haplotype identification through clique finding.
 ///
@@ -21,7 +23,7 @@ use ahash::AHashMap;
 /// * `allele_depth_map` - Allele depth information from variant calling
 /// * `intrinsic_allele_depth_map` - Optional intrinsic allele depth data 
 /// * `config` - Configuration parameters for haplotype determination
-/// * `low_qual_qnames` - Set of query names identified as low quality
+/// * `low_qual_qnames` - Mutable set of query names identified as low quality (will be updated)
 ///
 /// # Returns
 ///
@@ -30,63 +32,88 @@ use ahash::AHashMap;
 ///
 /// # Notes
 ///
-/// - The function uses petgraph library for efficient graph operations (equivalent to graph-tool)
+/// - The function uses petgraph library for efficient graph operations (equivalent to Python's graph-tool)
 /// - Edge weights are calculated based on two factors:
 ///   1. The total overlapping span between two read pairs
 ///   2. The number of variants (SNVs and small indels) shared by two read pairs
 /// - Node indices in petgraph are automatically assigned and may differ from qname_idx
-/// - The resulting graph is used for subsequent haplotype identification through clique finding
+/// - We maintain a mapping between qname_idx and NodeIndex for cross-referencing
+/// - The resulting graph is used for subsequent haplotype identification through clique finding (Greedy-Clique-Expansion algorithm)
 ///
-/// # Panics
+/// # Differences from Python
 ///
-/// The function may panic if there are inconsistencies in the input data structures
+/// - Python uses graph-tool which allows custom vertex indices, but petgraph auto-assigns NodeIndex
+/// - Python uses numpy arrays for weight matrix, we use FxHashMap for sparse representation
+/// - Python's qname_check_dict becomes checked_pairs HashSet with NodeIndex tuples
 pub fn build_phasing_graph(
     read_pair_map: &ReadPairMap,
     allele_depth_map: &AlleleDepthMap,
     intrinsic_allele_depth_map: Option<&AlleleDepthMap>,
     config: &HaplotypeConfig,
-    low_qual_qnames: &HashSet<String>,
+    low_qual_qnames: &mut HashSet<String>,
 ) -> Result<PhasingGraphResult, Box<dyn std::error::Error>> {
     
     let total_read_pairs = read_pair_map.readpair_dict.len();
-    info!("Building phasing graph with {} read pairs, mean read length: {}", 
+    info!("There are totally {} pair of reads, mean read length is {:.1}. with adequate mapping or base quality which can be used to build the graph", 
           total_read_pairs, config.mean_read_length);
+    
+    // Check if no ALT alleles found (equivalent to Python's early return)
+    if allele_depth_map.is_empty() {
+        warn!("No ALT allele found in this BAM file. Skip this entire script");
+        return Ok(PhasingGraphResult::new());
+    }
     
     let mut result = PhasingGraphResult::new();
     
-    // Track which node pairs we've already checked to avoid duplicates
-    // Using a more efficient representation than Python's qname_check_dict
+    // Create a mapping from qname_idx to NodeIndex for cross-referencing
+    // This is necessary because petgraph doesn't let us control node indices
+    let mut qname_idx_to_node: FxHashMap<usize, NodeIndex> = FxHashMap::default();
+    
+    // Create a set to track which node pairs we've already checked
+    // Equivalent to Python's qname_check_dict but using NodeIndex pairs
     let mut checked_pairs: HashSet<(NodeIndex, NodeIndex)> = HashSet::new();
     
-    // Create weight matrix with initial capacity
-    // In Rust, we use HashMap instead of numpy array for sparse representation
-    result.weight_matrix.reserve(total_read_pairs * total_read_pairs / 4); // Rough estimate
+    // Initialize weight matrix with estimated capacity
+    // Using sparse representation (HashMap) instead of dense numpy array
+    let estimated_edges = total_read_pairs * total_read_pairs / 4; // Rough estimate
+    result.weight_matrix.reserve(estimated_edges);
     
-    // Iterate through all read pairs to build the graph
-    // This is equivalent to Python's: for qname_idx, paired_reads in ncls_read_dict.items()
+    // Use NCLS read dict to iterate through all the reads to build a graph
+    // One good thing is that every key: value stores a pair of read objects
     for (&qname_idx, read_pair) in &read_pair_map.readpair_dict {
         let qname = &read_pair.qname;
         
-        // Add node to graph if it doesn't exist
-        // In petgraph, NodeIndex is automatically assigned (unlike Python where we control it)
+        // Verify all reads in the pair have the same query name (assertion from Python)
+        debug_assert!(
+            read_pair.read2.as_ref().map_or(true, |r2| 
+                std::str::from_utf8(read_pair.read1.qname()).ok() == 
+                std::str::from_utf8(r2.qname()).ok()
+            ),
+            "The query names of the reads in the paired_reads are not the same"
+        );
+        
+        // Check if the query name already exists in the graph
         let node_idx = if let Some(&existing_node) = result.qname_to_node.get(qname) {
             existing_node
         } else {
+            // Add a new node to the graph
             let new_node = result.graph.add_node(qname.clone());
             result.qname_to_node.insert(qname.clone(), new_node);
+            qname_idx_to_node.insert(qname_idx, new_node);
+            debug!("Added a new node {:?} for qname {} to the graph", new_node, qname);
             new_node
         };
         
         // Get chromosome and position info for overlap queries
-        let chrom = get_read_chromosome(read_pair)?;
+        let chrom = get_read_chromosome(read_pair, &read_pair_map)?;
         let (start, end) = get_read_pair_span(read_pair);
         
         // Find overlapping read pairs using the interval tree
-        // This replaces Python's overlap_qname_idx_iterator
+        // This replaces Python's overlap_qname_idx_iterator function
         let overlapping_qname_indices = read_pair_map
             .find_overlapping_qname_indices(&chrom, start, end)?;
         
-        // Process each overlapping read pair
+        // Iterate through the overlapping reads
         for other_qname_idx in overlapping_qname_indices {
             // Skip self-comparison
             if qname_idx == other_qname_idx {
@@ -104,105 +131,221 @@ pub fn build_phasing_graph(
             
             let other_qname = &other_read_pair.qname;
             
-            // Add other node to graph if it doesn't exist
+            // Check if the other query name already exists in the graph
             let other_node_idx = if let Some(&existing_node) = result.qname_to_node.get(other_qname) {
                 existing_node
             } else {
+                // Add a new node to the graph
                 let new_node = result.graph.add_node(other_qname.clone());
                 result.qname_to_node.insert(other_qname.clone(), new_node);
+                qname_idx_to_node.insert(other_qname_idx, new_node);
+                debug!("Added a new node {:?} for qname {} to the graph", new_node, other_qname);
                 new_node
             };
             
-            // Check if we've already processed this pair
+            // Check if we've already inspected this edge
             // Use ordered pair to avoid checking (A,B) and (B,A) separately
-            let pair_key = if node_idx < other_node_idx {
-                (node_idx, other_node_idx)
-            } else {
-                (other_node_idx, node_idx)
-            };
-            
-            if checked_pairs.contains(&pair_key) {
+            let inspect_res = check_edge(node_idx, other_node_idx, &checked_pairs);
+            if inspect_res {
                 continue;
             }
-            checked_pairs.insert(pair_key);
             
-            // Skip low quality read pairs (equivalent to Python's total_lowqual_qnames check)
-            if low_qual_qnames.contains(qname) || low_qual_qnames.contains(other_qname) {
+            // Mark this pair as checked
+            checked_pairs.insert((node_idx.min(other_node_idx), node_idx.max(other_node_idx)));
+            
+            // Check if either read is low quality
+            if low_qual_qnames.contains(qname) {
                 // Mark as negative weight in matrix (indicates low quality)
                 result.weight_matrix.insert((node_idx.index(), other_node_idx.index()), -1.0);
                 result.weight_matrix.insert((other_node_idx.index(), node_idx.index()), -1.0);
-                debug!("Skipping low quality read pair comparison: {} vs {}", qname, other_qname);
+                debug!("The read pair {} is low quality, skip inspecting this pair of fragments", qname);
                 continue;
             }
             
-            // Find overlap intervals between the two read pairs
-            // This replaces Python's get_overlap_intervals function
-            let overlap_intervals = find_overlap_intervals(read_pair, other_read_pair)?;
-            
-            if overlap_intervals.is_empty() {
-                debug!("No overlap intervals found between {} and {}", qname, other_qname);
+            if low_qual_qnames.contains(other_qname) {
+                // Mark as negative weight in matrix (indicates low quality)
+                result.weight_matrix.insert((node_idx.index(), other_node_idx.index()), -1.0);
+                result.weight_matrix.insert((other_node_idx.index(), node_idx.index()), -1.0);
+                debug!("The read pair {} is low quality, skip inspecting this pair of fragments", other_qname);
                 continue;
             }
             
+            // Inspect the overlap between the two pairs of reads
+            let overlap_intervals = get_overlap_intervals(read_pair, other_read_pair)?;
             debug!("Found {} overlap intervals between {} and {}", 
                    overlap_intervals.len(), qname, other_qname);
             
-            // Process overlapping regions to determine haplotype compatibility
-            let edge_weight = process_overlap_regions(
-                &overlap_intervals,
-                read_pair,
-                other_read_pair,
-                allele_depth_map,
-                intrinsic_allele_depth_map,
-                config,
-                &mut result.read_hap_vectors,
-                &mut result.read_error_vectors,
-                &mut result.read_ref_pos_dict,
-            )?;
-            
-            // Add edge to graph based on compatibility
-            match edge_weight {
-                Some(weight) if weight > config.edge_weight_cutoff => {
-                    // Reads are compatible - add edge to graph
-                    let edge = result.graph.add_edge(node_idx, other_node_idx, weight);
-                    result.weight_matrix.insert((node_idx.index(), other_node_idx.index()), weight);
-                    result.weight_matrix.insert((other_node_idx.index(), node_idx.index()), weight);
-                    debug!("Added edge between {} and {} with weight {}", qname, other_qname, weight);
-                }
-                Some(_) => {
-                    // Weight too low - don't add edge but record the weight
-                    debug!("Edge weight too low between {} and {}", qname, other_qname);
-                }
-                None => {
-                    // Reads are incompatible - mark with negative weight
-                    result.weight_matrix.insert((node_idx.index(), other_node_idx.index()), -1.0);
-                    result.weight_matrix.insert((other_node_idx.index(), node_idx.index()), -1.0);
-                    debug!("Reads {} and {} are incompatible", qname, other_qname);
-                }
+            if overlap_intervals.is_empty() {
+                continue;
             }
+            
+            // Process overlapping regions to determine haplotype compatibility
+            // Using more descriptive variable names than Python's qname_bools
+            let mut compatibility_results: Vec<i32> = Vec::with_capacity(4);
+            let mut pair_weight: Option<f32> = None;
+            
+            // Track inspected overlaps to avoid redundant processing
+            // Clear all the contents inside the inspected_overlaps
+            let mut inspected_overlaps = FastIntervals::new(overlap_intervals.len());
+            
+            for overlap in &overlap_intervals {
+                // Find uncovered regions within this overlap
+                // This replaces Python's find_uncovered_regions_numba call
+                let uncovered_regions = find_uncovered_regions_numba(
+                    &inspected_overlaps,
+                    overlap.start,
+                    overlap.end
+                );
+                
+                debug!("Found {} uncovered regions for overlap {:?}", 
+                       uncovered_regions.len(), overlap);
+                
+                for uncovered_region in uncovered_regions {
+                    let (uncovered_start, uncovered_end) = (uncovered_region[0], uncovered_region[1]);
+                    
+                    // Check if either read became low quality during processing
+                    if low_qual_qnames.contains(other_qname) {
+                        debug!("The read pair {} is low quality, skip this pair of reads", other_qname);
+                        break;
+                    }
+                    if low_qual_qnames.contains(qname) {
+                        debug!("The read pair {} is low quality, skip this pair of reads", qname);
+                        break;
+                    }
+                    
+                    // Determine if reads come from same haplotype in this region
+                    // This calls the placeholder function that will be implemented later
+                    let (haplotype_result, read_weight) = determine_same_haplotype(
+                        read_pair,
+                        other_read_pair,
+                        uncovered_start,
+                        uncovered_end,
+                        &chrom,
+                        allele_depth_map,
+                        intrinsic_allele_depth_map,
+                        config,
+                        &mut result.read_hap_vectors,
+                        &mut result.read_error_vectors,
+                        &mut result.read_ref_pos_dict,
+                        low_qual_qnames,
+                    )?;
+                    
+                    // Process the haplotype comparison result
+                    match haplotype_result {
+                        HaplotypeResult::Same => {
+                            compatibility_results.push(1);
+                            if let Some(weight) = read_weight {
+                                info!("Weight is {}. Found the reads {} and {} are in the same haplotype, overlap region ({}-{})", 
+                                      weight, qname, other_qname, overlap.start, overlap.end);
+                            }
+                        }
+                        HaplotypeResult::Different => {
+                            compatibility_results.push(-1);
+                            info!("Found the reads {} and {} are in different haplotypes, overlap region ({}-{})", 
+                                  qname, other_qname, overlap.start, overlap.end);
+                        }
+                        HaplotypeResult::Unknown => {
+                            compatibility_results.push(0);
+                        }
+                    }
+                    
+                    // Update pair weight
+                    if let Some(weight) = read_weight {
+                        let weight = weight.max(0.0); // Ensure non-negative
+                        let norm_weight = weight / (config.mean_read_length * 10.0);
+                        
+                        match pair_weight {
+                            None => pair_weight = Some(norm_weight),
+                            Some(ref mut pw) => *pw += norm_weight,
+                        }
+                    }
+                }
+                
+                // Mark this overlap as inspected
+                inspected_overlaps.add(overlap.start, overlap.end);
+            }
+            
+            // Check if reads became low quality during processing
+            if low_qual_qnames.contains(other_qname) || low_qual_qnames.contains(qname) {
+                result.weight_matrix.insert((node_idx.index(), other_node_idx.index()), -1.0);
+                result.weight_matrix.insert((other_node_idx.index(), node_idx.index()), -1.0);
+                continue;
+            }
+            
+            // Determine final compatibility based on all results
+            // Equivalent to Python's any_false_numba(qname_bools) check
+            let final_weight = if any_false(&compatibility_results) {
+                // Any incompatible region means overall incompatibility
+                info!("Qname_bools are {:?}, Found two pairs {} and {} are in different haplotypes", 
+                      compatibility_results, qname, other_qname);
+                result.weight_matrix.insert((node_idx.index(), other_node_idx.index()), -1.0);
+                result.weight_matrix.insert((other_node_idx.index(), node_idx.index()), -1.0);
+                None
+            } else {
+                // All regions compatible or unknown
+                let weight = pair_weight.unwrap_or(0.0).max(1e-4); // Minimum weight for compatible pairs
+                debug!("Between {} and {}, the pair weight is {}", qname, other_qname, weight);
+                
+                result.weight_matrix.insert((node_idx.index(), other_node_idx.index()), weight);
+                result.weight_matrix.insert((other_node_idx.index(), node_idx.index()), weight);
+                
+                // Add edge to graph
+                let edge = result.graph.add_edge(node_idx, other_node_idx, weight);
+                info!("Added edge {:?} between {} and {} with weight {}", edge, qname, other_qname, weight);
+                
+                Some(weight)
+            };
         }
     }
     
-    info!("Finished building phasing graph: {} vertices, {} edges", 
+    info!("Now we finished building up the edges in the graph. There are currently {} vertices and {} edges in the graph", 
           result.vertex_count(), result.edge_count());
     
     Ok(result)
 }
 
+/// Check if an edge between two nodes has already been inspected
+/// 
+/// Equivalent to Python's check_edge function but adapted for Rust's HashSet
+/// Returns true if the edge was already checked, false otherwise
+fn check_edge(u: NodeIndex, v: NodeIndex, checked_pairs: &HashSet<(NodeIndex, NodeIndex)>) -> bool {
+    // Check both orderings since we store ordered pairs
+    let ordered = if u < v { (u, v) } else { (v, u) };
+    checked_pairs.contains(&ordered)
+}
+
 /// Extract chromosome name from a read pair
-fn get_read_chromosome(read_pair: &crate::structs::ReadPair) -> Result<String, Box<dyn std::error::Error>> {
-    // Use rust-htslib to get chromosome name
-    // This is equivalent to Python's paired_reads[0].reference_name
-    if let Some(tid) = read_pair.read1.tid() {
-        // In a real implementation, you'd need access to the BAM header to convert tid to chromosome name
-        // For now, we'll use a placeholder - this needs to be passed from the calling function
-        Ok(format!("chr{}", tid)) // Placeholder - needs proper header lookup
-    } else {
-        Err("Read has no valid chromosome assignment".into())
+/// 
+/// This function needs access to the BAM header to convert tid to chromosome name
+/// In Python this is simple: paired_reads[0].reference_name
+/// In Rust, we need to handle the conversion properly
+fn get_read_chromosome(
+    read_pair: &crate::structs::ReadPair,
+    read_pair_map: &ReadPairMap,
+) -> Result<String, Box<dyn std::error::Error>> {
+    // For now, we'll extract the chromosome from the interval trees
+    // This assumes the read was already properly indexed in the interval trees
+    
+    // Find which chromosome this read pair belongs to by checking interval trees
+    for (chrom, _) in &read_pair_map.interval_trees {
+        if read_pair_map.find_overlapping_qname_indices(
+            chrom, 
+            read_pair.read1.reference_start(), 
+            read_pair.read1.reference_end()
+        )?.contains(&read_pair.qname_idx) {
+            return Ok(chrom.clone());
+        }
     }
+    
+    Err("Read pair not found in any chromosome interval tree".into())
 }
 
 /// Calculate the genomic span covered by a read pair
+/// 
+/// Returns the minimum start position and maximum end position across all reads in the pair
+/// Equivalent to Python's:
+///   start = min(r.reference_start for r in paired_reads)
+///   end = max(r.reference_end for r in paired_reads)
 fn get_read_pair_span(read_pair: &crate::structs::ReadPair) -> (i64, i64) {
     let read1_start = read_pair.read1.reference_start();
     let read1_end = read_pair.read1.reference_end();
@@ -214,36 +357,37 @@ fn get_read_pair_span(read_pair: &crate::structs::ReadPair) -> (i64, i64) {
     };
     
     // Return the span covering both reads
-    // Equivalent to Python's: start = min(r.reference_start for r in paired_reads)
-    //                         end = max(r.reference_end for r in paired_reads)
     (read1_start.min(read2_start), read1_end.max(read2_end))
 }
 
-/// Find overlap intervals between two read pairs
-/// This replaces Python's get_overlap_intervals function
-fn find_overlap_intervals(
+/// Extract the overlapping intervals between two pairs of reads
+/// 
+/// This function finds all genomic regions where reads from two different pairs overlap
+/// Returns a vector of OverlapInterval structs containing the overlap coordinates
+/// 
+/// Equivalent to Python's get_overlap_intervals function
+fn get_overlap_intervals(
     read_pair1: &crate::structs::ReadPair,
     read_pair2: &crate::structs::ReadPair,
 ) -> Result<Vec<OverlapInterval>, Box<dyn std::error::Error>> {
     let mut overlaps = Vec::new();
     
-    // Check all possible combinations of reads between the two pairs
-    let reads1 = vec![&read_pair1.read1];
-    let reads1 = if let Some(ref read2) = read_pair1.read2 {
+    // Collect all reads from both pairs
+    let reads1: Vec<&Record> = if let Some(ref read2) = read_pair1.read2 {
         vec![&read_pair1.read1, read2]
     } else {
         vec![&read_pair1.read1]
     };
     
-    let reads2 = if let Some(ref read2) = read_pair2.read2 {
+    let reads2: Vec<&Record> = if let Some(ref read2) = read_pair2.read2 {
         vec![&read_pair2.read1, read2]
     } else {
         vec![&read_pair2.read1]
     };
     
-    for read1 in &reads1 {
-        for read2 in &reads2 {
-            // Check if reads overlap
+    // Check all possible combinations of reads between the two pairs
+    for (i, read1) in reads1.iter().enumerate() {
+        for (j, read2) in reads2.iter().enumerate() {
             let start1 = read1.reference_start();
             let end1 = read1.reference_end();
             let start2 = read2.reference_start();
@@ -254,12 +398,27 @@ fn find_overlap_intervals(
             let overlap_end = end1.min(end2);
             
             if overlap_start < overlap_end {
+                // Create read identifiers for debugging
+                let read1_id = format!("{}_{}", 
+                    std::str::from_utf8(read1.qname()).unwrap_or("unknown"), 
+                    if i == 0 { "R1" } else { "R2" }
+                );
+                let read2_id = format!("{}_{}", 
+                    std::str::from_utf8(read2.qname()).unwrap_or("unknown"),
+                    if j == 0 { "R1" } else { "R2" }
+                );
+                
                 overlaps.push(OverlapInterval {
                     start: overlap_start,
                     end: overlap_end,
-                    read1_ref: format!("{}:{}-{}", read1.tid().unwrap_or(0), start1, end1),
-                    read2_ref: format!("{}:{}-{}", read2.tid().unwrap_or(0), start2, end2),
+                    read1_ref: read1_id,
+                    read2_ref: read2_id,
                 });
+                
+                debug!("Found overlap interval {}-{} between {} and {}", 
+                       overlap_start, overlap_end, 
+                       overlaps.last().unwrap().read1_ref,
+                       overlaps.last().unwrap().read2_ref);
             }
         }
     }
@@ -267,199 +426,62 @@ fn find_overlap_intervals(
     Ok(overlaps)
 }
 
-/// Process overlap regions to determine haplotype compatibility
-/// This is the main logic equivalent to Python's nested loop processing
-fn process_overlap_regions(
-    overlap_intervals: &[OverlapInterval],
-    read_pair1: &crate::structs::ReadPair,
-    read_pair2: &crate::structs::ReadPair,
-    allele_depth_map: &AlleleDepthMap,
-    intrinsic_allele_depth_map: Option<&AlleleDepthMap>,
-    config: &HaplotypeConfig,
-    read_hap_vectors: &mut AHashMap<String, ReadHaplotypeVector>,
-    read_error_vectors: &mut AHashMap<String, ReadErrorVector>,
-    read_ref_pos_dict: &mut AHashMap<String, (i64, i64)>,
-) -> Result<Option<f32>, Box<dyn std::error::Error>> {
-    
-    // Track haplotype compatibility results
-    // Equivalent to Python's qname_bools array
-    let mut compatibility_results = Vec::new();
-    let mut total_weight = 0.0f32;
-    
-    // Track inspected overlaps to avoid double-counting
-    // Equivalent to Python's inspected_overlaps = FastIntervals(max_size = len(overlap_intervals))
-    let mut inspected_overlaps = FastIntervals::new(overlap_intervals.len());
-    
-    for overlap in overlap_intervals {
-        // Find uncovered regions within this overlap
-        // This replaces Python's find_uncovered_regions_numba call
-        let uncovered_regions = find_uncovered_regions(&inspected_overlaps, overlap.start, overlap.end);
-        
-        for (uncovered_start, uncovered_end) in uncovered_regions {
-            // Determine if reads come from same haplotype in this region
-            // This is the PLACEHOLDER for the complex determine_same_haplotype function
-            let haplotype_result = determine_same_haplotype_placeholder(
-                read_pair1,
-                read_pair2,
-                uncovered_start,
-                uncovered_end,
-                allele_depth_map,
-                intrinsic_allele_depth_map,
-                config,
-                read_hap_vectors,
-                read_error_vectors,
-                read_ref_pos_dict,
-            )?;
-            
-            match haplotype_result {
-                HaplotypeCompatibility::Same(weight) => {
-                    compatibility_results.push(1);
-                    total_weight += weight;
-                    debug!("Reads compatible in region {}:{}-{} with weight {}", 
-                           overlap.start, uncovered_start, uncovered_end, weight);
-                }
-                HaplotypeCompatibility::Different => {
-                    compatibility_results.push(-1);
-                    debug!("Reads incompatible in region {}:{}-{}", 
-                           overlap.start, uncovered_start, uncovered_end);
-                }
-                HaplotypeCompatibility::Unknown => {
-                    compatibility_results.push(0);
-                    debug!("Unknown compatibility in region {}:{}-{}", 
-                           overlap.start, uncovered_start, uncovered_end);
-                }
-            }
-        }
-        
-        // Mark this overlap as inspected
-        inspected_overlaps.add(overlap.start, overlap.end);
-    }
-    
-    // Determine final compatibility based on all results
-    // Equivalent to Python's any_false_numba(qname_bools) check
-    if compatibility_results.iter().any(|&result| result == -1) {
-        // Any incompatible region means overall incompatibility
-        Ok(None)
-    } else if compatibility_results.iter().all(|&result| result >= 0) {
-        // All regions compatible or unknown
-        let normalized_weight = if total_weight > 0.0 {
-            total_weight / (config.mean_read_length * 10.0)
-        } else {
-            1e-4  // Minimum weight for compatible pairs
-        };
-        Ok(Some(normalized_weight))
-    } else {
-        // Mixed results - treat as incompatible for safety
-        Ok(None)
-    }
-}
-
-/// Result of haplotype compatibility analysis
-#[derive(Debug, Clone)]
-enum HaplotypeCompatibility {
-    Same(f32),    // Same haplotype with confidence weight
-    Different,    // Different haplotypes
-    Unknown,      // Cannot determine (insufficient data)
-}
-
-/// PLACEHOLDER: Determine if two read pairs come from the same haplotype
+/// Find uncovered regions within an overlap interval using binary search
 /// 
-/// This is a complex function that needs to be implemented based on the original Python logic.
-/// It involves variant calling, quality assessment, and statistical analysis.
+/// This is a Rust implementation of Python's find_uncovered_regions_numba function
+/// Uses efficient algorithms to find regions not yet inspected within a query interval
 /// 
 /// # Arguments
+/// * `inspected_overlaps` - FastIntervals tracking already processed regions
+/// * `query_start` - Start of the query interval
+/// * `query_end` - End of the query interval
 /// 
-/// * `read_pair1` - First read pair
-/// * `read_pair2` - Second read pair  
-/// * `start` - Start position of analysis region
-/// * `end` - End position of analysis region
-/// * `allele_depth_map` - Variant depth information
-/// * `intrinsic_allele_depth_map` - Optional intrinsic variant data
-/// * `config` - Analysis configuration
-/// * `read_hap_vectors` - Mutable reference to haplotype vectors
-/// * `read_error_vectors` - Mutable reference to error vectors
-/// * `read_ref_pos_dict` - Mutable reference to position dictionary
-///
 /// # Returns
-///
-/// * `HaplotypeCompatibility` - Result of compatibility analysis
-fn determine_same_haplotype_placeholder(
-    _read_pair1: &crate::structs::ReadPair,
-    _read_pair2: &crate::structs::ReadPair,
-    _start: i64,
-    _end: i64,
-    _allele_depth_map: &AlleleDepthMap,
-    _intrinsic_allele_depth_map: Option<&AlleleDepthMap>,
-    _config: &HaplotypeConfig,
-    _read_hap_vectors: &mut AHashMap<String, ReadHaplotypeVector>,
-    _read_error_vectors: &mut AHashMap<String, ReadErrorVector>, 
-    _read_ref_pos_dict: &mut AHashMap<String, (i64, i64)>,
-) -> Result<HaplotypeCompatibility, Box<dyn std::error::Error>> {
-    
-    // PLACEHOLDER IMPLEMENTATION
-    // TODO: Implement the full logic from Python's determine_same_haplotype function
-    // This should include:
-    // 1. Variant extraction from reads in the specified region
-    // 2. Quality assessment and filtering
-    // 3. Allele depth comparison with reference data
-    // 4. Statistical analysis to determine compatibility
-    // 5. Weight calculation based on evidence strength
-    
-    warn!("Using placeholder haplotype determination - implement full logic!");
-    
-    // For now, return a dummy result based on simple overlap
-    let overlap_length = _end - _start;
-    if overlap_length > 50 {
-        Ok(HaplotypeCompatibility::Same(overlap_length as f32 / 100.0))
-    } else {
-        Ok(HaplotypeCompatibility::Unknown)
-    }
-}
-
-/// Find uncovered regions within an overlap interval
-/// This replaces Python's find_uncovered_regions_numba function
-fn find_uncovered_regions(
+/// Vec of [start, end] arrays representing uncovered regions
+fn find_uncovered_regions_numba(
     inspected_overlaps: &FastIntervals,
     query_start: i64,
     query_end: i64,
-) -> Vec<(i64, i64)> {
-    let (starts, ends) = inspected_overlaps.get_intervals();
+) -> Vec<[i64; 2]> {
+    let (existing_starts, existing_ends) = inspected_overlaps.get_intervals();
     
-    if starts.is_empty() {
-        // No previous overlaps - entire region is uncovered
-        return vec![(query_start, query_end)];
+    if existing_starts.is_empty() {
+        return vec![[query_start, query_end]];
     }
     
-    let mut uncovered = Vec::new();
-    let mut current_pos = query_start;
+    // Find overlapping intervals using binary search logic
+    let overlaps: Vec<bool> = existing_starts.iter().zip(existing_ends.iter())
+        .map(|(&start, &end)| start <= query_end && end >= query_start)
+        .collect();
     
-    // Sort intervals by start position for processing
-    let mut intervals: Vec<(i64, i64)> = starts.iter().zip(ends.iter()).map(|(&s, &e)| (s, e)).collect();
-    intervals.sort_by_key(|&(start, _)| start);
+    if !overlaps.iter().any(|&x| x) {
+        return vec![[query_start, query_end]];
+    }
     
-    for (start, end) in intervals {
-        // Skip intervals that don't overlap with our query region
-        if end <= query_start || start >= query_end {
-            continue;
+    // Pre-allocate result vector
+    let mut result = Vec::new();
+    let mut current_start = query_start;
+    
+    for (i, &overlaps_i) in overlaps.iter().enumerate() {
+        if overlaps_i {
+            if existing_starts[i] > current_start {
+                result.push([current_start, existing_starts[i]]);
+            }
+            current_start = current_start.max(existing_ends[i]);
         }
-        
-        // Clip interval to query region
-        let clipped_start = start.max(query_start);
-        let clipped_end = end.min(query_end);
-        
-        // Add uncovered region before this interval
-        if current_pos < clipped_start {
-            uncovered.push((current_pos, clipped_start));
-        }
-        
-        // Update current position
-        current_pos = clipped_end.max(current_pos);
     }
     
-    // Add final uncovered region
-    if current_pos < query_end {
-        uncovered.push((current_pos, query_end));
+    if current_start < query_end {
+        result.push([current_start, query_end]);
     }
     
-    uncovered
+    result
+}
+
+/// Check if any element in the array is false (-1 in this case)
+/// 
+/// Equivalent to Python's any_false_numba function
+/// Returns true if any element equals -1, false otherwise
+fn any_false(arr: &[i32]) -> bool {
+    arr.iter().any(|&x| x == -1)
 }

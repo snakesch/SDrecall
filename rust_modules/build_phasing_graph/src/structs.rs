@@ -314,6 +314,12 @@ impl AlleleDepthMap {
     pub fn total_depth(data: &PositionAlleleDepth) -> u16 {
         data[5]
     }
+    
+    /// Check if the map is empty (no chromosomes or no data)
+    pub fn is_empty(&self) -> bool {
+        self.chromosomes.is_empty() || 
+        self.chromosomes.values().all(|pos_map| pos_map.is_empty())
+    }
 }
 
 /// Overlap interval between two reads
@@ -444,4 +450,29 @@ impl HaplotypeConfig {
             score_array,
         }
     }
+}
+
+/// Variant types found in reads
+#[derive(Debug, Clone)]
+pub enum Variant {
+    Snv { position: i64, alt_base: u8, quality: u8 },
+    Insertion { position: i64, length: u32 },
+    Deletion { position: i64, length: u32 },
+}
+
+impl Variant {
+    pub fn position(&self) -> i64 {
+        match self {
+            Variant::Snv { position, .. } |
+            Variant::Insertion { position, .. } |
+            Variant::Deletion { position, .. } => *position,
+        }
+    }
+}
+
+/// Result of variant compatibility analysis
+pub enum VariantCompatibility {
+    Compatible(usize),  // Number of shared variants
+    Incompatible,       // Conflicting variants found
+    NoData,            // Not enough data to determine
 }

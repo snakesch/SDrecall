@@ -188,7 +188,8 @@ def realign_filter_per_cov(bam,
     the quality of genomic alignments and identify potential misalignments.
     '''
 
-    from fp_control.graph_build import build_phasing_graph
+    # Import the auto-selection function that chooses between Rust and Python implementations
+    from fp_control.graph_build import build_phasing_graph_auto as build_phasing_graph
     from fp_control.identify_misaligned_haps import inspect_by_haplotypes
     from fp_control.phasing import phasing_realigned_reads
 
