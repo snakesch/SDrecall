@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 use numpy::{PyArray1, PyArray2, ToPyArray};
-use std::collections::{HashSet, HashMap};
+use std::collections::HashMap;
 use ahash::AHashMap;
 use rustc_hash::FxHashMap;
 use log::info;
@@ -19,7 +19,6 @@ use crate::graph_builder::build_phasing_graph;
     allele_depth_data, 
     intrinsic_allele_depth_data,
     mean_read_length,
-    low_qual_qnames,
     edge_weight_cutoff=0.201
 ))]
 pub fn build_phasing_graph_rust(
@@ -28,7 +27,6 @@ pub fn build_phasing_graph_rust(
     allele_depth_data: &PyDict,
     intrinsic_allele_depth_data: Option<&PyDict>,
     mean_read_length: f32,
-    low_qual_qnames: &PyList,
     edge_weight_cutoff: f32,
 ) -> PyResult<PyObject> {
     info!("Starting Rust graph building with mean_read_length={}", mean_read_length);
@@ -40,13 +38,6 @@ pub fn build_phasing_graph_rust(
         .map(|d| convert_allele_depth_map(d))
         .transpose()?;
     
-    // Convert low quality qnames to HashSet
-    let mut low_qual_qnames_set = HashSet::new();
-    for item in low_qual_qnames.iter() {
-        let qname: String = item.extract()?;
-        low_qual_qnames_set.insert(qname);
-    }
-    
     // Create configuration
     let config = HaplotypeConfig::new(mean_read_length);
     
@@ -56,11 +47,10 @@ pub fn build_phasing_graph_rust(
         &allele_depth_map,
         intrinsic_ad_map.as_ref(),
         &config,
-        &mut low_qual_qnames_set.clone(),
     )?;
     
     // Convert the result back to Python format
-    export_graph_result_to_python(py, result, low_qual_qnames_set)
+    export_graph_result_to_python(py, result)
 }
 
 /// Convert Python read pair map data to Rust ReadPairMap
@@ -104,19 +94,24 @@ fn convert_allele_depth_map(data: &PyDict) -> PyResult<AlleleDepthMap> {
 fn export_graph_result_to_python(
     py: Python<'_>,
     result: PhasingGraphResult,
-    low_qual_qnames: HashSet<String>,
 ) -> PyResult<PyObject> {
     let dict = PyDict::new(py);
     
-    // 1. Export edges as numpy array for graph-tool
+    // 1. Export edges with integer node indices
     let num_edges = result.graph.edge_count();
     let mut edges = Vec::with_capacity(num_edges);
     let mut weights = Vec::with_capacity(num_edges);
-    
+
     for edge in result.graph.edge_indices() {
         let (source, target) = result.graph.edge_endpoints(edge).unwrap();
-        edges.push([source.index() as u32, target.index() as u32]);
-        weights.push(result.graph[edge]);
+        // With direct correspondence: qname_idx = NodeIndex.index()
+        let source_idx = source.index();
+        let target_idx = target.index();
+        edges.push([source_idx as u32, target_idx as u32]);
+        
+        // Convert f16 weight to f32 for Python
+        let weight_f16 = result.graph[edge];
+        weights.push(weight_f16.to_f32());
     }
     
     // Convert to numpy arrays
@@ -126,39 +121,35 @@ fn export_graph_result_to_python(
     dict.set_item("edges", edge_array)?;
     dict.set_item("edge_weights", weight_array)?;
     
-    // 2. Export node names (qnames) in order
+    // 2. Export node names in the correct order (index i contains qname for node i)
+    // With direct correspondence, we need to get qnames from read_pair_map
     let mut node_names = vec![String::new(); result.graph.node_count()];
-    for (qname, &node_idx) in &result.qname_to_node {
-        node_names[node_idx.index()] = qname.clone();
+    // TODO: This would need the read_pair_map passed in to get qnames by index
+    // For now, we'll create placeholder names based on index
+    for i in 0..result.graph.node_count() {
+        node_names[i] = format!("read_pair_{}", i);
     }
     let node_list = PyList::new(py, node_names);
     dict.set_item("node_names", node_list)?;
     
-    // 3. Export weight matrix as numpy array
-    let n = result.graph.node_count();
-    let mut weight_matrix_vec = vec![0.0f32; n * n];
-    
-    // Initialize diagonal to 1.0
-    for i in 0..n {
-        weight_matrix_vec[i * n + i] = 1.0;
+    // 3. Export weight matrix as numpy array - much simpler with ndarray!
+    match result.weight_matrix() {
+        Some(matrix) => {
+            // Convert f16 matrix to f32 for Python compatibility
+            let f32_matrix: ndarray::Array2<f32> = matrix.mapv(|x| x.to_f32());
+            let weight_matrix_array = f32_matrix.to_pyarray(py);
+            dict.set_item("weight_matrix", weight_matrix_array)?;
+        }
+        None => {
+            // Create empty f32 matrix for Python
+            let empty_matrix = ndarray::Array2::<f32>::zeros((0, 0));
+            let weight_matrix_array = empty_matrix.to_pyarray(py);
+            dict.set_item("weight_matrix", weight_matrix_array)?;
+        }
     }
     
-    // Fill in the weights
-    for ((i, j), &weight) in &result.weight_matrix {
-        weight_matrix_vec[i * n + j] = weight;
-    }
-    
-    let weight_matrix_array = PyArray2::from_vec2(py, &weight_matrix_vec.chunks(n)
-        .map(|row| row.to_vec())
-        .collect::<Vec<_>>())?;
-    dict.set_item("weight_matrix", weight_matrix_array)?;
-    
-    // 4. Export qname_to_node mapping
-    let qname_to_node_dict = PyDict::new(py);
-    for (qname, &node_idx) in &result.qname_to_node {
-        qname_to_node_dict.set_item(qname, node_idx.index())?;
-    }
-    dict.set_item("qname_to_node", qname_to_node_dict)?;
+    // 4. Note: qname_to_node mapping removed due to direct correspondence optimization
+    // Direct mapping: qname_idx = NodeIndex.index()
     
     // 5. Export read_hap_vectors
     let hap_vectors_dict = PyDict::new(py);
@@ -184,8 +175,8 @@ fn export_graph_result_to_python(
     }
     dict.set_item("read_ref_pos_dict", ref_pos_dict)?;
     
-    // 8. Export low_qual_qnames as a list
-    let low_qual_list = PyList::new(py, low_qual_qnames.iter());
+    // 8. Note: low_qual_qnames tracking removed (handled in BAM reading stage)
+    let low_qual_list = PyList::empty(py);
     dict.set_item("low_qual_qnames", low_qual_list)?;
     
     // 9. Add metadata

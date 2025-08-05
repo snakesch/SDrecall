@@ -1,5 +1,6 @@
 [workspace]
 members = ["read_extraction"]
+# Temporarily disabled: "build_phasing_graph"
 resolver = "2"
 
 [workspace.dependencies]

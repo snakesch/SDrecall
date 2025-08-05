@@ -6,6 +6,9 @@ use polars::prelude::*;
 use std::process::Command;
 use rustc_hash::FxHashMap; // Faster HashMap for integer keys
 use ahash::AHashMap; // Faster HashMap for string keys
+use std::path::Path;
+use tempfile::NamedTempFile;
+
 
 #[derive(Debug, PartialEq)]
 enum ReadPairStatus {
@@ -60,206 +63,221 @@ fn is_read_noisy(
     false
 }
 
-pub fn migrate_bam_to_sorted_intervals(
+/// Optional: Run samtools collate to group reads by qname
+/// This produces a temporary file that is automatically deleted when the function returns
+fn collate_bam_file(bam_file_path: &str, threads: &u8 = &2) -> Result<Option<NamedTempFile>, Box<dyn std::error::Error>> {
+    // Check if samtools is available
+    let samtools_check = Command::new("samtools")
+        .arg("--version")
+        .output();
+    
+    if samtools_check.is_err() {
+        // samtools not available, return None to use original file
+        return Ok(None);
+    }
+    
+    // Create a temporary file for collated output, make sure the temp file end with .bam suffix
+    // ? operator: propagates any error from NamedTempFile creation up to the caller
+    let temp_file = NamedTempFile::with_suffix_in(".bam", Path::new("."))?;
+    let temp_path = temp_file.path().to_str()
+        // ok_or: converts Option<&str> to Result<&str, &str> - if None, returns Err with the message
+        .ok_or("Failed to convert temp path to string")?; // ? operator: propagates the error if conversion failed
+    
+    // Run samtools collate with fast mode for efficiency
+    let output = Command::new("samtools")
+        .args([
+            "collate",
+            "-f",           // Fast mode - primary alignments only
+            "-@", &threads.to_string(),      // Use threads
+            bam_file_path,
+            "-o", temp_path
+        ])
+        .output()?; // ? operator: propagates any error from command execution
+    
+    if !output.status.success() {
+        return Err(format!("samtools collate failed: {}", 
+            String::from_utf8_lossy(&output.stderr)).into());
+    }
+    
+    Ok(Some(temp_file))
+}
+
+/// Process BAM file by iterating through qname-grouped reads
+/// This is more efficient than the original single-read iteration
+pub fn migrate_bam_to_sorted_intervals_grouped(
     bam_file_path: &str,
     mapq_filter: u8,
     basequal_median_filter: u8,
     filter_noisy: bool,
-) -> Result<ReadPairMap, Box<dyn std::error::Error>> {
-    let mut bam = bam::Reader::from_path(bam_file_path)?;  // Now mutable
+    use_collate: bool,
+    threads: u8 = 4) -> Result<ReadPairMap, Box<dyn std::error::Error>> {
+
+    // Optionally collate the BAM file first, make sure the temp file end with .bam suffix
+    let (bam_path, _temp_file) = if use_collate {
+        // ? operator: propagates any error from collate_bam_file function
+        match collate_bam_file(bam_file_path, &threads)? {
+            Some(temp_file) => {
+                let path = temp_file.path().to_str()
+                    // ok_or: converts Option<&str> to Result<&str, &str>
+                    .ok_or("Failed to convert temp path to string")? // ? operator: propagates error if path conversion fails
+                    .to_string();
+                (path, Some(temp_file))
+            },
+            None => (bam_file_path.to_string(), None)
+        }
+    } else {
+        (bam_file_path.to_string(), None)
+    };
+    
+    // ? operator: propagates any error from BAM file opening
+    let mut bam = bam::Reader::from_path(&bam_path)?;
     let header = bam.header().clone();
     
     let mut result = ReadPairMap::new();
     let mut qname_idx_counter = 0usize;
-    let mut read_pair_status: FxHashMap<usize, ReadPairStatus> = FxHashMap::default();
-    let mut temp_readpairs: FxHashMap<usize, ReadPair> = FxHashMap::default();
-    let mut incomplete_qname_indices: HashSet<usize> = HashSet::new();
-
-    // Pre-allocate AHashMap with estimated capacity based on chromosome count
+    
+    // Pre-allocate chromosome interval trees
     let chrom_count = header.target_count() as usize;
     result.interval_trees.reserve(chrom_count);
-
-    // Initialize empty SortedVecIntervals for each chromosome
+    
     for tid in 0..header.target_count() {
         if let Some(ref_name) = header.tid2name(tid) {
             let chrom = String::from_utf8_lossy(ref_name).to_string();
             result.interval_trees.insert(chrom, SortedVecIntervals::new());
         }
     }
-
-    // Single pass: process each read and add intervals directly
-    for read_result in bam.records() {
-        let read = read_result?;
-        
-        // Skip secondary, supplementary, and duplicate alignments early
+    
+    // Buffer for collecting reads with the same qname
+    let mut current_qname: Option<String> = None;
+    let mut current_reads: Vec<Record> = Vec::with_capacity(2);
+    
+    // Process reads grouped by qname
+    for read in bam.records() {
+        // Skip secondary, supplementary, and duplicate alignments
         if should_skip_alignment(&read) {
             continue;
         }
         
         let qname = String::from_utf8_lossy(read.qname()).to_string();
         
-        if result.noisy_qnames.contains_key(&qname) {
-            continue;
-        }
-
-        // Only check for noise in primary alignments
-        if is_read_noisy(&read, mapq_filter, basequal_median_filter, filter_noisy) {
-            result.noisy_qnames.insert(qname.clone(), ());
-            // Efficiently remove all intervals for this qname_idx from all chromosomes
-            if let Some(&qname_idx) = result.qname_to_idx.get(&qname) {
-                read_pair_status.remove(&qname_idx);
-                incomplete_qname_indices.remove(&qname_idx);
-                temp_readpairs.remove(&qname_idx);
-                
-                // Remove from all chromosome interval trees
-                for interval_tree in result.interval_trees.values_mut() {
-                    interval_tree.remove_qname_idx(qname_idx)?;
-                }
+        // Check if we've moved to a new qname
+        // as_ref(): converts &Option<String> to Option<&String> for comparison
+        if current_qname.as_ref() != Some(&qname) {
+            // Process the previous qname group if any
+            if let Some(prev_qname) = current_qname.take() {
+                process_qname_group(
+                    &mut result,
+                    &header,
+                    prev_qname,
+                    &mut current_reads,
+                    &mut qname_idx_counter,
+                    mapq_filter,
+                    basequal_median_filter,
+                    filter_noisy,
+                )?; // ? operator: propagates any error from process_qname_group
             }
-            continue;
+            
+            current_qname = Some(qname.clone());
+            current_reads.clear();
         }
-
-        // Get or assign qname_idx
-        let qname_idx = if let Some(&idx) = result.qname_to_idx.get(&qname) {
-            idx
-        } else {
-            let idx = qname_idx_counter;
-            result.qname_to_idx.insert(qname.clone(), idx);
-            result.idx_to_qname.insert(idx, qname.clone());
-            qname_idx_counter += 1;
-            idx
-        };
-
-        // Add interval for this individual read - using match
-        match read.tid() {
-            Some(tid) => {
-                match header.tid2name(tid as u32) {
-                    Some(ref_name) => {
-                        let chrom = String::from_utf8_lossy(ref_name).to_string();
-                        add_read_interval(&mut result.interval_trees, &chrom, &read, qname_idx)?;
-                    }
-                    None => {} // Skip if chromosome name not found
-                }
-            }
-            None => {} // Skip if read has no valid tid
-        }
-
-        // Handle read pairing for paired-end data
-        match read_pair_status.get(&qname_idx) {
-            Some(ReadPairStatus::Incomplete) => {
-                // Complete the existing readpair
-                if let Some(readpair) = temp_readpairs.get_mut(&qname_idx) {
-                    readpair.complete_with_read2(read);
-                    read_pair_status.insert(qname_idx, ReadPairStatus::Complete);
-                    incomplete_qname_indices.remove(&qname_idx);
-                }
-            }
-            Some(ReadPairStatus::Complete) => continue,
-            None => {
-                // First read for this qname_idx
-                let incomplete_readpair = ReadPair::new_incomplete(read, qname, qname_idx);
-                temp_readpairs.insert(qname_idx, incomplete_readpair);
-                read_pair_status.insert(qname_idx, ReadPairStatus::Incomplete);
-                incomplete_qname_indices.insert(qname_idx);
-            }
-        }
-    }
-
-    // Handle incomplete pairs by fetching mates
-    if !incomplete_qname_indices.is_empty() {
-        let mut indexed_bam = bam::IndexedReader::from_path(bam_file_path)?;
         
-        let incomplete_indices: Vec<usize> = incomplete_qname_indices.iter().copied().collect();
-        for qname_idx in incomplete_indices {
-            let Some(readpair) = temp_readpairs.get(&qname_idx) else { continue; };
-            let query_read = &readpair.read1;
-            
-            let Some(mate_read) = fetch_mate_read(&mut indexed_bam, query_read, mapq_filter, basequal_median_filter, filter_noisy)? else { continue; };
-            
-            // Add mate interval BEFORE completing readpair - handle unmapped mates properly
-            let interval_added = mate_read.tid()
-                .and_then(|tid| header.tid2name(tid as u32))
-                .map(|ref_name| {
-                    let chrom = String::from_utf8_lossy(ref_name).to_string();
-                    add_read_interval(&mut result.interval_trees, &chrom, &mate_read, qname_idx)
-                })
-                .transpose()?; // Convert Option<Result<T, E>> to Result<Option<T>, E>
-            
-            let Some(_) = interval_added else { 
-                // Mate is unmapped, remove this qname_idx from incomplete and abandon
-                incomplete_qname_indices.remove(&qname_idx);
-                temp_readpairs.remove(&qname_idx);
-                read_pair_status.remove(&qname_idx);
-                continue; 
-            };
-            
-            let Some(readpair_mut) = temp_readpairs.get_mut(&qname_idx) else { continue; };
-            
-            // Complete the readpair with the mate read
-            readpair_mut.complete_with_read2(mate_read);
-            read_pair_status.insert(qname_idx, ReadPairStatus::Complete);
-            incomplete_qname_indices.remove(&qname_idx); 
+        // Skip if this qname is already marked as noisy
+        if result.noisy_qnames.contains_key(&qname) {
+            current_reads.clear();
+            continue;
         }
+        
+        current_reads.push(read);
     }
-
-    // Remove incomplete pairs efficiently
-    for &qname_idx in &incomplete_qname_indices {
-        temp_readpairs.remove(&qname_idx);
-        for interval_tree in result.interval_trees.values_mut() {
-            interval_tree.remove_qname_idx(qname_idx)?;
-        }
+    
+    // Process the last qname group
+    if let Some(qname) = current_qname {
+        process_qname_group(
+            &mut result,
+            &header,
+            qname,
+            &mut current_reads,
+            &mut qname_idx_counter,
+            mapq_filter,
+            basequal_median_filter,
+            filter_noisy,
+        )?; // ? operator: propagates any error from process_qname_group
     }
-
-    // Move completed ReadPairs to final result
-    for (qname_idx, status) in read_pair_status {
-        if status == ReadPairStatus::Complete {
-            if let Some(readpair) = temp_readpairs.remove(&qname_idx) {
-                result.readpair_dict.insert(qname_idx, readpair);
-            }
-        }
-    }
-
+    
     // Finalize all interval trees
     for interval_tree in result.interval_trees.values_mut() {
+        // ? operator: propagates any error from finalize
         interval_tree.finalize()?;
     }
-
+    
+    // The temp file will be automatically deleted when _temp_file goes out of scope
     Ok(result)
 }
 
-/// Generalized function to find the mate read for any given read record
-fn fetch_mate_read(
-    indexed_bam: &mut bam::IndexedReader,
-    query_read: &Record,
+/// Process all reads for a single qname
+fn process_qname_group(
+    result: &mut ReadPairMap,
+    header: &bam::HeaderView,
+    qname: String,
+    reads: &mut Vec<Record>,
+    qname_idx_counter: &mut usize,
     mapq_filter: u8,
     basequal_median_filter: u8,
-    filter_noisy: bool,
-) -> Result<Option<Record>, Box<dyn std::error::Error>> {
-    let (mate_tid, mate_pos) = match (query_read.mtid(), query_read.mpos()) {
-        (Some(tid), pos) if pos >= 0 => (tid, pos),
-        _ => return Ok(None),
-    };
-
-    let fetch_start = (mate_pos - 5).max(0);
-    let fetch_end = mate_pos + 10;
+    filter_noisy: bool) -> Result<(), Box<dyn std::error::Error>> {
+    // Check if any read in the group is noisy
+    let is_noisy = reads.iter().any(|read| 
+        is_read_noisy(read, mapq_filter, basequal_median_filter, filter_noisy)
+    );
     
-    indexed_bam.fetch((mate_tid as u32, fetch_start as u64, fetch_end as u64))?;
+    if is_noisy {
+        result.noisy_qnames.insert(qname.clone(), ());
+        return Ok(());
+    }
     
-    let expected_qname = String::from_utf8_lossy(query_read.qname()).to_string();
+    // Filter to get exactly 2 primary reads (read1 and read2)
+    let mut read1_opt: Option<Record> = None;
+    let mut read2_opt: Option<Record> = None;
     
-    for mate_result in indexed_bam.records() {
-        let mate_read = mate_result?;
-        let mate_qname = String::from_utf8_lossy(mate_read.qname()).to_string();
-        
-        if mate_qname == expected_qname && 
-           !should_skip_alignment(&mate_read) &&
-           !is_read_noisy(&mate_read, mapq_filter, basequal_median_filter, filter_noisy) {
-            return Ok(Some(mate_read));
+    for read in reads.iter() {
+        if read.is_first_in_template() {
+            read1_opt = Some(read.clone());
+        } else if read.is_last_in_template() {
+            read2_opt = Some(read.clone());
         }
     }
     
-    Ok(None)
+    // We need both reads for a complete pair
+    let (read1, read2) = match (read1_opt, read2_opt) {
+        (Some(r1), Some(r2)) => (r1, r2),
+        _ => return Ok(()), // Skip incomplete pairs
+    };
+    
+    // Assign qname_idx and create ReadPair
+    // * operator: dereferences the mutable reference to get the actual usize value
+    let qname_idx = *qname_idx_counter;
+    result.qname_to_idx.insert(qname.clone(), qname_idx);
+    result.idx_to_qname.insert(qname_idx, qname.clone());
+    // * operator: dereferences the mutable reference to modify the actual usize value
+    *qname_idx_counter += 1;
+    
+    // Add intervals for both reads
+    for read in [&read1, &read2] {
+        if let Some(tid) = read.tid() {
+            if let Some(ref_name) = header.tid2name(tid as u32) {
+                let chrom = String::from_utf8_lossy(ref_name).to_string();
+                // ? operator: propagates any error from add_read_interval
+                add_read_interval(&mut result.interval_trees, &chrom, read, qname_idx)?;
+            }
+        }
+    }
+    
+    // Create and store the complete ReadPair
+    let readpair = ReadPair::new_complete(read1, read2, qname, qname_idx);
+    result.readpair_dict.insert(qname_idx, readpair);
+    
+    Ok(())
 }
+
 
 /// Generalized function to add interval for any read record
 fn add_read_interval(
@@ -279,10 +297,9 @@ fn add_read_interval(
 }
 
 /// Equivalent to Python's stat_ad_to_dict function
-/// 
 /// Builds allele depth information using bcftools mpileup and processes with Polars
 /// Returns a more efficient Rust data structure instead of nested HashMaps
-pub async fn build_allele_depth_map(
+pub fn build_allele_depth_map(
     bam_file: &str,
     reference_genome: &str,
     mapq_filter: u8,
@@ -301,8 +318,7 @@ pub async fn build_allele_depth_map(
             "-Q", &base_qual_filter.to_string(),
             bam_file
         ])
-        .output()
-        .await?;
+        .output()?; // ? operator: propagates any error from command execution
     
     if !output.status.success() {
         return Err(format!("bcftools mpileup failed: {}", String::from_utf8_lossy(&output.stderr)).into());
@@ -313,15 +329,27 @@ pub async fn build_allele_depth_map(
         .args([
             "query", "-f", "%CHROM\\t%POS\\t%REF\\t%ALT\\t[%AD]\\n", "-"
         ])
-        .input(output.stdout)
-        .output()
-        .await?;
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()?; // ? operator: propagates any error from process spawning
+    
+    // Write the mpileup output to the query command
+    let mut child = query_output;
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        // ? operator: propagates any error from writing to stdin
+        stdin.write_all(&output.stdout)?;
+    }
+    
+    // ? operator: propagates any error from waiting for child process
+    let query_output = child.wait_with_output()?;
     
     if !query_output.status.success() {
         return Err(format!("bcftools query failed: {}", String::from_utf8_lossy(&query_output.stderr)).into());
     }
     
     // Write to temporary file for Polars to read
+    // ? operator: propagates any error from file writing
     std::fs::write(&ad_file, &query_output.stdout)?;
     
     // Use Polars for efficient data processing (much faster than pandas)
@@ -337,15 +365,16 @@ pub async fn build_allele_depth_map(
                 "alt".to_string(),
                 "ad".to_string()
             ]))
-    )?
+    )?  // ? operator: propagates any error from CSV scanning
     .filter(col("alt").is_not_null())
     .filter(col("alt").neq(lit("<*>")))
-    .collect()?;
+    .collect()?; // ? operator: propagates any error from DataFrame collection
     
     // Convert to efficient Rust data structure
     let mut allele_depth_map = AlleleDepthMap::new();
     
     for row in df.iter() {
+        // ? operator: propagates any error from row access and type extraction
         let chrom: &str = row.get(0)?.try_extract()?;
         let pos: u32 = (row.get(1)?.try_extract::<i64>()? - 1) as u32; // Convert to 0-based u32
         let ref_allele: &str = row.get(2)?.try_extract()?;

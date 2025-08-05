@@ -1,12 +1,13 @@
 /// Haplotype determination logic
 /// 
 /// This module contains the core algorithm for determining whether two read pairs
-/// come from the same haplotype by analyzing their variants and overlap regions.
+/// come from the same haplotype by analyzing their sequences and CIGAR operations.
 
 use std::collections::{HashSet, HashMap};
 use log::{info, debug, warn};
 use ahash::AHashMap;
 use rust_htslib::bam::Record;
+use rust_htslib::bam::Read;
 
 use crate::structs::{
     ReadPair, AlleleDepthMap, HaplotypeConfig, ReadHaplotypeVector, 
@@ -21,33 +22,213 @@ pub enum HaplotypeResult {
     Unknown,    // Cannot determine (insufficient data)
 }
 
-/// Determine if two read pairs come from the same haplotype
+/// Extract query sequence and reference positions from a BAM record
 /// 
-/// This is the main logic for comparing two read pairs in a specific genomic region
-/// to determine if they likely originated from the same haplotype. This is a critical
-/// function that implements the core algorithm for phasing.
+/// Returns (query_sequence, ref_positions) where:
+/// - query_sequence: Vec<u8> of base-encoded sequence  
+/// - ref_positions: Vec<i64> mapping query positions to reference positions
+pub fn extract_query_seq(record: &Record) -> Result<(Vec<u8>, Vec<i64>), Box<dyn std::error::Error>> {
+    let query_seq = record.seq().as_bytes();
+    let ref_positions = record.reference_positions_full();
+    
+    // Convert to our format: A=0, T=1, C=2, G=3, N=4
+    let encoded_seq: Vec<u8> = query_seq.iter().map(|&base| {
+        match base {
+            b'A' | b'a' => 0,
+            b'T' | b't' => 1, 
+            b'C' | b'c' => 2,
+            b'G' | b'g' => 3,
+            _ => 4, // N or any other base
+        }
+    }).collect();
+    
+    // Convert reference positions, handling None as -1
+    let ref_pos_vec: Vec<i64> = ref_positions.iter().map(|&pos_opt| {
+        pos_opt.map(|p| p as i64).unwrap_or(-1)
+    }).collect();
+    
+    Ok((encoded_seq, ref_pos_vec))
+}
+
+/// Slice query sequence to a specific genomic interval using reference positions
 /// 
-/// # Arguments
+/// Returns the subsequence that aligns to the given genomic interval
+pub fn slice_seq_to_interval(
+    query_seq: &[u8], 
+    ref_positions: &[i64],
+    interval_start: i64, 
+    interval_end: i64
+) -> Vec<u8> {
+    let mut result = Vec::new();
+    
+    for (i, &ref_pos) in ref_positions.iter().enumerate() {
+        if ref_pos >= interval_start && ref_pos < interval_end {
+            if i < query_seq.len() {
+                result.push(query_seq[i]);
+            }
+        }
+    }
+    
+    result
+}
+
+/// Compare two sequences for exact match, ignoring N bases
 /// 
-/// * `read_pair1` - First read pair
-/// * `read_pair2` - Second read pair  
-/// * `start` - Start position of analysis region
-/// * `end` - End position of analysis region
-/// * `chrom` - Chromosome name
-/// * `allele_depth_map` - Variant depth information
-/// * `intrinsic_allele_depth_map` - Optional intrinsic variant data
-/// * `config` - Analysis configuration
-/// * `read_hap_vectors` - Mutable reference to haplotype vectors
-/// * `read_error_vectors` - Mutable reference to error vectors
-/// * `read_ref_pos_dict` - Mutable reference to position dictionary
-/// * `low_qual_qnames` - Set of low quality read names (will be updated)
-///
-/// # Returns
-///
-/// * `(HaplotypeResult, Option<f32>)` - Result of compatibility analysis and optional weight
+/// Returns true if sequences are identical (treating N as wildcard)
+pub fn compare_sequences(seq1: &[u8], seq2: &[u8]) -> bool {
+    if seq1.len() != seq2.len() {
+        return false;
+    }
+    
+    for (i, (&base1, &base2)) in seq1.iter().zip(seq2.iter()).enumerate() {
+        if base1 != base2 {
+            // Allow N (4) to match anything
+            if base1 != 4 && base2 != 4 {
+                return false;
+            }
+        }
+    }
+    
+    true
+}
+
+/// Extract haplotype vector from CIGAR operations
+/// 
+/// Returns a vector representing variants relative to reference:
+/// - 1: Match
+/// - -4: SNV (mismatch)  
+/// - -6: Deletion
+/// - positive values: Insertion length
+pub fn extract_hap_vector(record: &Record) -> Vec<i16> {
+    let cigar = record.cigar();
+    let mut hap_vector = Vec::new();
+    
+    for &op in cigar.iter() {
+        use rust_htslib::bam::record::CigarOp;
+        match op {
+            CigarOp::Match(len) | CigarOp::Equal(len) => {
+                // Match to reference
+                for _ in 0..len {
+                    hap_vector.push(1);
+                }
+            }
+            CigarOp::Diff(len) => {
+                // Mismatch (SNV)
+                for _ in 0..len {
+                    hap_vector.push(-4);
+                }
+            }
+            CigarOp::Ins(len) => {
+                // Insertion - mark previous position with insertion length
+                if !hap_vector.is_empty() {
+                    let last_idx = hap_vector.len() - 1;
+                    hap_vector[last_idx] = len as i16 * 4; // Encode insertion
+                }
+            }
+            CigarOp::Del(len) => {
+                // Deletion
+                for _ in 0..len {
+                    hap_vector.push(-6);
+                }
+            }
+            CigarOp::SoftClip(_) | CigarOp::HardClip(_) => {
+                // Skip clipped bases
+            }
+            _ => {
+                // Handle other operations as matches for now
+                if let Some(len) = op.len() {
+                    for _ in 0..len {
+                        hap_vector.push(1);
+                    }
+                }
+            }
+        }
+    }
+    
+    hap_vector
+}
+
+/// Count continuous blocks of True values in a boolean array
+/// 
+/// Equivalent to Python's count_continuous_blocks function
+/// Counts the number of separate continuous regions of True values
+fn count_continuous_blocks(bool_array: &[bool]) -> usize {
+    if bool_array.is_empty() {
+        return 0;
+    }
+    
+    let mut block_count = 0;
+    let mut in_block = false;
+    
+    for &is_variant in bool_array {
+        if is_variant && !in_block {
+            // Starting a new block
+            block_count += 1;
+            in_block = true;
+        } else if !is_variant {
+            // Ending a block (if we were in one)
+            in_block = false;
+        }
+    }
+    
+    block_count
+}
+
+/// Count SNV blocks in a haplotype vector
+/// 
+/// Equivalent to Python's count_snv function
+fn count_snv_blocks(hap_vector: &[i16]) -> usize {
+    let snv_positions: Vec<bool> = hap_vector.iter().map(|&val| val == -4).collect();
+    count_continuous_blocks(&snv_positions)
+}
+
+/// Count indel blocks in a haplotype vector  
+/// 
+/// Equivalent to Python's count_continuous_indel_blocks function
+/// Counts continuous blocks of deletions (-6) or insertions (>1)
+fn count_indel_blocks(hap_vector: &[i16]) -> usize {
+    let indel_positions: Vec<bool> = hap_vector.iter().map(|&val| val == -6 || val > 1).collect();
+    count_continuous_blocks(&indel_positions)
+}
+
+/// Count variants in a haplotype vector slice
+/// 
+/// Returns (snv_blocks, indel_blocks, total_variant_blocks)
+/// Note: This counts continuous blocks, not individual bases
+pub fn count_variants(hap_vector: &[i16]) -> (usize, usize, usize) {
+    let snv_blocks = count_snv_blocks(hap_vector);
+    let indel_blocks = count_indel_blocks(hap_vector);
+    let total_blocks = snv_blocks + indel_blocks;
+    
+    (snv_blocks, indel_blocks, total_blocks)
+}
+
+/// Slice haplotype vector to genomic interval
+/// 
+/// Returns the portion of hap_vector corresponding to the genomic interval
+pub fn slice_hap_vector(
+    hap_vector: &[i16], 
+    read_start: i64,
+    interval_start: i64, 
+    interval_end: i64
+) -> Vec<i16> {
+    let start_offset = (interval_start - read_start) as usize;
+    let end_offset = (interval_end - read_start) as usize;
+    
+    if start_offset >= hap_vector.len() {
+        return Vec::new();
+    }
+    
+    let actual_end = end_offset.min(hap_vector.len());
+    hap_vector[start_offset..actual_end].to_vec()
+}
+
+/// Determine if two reads come from the same haplotype
+/// 
+/// Main function that orchestrates the haplotype comparison workflow
 pub fn determine_same_haplotype(
-    read_pair1: &ReadPair,
-    read_pair2: &ReadPair,
+    read1: &Record,
+    read2: &Record,
     start: i64,
     end: i64,
     chrom: &str,
@@ -57,227 +238,85 @@ pub fn determine_same_haplotype(
     read_hap_vectors: &mut AHashMap<String, ReadHaplotypeVector>,
     read_error_vectors: &mut AHashMap<String, ReadErrorVector>, 
     read_ref_pos_dict: &mut AHashMap<String, (i64, i64)>,
-    low_qual_qnames: &mut HashSet<String>,
 ) -> Result<(HaplotypeResult, Option<f32>), Box<dyn std::error::Error>> {
-    use rust_htslib::bam::Read;
-    use std::cmp::{min, max};
+    // Extract qnames from records
+    let qname1 = std::str::from_utf8(read1.qname())?;
+    let qname2 = std::str::from_utf8(read2.qname())?;
     
-    // Get read IDs for logging and storage
-    let read1_id = format!("{}:{}", 
-        std::str::from_utf8(read_pair1.read1.qname())?, 
-        read_pair1.read1.flags()
-    );
-    let read2_id = read_pair1.read2.as_ref().map(|r| 
-        format!("{}:{}", std::str::from_utf8(r.qname()).unwrap_or(""), r.flags())
-    );
+    // Step 1: Extract query sequences and reference positions
+    let (seq1, ref_pos1) = extract_query_seq(read1)?;
+    let (seq2, ref_pos2) = extract_query_seq(read2)?;
     
-    let other_read1_id = format!("{}:{}", 
-        std::str::from_utf8(read_pair2.read1.qname())?, 
-        read_pair2.read1.flags()
-    );
-    let other_read2_id = read_pair2.read2.as_ref().map(|r| 
-        format!("{}:{}", std::str::from_utf8(r.qname()).unwrap_or(""), r.flags())
-    );
+    // Step 2: Slice sequences to the genomic interval
+    let interval_seq1 = slice_seq_to_interval(&seq1, &ref_pos1, start, end);
+    let interval_seq2 = slice_seq_to_interval(&seq2, &ref_pos2, start, end);
     
-    // Process all reads in both pairs
-    let reads1 = if let Some(ref r2) = read_pair1.read2 {
-        vec![&read_pair1.read1, r2]
+    // Step 3: Compare sequences for exact match
+    if compare_sequences(&interval_seq1, &interval_seq2) {
+        // Sequences are identical - likely same haplotype
+        
+        // Step 4: Extract haplotype vectors for weight calculation
+        let hap_vec1 = extract_hap_vector(read1);
+        let hap_vec2 = extract_hap_vector(read2);
+        
+        // Step 5: Slice haplotype vectors to interval
+        let interval_hap1 = slice_hap_vector(&hap_vec1, read1.pos(), start, end);
+        let interval_hap2 = slice_hap_vector(&hap_vec2, read2.pos(), start, end);
+        
+        // Step 6: Count shared variants for weight calculation
+        let (snv1, indel1, _) = count_variants(&interval_hap1);
+        let (snv2, indel2, _) = count_variants(&interval_hap2);
+        
+        // Use minimum counts as shared variants (conservative estimate)
+        let shared_snvs = snv1.min(snv2);
+        let shared_indels = indel1.min(indel2);
+        
+        // Calculate weight based on overlap and shared variants
+        let overlap_length = end - start;
+        let mut weight = overlap_length as f32;
+        
+        // Add weight for shared variants using score array
+        for i in 0..shared_snvs.min(config.score_array.len()) {
+            weight += config.score_array[i];
+        }
+        
+        // Add weight for shared indels
+        weight += shared_indels as f32 * config.mean_read_length * 3.0;
+        
+        // Normalize weight
+        let normalized_weight = weight / (config.mean_read_length * 10.0);
+        
+        // Update data structures
+        let overlap_size = overlap_length as usize;
+        let read1_id = format!("{}:{}", qname1, read1.flags());
+        let read2_id = format!("{}:{}", qname2, read2.flags());
+        
+        read_hap_vectors.insert(read1_id, vec![1; overlap_size]);
+        read_error_vectors.insert(read2_id, vec![0.01; overlap_size]);
+        
+        // Store read positions
+        read_ref_pos_dict.insert(qname1.to_string(), (start, end));
+        read_ref_pos_dict.insert(qname2.to_string(), (start, end));
+        
+        Ok((HaplotypeResult::Same, Some(normalized_weight)))
+        
     } else {
-        vec![&read_pair1.read1]
-    };
-    
-    let reads2 = if let Some(ref r2) = read_pair2.read2 {
-        vec![&read_pair2.read1, r2]
-    } else {
-        vec![&read_pair2.read1]
-    };
-    
-    // Track variants found in the overlap region
-    let mut pair1_variants = Vec::new();
-    let mut pair2_variants = Vec::new();
-    
-    // Analyze reads from first pair
-    for read in &reads1 {
-        let read_start = read.pos();
-        let read_end = read.cigar().end_pos();
-        
-        // Skip if read doesn't overlap with analysis region
-        if read_end <= start || read_start >= end {
-            continue;
+        // Sequences differ - different haplotypes or insufficient data
+        if interval_seq1.is_empty() || interval_seq2.is_empty() {
+            Ok((HaplotypeResult::Unknown, None))
+        } else {
+            Ok((HaplotypeResult::Different, None))
         }
-        
-        // Extract variants in the overlap region
-        let variants = extract_variants_in_region(read, max(start, read_start), min(end, read_end))?;
-        
-        // Check read quality
-        if is_noisy_read(read, &variants) {
-            low_qual_qnames.insert(read_pair1.qname.clone());
-            return Ok((HaplotypeResult::Unknown, None));
-        }
-        
-        pair1_variants.extend(variants);
     }
-    
-    // Analyze reads from second pair
-    for read in &reads2 {
-        let read_start = read.pos();
-        let read_end = read.cigar().end_pos();
-        
-        // Skip if read doesn't overlap with analysis region
-        if read_end <= start || read_start >= end {
-            continue;
-        }
-        
-        // Extract variants in the overlap region
-        let variants = extract_variants_in_region(read, max(start, read_start), min(end, read_end))?;
-        
-        // Check read quality
-        if is_noisy_read(read, &variants) {
-            low_qual_qnames.insert(read_pair2.qname.clone());
-            return Ok((HaplotypeResult::Unknown, None));
-        }
-        
-        pair2_variants.extend(variants);
-    }
-    
-    // Compare variants between the two pairs
-    let compatibility = compare_variants(&pair1_variants, &pair2_variants, allele_depth_map, intrinsic_allele_depth_map)?;
-    
-    // Calculate weight based on overlap and shared variants
-    let overlap_length = end - start;
-    let base_weight = overlap_length as f32;
-    
-    // Adjust weight based on shared variants
-    let variant_weight = match compatibility {
-        VariantCompatibility::Compatible(shared_count) => {
-            // Add weight for each shared variant
-            let mut weight = base_weight;
-            for i in 0..shared_count.min(config.score_array.len()) {
-                weight += config.score_array[i];
-            }
-            weight
-        }
-        VariantCompatibility::Incompatible => {
-            // Incompatible variants indicate different haplotypes
-            return Ok((HaplotypeResult::Different, None));
-        }
-        VariantCompatibility::NoData => {
-            // Not enough data to make a determination
-            return Ok((HaplotypeResult::Unknown, None));
-        }
-    };
-    
-    // Normalize weight
-    let normalized_weight = variant_weight / (config.mean_read_length * 10.0);
-    
-    // Update data structures
-    // Store haplotype vectors (simplified for now)
-    read_hap_vectors.insert(read1_id.clone(), vec![1; overlap_length as usize]);
-    if let Some(id) = read2_id {
-        read_hap_vectors.insert(id, vec![1; overlap_length as usize]);
-    }
-    
-    // Store error vectors (placeholder)
-    read_error_vectors.insert(read1_id.clone(), vec![0.01; overlap_length as usize]);
-    
-    // Store read positions
-    read_ref_pos_dict.insert(read_pair1.qname.clone(), (start, end));
-    read_ref_pos_dict.insert(read_pair2.qname.clone(), (start, end));
-    
-    Ok((HaplotypeResult::Same, Some(normalized_weight)))
 }
 
-/// Extract variants from a read in a specific region
-pub fn extract_variants_in_region(
-    read: &Record, 
-    region_start: i64, 
-    region_end: i64
-) -> Result<Vec<Variant>, Box<dyn std::error::Error>> {
-    let mut variants = Vec::new();
-    let cigar = read.cigar();
-    let seq = read.seq();
-    let qual = read.qual();
-    
-    let mut ref_pos = read.pos();
-    let mut read_pos = 0;
-    
-    // Parse CIGAR to find variants
-    for &op in cigar.iter() {
-        use rust_htslib::bam::record::CigarOp;
-        match op {
-            CigarOp::Match(len) | CigarOp::Equal(len) => {
-                ref_pos += len as i64;
-                read_pos += len as u32;
-            }
-            CigarOp::Diff(len) => {
-                // Mismatch - potential SNV
-                for i in 0..len {
-                    let pos = ref_pos + i as i64;
-                    if pos >= region_start && pos < region_end {
-                        let base = seq[(read_pos + i) as usize];
-                        let quality = qual[(read_pos + i) as usize];
-                        if base != b'N' && quality >= 15 {  // Quality threshold
-                            variants.push(Variant::Snv { 
-                                position: pos, 
-                                alt_base: base,
-                                quality,
-                            });
-                        }
-                    }
-                }
-                ref_pos += len as i64;
-                read_pos += len;
-            }
-            CigarOp::Ins(len) => {
-                // Insertion
-                if ref_pos >= region_start && ref_pos < region_end {
-                    variants.push(Variant::Insertion { 
-                        position: ref_pos,
-                        length: len,
-                    });
-                }
-                read_pos += len;
-            }
-            CigarOp::Del(len) => {
-                // Deletion
-                if ref_pos >= region_start && ref_pos < region_end {
-                    variants.push(Variant::Deletion { 
-                        position: ref_pos,
-                        length: len,
-                    });
-                }
-                ref_pos += len as i64;
-            }
-            CigarOp::SoftClip(len) => {
-                read_pos += len;
-            }
-            _ => {} // Skip other operations
-        }
-    }
-    
-    Ok(variants)
-}
-
-/// Check if a read has too many errors to be reliable
-pub fn is_noisy_read(read: &Record, variants: &[Variant]) -> bool {
-    // Count high-quality mismatches
-    let high_qual_mismatches = variants.iter()
-        .filter(|v| matches!(v, Variant::Snv { quality, .. } if *quality > 20))
-        .count();
-    
-    // If more than 3 high-quality SNVs, consider it noisy
-    high_qual_mismatches >= 3
-}
-
-/// Compare variants between two read pairs
+/// Compare variants between two specific reads
 pub fn compare_variants(
     variants1: &[Variant],
     variants2: &[Variant],
     allele_depth_map: &AlleleDepthMap,
     intrinsic_ad_map: Option<&AlleleDepthMap>,
 ) -> Result<VariantCompatibility, Box<dyn std::error::Error>> {
-    use std::collections::HashMap;
-    
     // Group variants by position
     let mut pos_to_var1: HashMap<i64, Vec<&Variant>> = HashMap::new();
     let mut pos_to_var2: HashMap<i64, Vec<&Variant>> = HashMap::new();

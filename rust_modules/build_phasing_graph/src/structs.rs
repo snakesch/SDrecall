@@ -4,6 +4,8 @@ use rustc_hash::FxHashMap;
 use ahash::AHashMap;
 use petgraph::Graph;
 use petgraph::Undirected;
+use ndarray::{Array2, Axis}; // Add ndarray imports
+use half::f16; // Add f16 import
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Interval {
@@ -325,11 +327,11 @@ impl AlleleDepthMap {
 /// Overlap interval between two reads
 /// Represents a genomic region where two reads overlap
 #[derive(Debug, Clone)]
-pub struct OverlapInterval {
+pub struct OverlapInterval<'a> {
     pub start: i64,
     pub end: i64,
-    pub read1_ref: String,  // Reference to first read (could be qname or read_id)
-    pub read2_ref: String,  // Reference to second read
+    pub read1: &'a Record,  // Direct reference to first read
+    pub read2: &'a Record,  // Direct reference to second read
 }
 
 /// Read haplotype vector - stores variant information for a read
@@ -378,43 +380,86 @@ impl FastIntervals {
     }
 }
 
-/// Phasing graph structure using petgraph
-/// This replaces graph-tool's Graph in Python
-pub type PhasingGraph = Graph<String, f32, Undirected>;  // Node: qname, Edge: weight
+/// Phasing graph structure using petgraph with unit nodes and f16 weights
+/// Node data is () since we use direct correspondence: qname_idx = NodeIndex.index()
+/// Edge weight is f16 for memory efficiency
+/// This ensures direct mapping: qname_idx = NodeIndex = matrix index
+pub type PhasingGraph = Graph<(), f16, Undirected>;
 
 /// Complete phasing graph result
-/// Contains all the data structures returned by the Python function
 pub struct PhasingGraphResult {
-    /// The main graph structure (equivalent to Python's phased_graph)
+    /// The main graph structure with unit nodes (direct qname_idx ↔ NodeIndex correspondence)
     pub graph: PhasingGraph,
     
-    /// Weight matrix for fast lookups (equivalent to Python's weight_matrix)
-    /// Using FxHashMap for better performance with integer keys
-    pub weight_matrix: FxHashMap<(usize, usize), f32>,
+    /// Weight matrix using half-precision for 50% memory reduction
+    pub weight_matrix: Option<Array2<f16>>,
     
-    /// Mapping from qname to graph node index (equivalent to Python's qname_to_node)
-    pub qname_to_node: AHashMap<String, petgraph::graph::NodeIndex>,
-    
-    /// Read haplotype vectors (equivalent to Python's read_hap_vectors)
+    /// Read haplotype vectors
     pub read_hap_vectors: AHashMap<String, ReadHaplotypeVector>,
     
-    /// Read error vectors (equivalent to Python's read_error_vectors)  
+    /// Read error vectors  
     pub read_error_vectors: AHashMap<String, ReadErrorVector>,
     
-    /// Read reference position dictionary (equivalent to Python's read_ref_pos_dict)
-    pub read_ref_pos_dict: AHashMap<String, (i64, i64)>,  // (start, end) positions
+    /// Read reference position dictionary
+    pub read_ref_pos_dict: AHashMap<String, (i64, i64)>,
 }
 
 impl PhasingGraphResult {
     pub fn new() -> Self {
         Self {
             graph: Graph::new_undirected(),
-            weight_matrix: FxHashMap::default(),
-            qname_to_node: AHashMap::new(),
+            weight_matrix: None,
             read_hap_vectors: AHashMap::new(),
             read_error_vectors: AHashMap::new(),
             read_ref_pos_dict: AHashMap::new(),
         }
+    }
+    
+    /// Initialize the weight matrix with f16 precision
+    pub fn initialize_weight_matrix(&mut self, size: usize) {
+        if self.weight_matrix.is_none() {
+            // Create identity matrix with f16 precision
+            let mut matrix = Array2::<f16>::zeros((size, size));
+            
+            // Set diagonal to 1.0 (f16 can represent this exactly)
+            for i in 0..size {
+                matrix[[i, i]] = f16::ONE;
+            }
+            
+            self.weight_matrix = Some(matrix);
+        }
+    }
+    
+    /// Set weight between two nodes with f16 precision
+    pub fn set_weight(&mut self, i: usize, j: usize, weight: f32) -> Result<(), String> {
+        match &mut self.weight_matrix {
+            Some(ref mut matrix) => {
+                // Check bounds
+                if i >= matrix.nrows() || j >= matrix.ncols() {
+                    return Err(format!("Index out of bounds: ({}, {}) for matrix of size {}x{}", 
+                                     i, j, matrix.nrows(), matrix.ncols()));
+                }
+                
+                // Convert f32 to f16 - this is where precision reduction happens
+                let weight_f16 = f16::from_f32(weight);
+                
+                // Set symmetric values
+                matrix[[i, j]] = weight_f16;
+                matrix[[j, i]] = weight_f16;
+                Ok(())
+            }
+            None => Err("Weight matrix not initialized. Call initialize_weight_matrix() first.".to_string())
+        }
+    }
+    
+    /// Get weight as f32 for calculations
+    pub fn get_weight(&self, i: usize, j: usize) -> Option<f32> {
+        self.weight_matrix.as_ref()?.get([i, j]).map(|&w| w.to_f32())
+    }
+    
+    /// Get reference to weight matrix
+    pub fn weight_matrix(&self) -> Option<&Array2<f16>> {
+        self.weight_matrix.as_ref()
     }
     
     /// Get number of vertices in the graph

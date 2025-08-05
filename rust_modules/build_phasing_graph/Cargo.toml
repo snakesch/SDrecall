@@ -8,9 +8,9 @@ name = "build_phasing_graph"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.20", features = ["extension-module", "abi3-py38"] }
+pyo3 = { workspace = true, features = ["abi3-py38"] }
 numpy = "0.20"
-rust-htslib = "0.40"
+rust-htslib = { workspace = true }
 statrs = "0.16"
 polars = { version = "0.35", features = ["lazy", "strings", "temporal"] }
 tokio = { version = "1.0", features = ["process", "rt"] }
@@ -19,5 +19,7 @@ rustc-hash = "1.1"  # Even faster for integer keys
 petgraph = "0.6"  # Graph library - equivalent to graph-tool
 log = "0.4"       # For logging
 pyo3-log = "0.9"  # Python logging integration
-rayon = "1.8"     # For parallel processing
-ndarray = "0.15"  # For array operations similar to numpy
+rayon = { workspace = true }     # For parallel processing
+ndarray = { version = "0.15", features = ["blas"] }
+half = { version = "2.6", features = ["num-traits", "bytemuck", "serde"] }
+tempfile = "3.8"  # For temporary files in collate function
