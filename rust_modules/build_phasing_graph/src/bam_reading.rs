@@ -1,20 +1,14 @@
-use std::collections::HashSet;
 use rust_htslib::bam::{self, Read, Record};
-use crate::structs::{ReadPair, SortedVecIntervals, Interval, ReadPairMap, AlleleDepthMap, PositionAlleleDepth};
-use statrs::statistics::OrderStatistics; // For median calculation
-use polars::prelude::*;
+use rust_htslib::bam::ext::BamRecordExtensions;
+use crate::structs::{ReadPair, SortedVecIntervals, ReadPairMap, AlleleDepthMap};
+
 use std::process::Command;
-use rustc_hash::FxHashMap; // Faster HashMap for integer keys
 use ahash::AHashMap; // Faster HashMap for string keys
 use std::path::Path;
 use tempfile::NamedTempFile;
 
 
-#[derive(Debug, PartialEq)]
-enum ReadPairStatus {
-    Incomplete,
-    Complete,
-}
+
 
 fn should_skip_alignment(read: &Record) -> bool {
     // Skip secondary, supplementary, and duplicate alignments early
@@ -41,9 +35,14 @@ fn is_read_noisy(
         }
 
         if filter_noisy && !read.qual().is_empty() {
-            let qual_vec: Vec<f64> = read.qual().iter().map(|&q| q as f64).collect();
-            // Use the mature statrs crate for median calculation
-            let median_qual = qual_vec.median() as u8;
+            let mut qual_vec: Vec<u8> = read.qual().to_vec();
+            // Use order-stat crate for O(n) median calculation (most efficient)
+            let median_qual = if !qual_vec.is_empty() {
+                let len = qual_vec.len();
+                *order_stat::kth(&mut qual_vec, len / 2)
+            } else {
+                20u8 // Default quality if empty
+            };
             let low_qual_count = read.qual().iter().filter(|&&q| q < basequal_median_filter).count();
             
             let soft_clip_bases: u32 = read.cigar()
@@ -65,7 +64,7 @@ fn is_read_noisy(
 
 /// Optional: Run samtools collate to group reads by qname
 /// This produces a temporary file that is automatically deleted when the function returns
-fn collate_bam_file(bam_file_path: &str, threads: &u8 = &2) -> Result<Option<NamedTempFile>, Box<dyn std::error::Error>> {
+fn collate_bam_file(bam_file_path: &str, threads: u8) -> Result<Option<NamedTempFile>, Box<dyn std::error::Error>> {
     // Check if samtools is available
     let samtools_check = Command::new("samtools")
         .arg("--version")
@@ -110,12 +109,12 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
     basequal_median_filter: u8,
     filter_noisy: bool,
     use_collate: bool,
-    threads: u8 = 4) -> Result<ReadPairMap, Box<dyn std::error::Error>> {
+    threads: u8) -> Result<ReadPairMap, Box<dyn std::error::Error>> {
 
     // Optionally collate the BAM file first, make sure the temp file end with .bam suffix
     let (bam_path, _temp_file) = if use_collate {
         // ? operator: propagates any error from collate_bam_file function
-        match collate_bam_file(bam_file_path, &threads)? {
+        match collate_bam_file(bam_file_path, threads)? {
             Some(temp_file) => {
                 let path = temp_file.path().to_str()
                     // ok_or: converts Option<&str> to Result<&str, &str>
@@ -141,10 +140,9 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
     result.interval_trees.reserve(chrom_count);
     
     for tid in 0..header.target_count() {
-        if let Some(ref_name) = header.tid2name(tid) {
-            let chrom = String::from_utf8_lossy(ref_name).to_string();
-            result.interval_trees.insert(chrom, SortedVecIntervals::new());
-        }
+        let ref_name = header.tid2name(tid);
+        let chrom = String::from_utf8_lossy(ref_name).to_string();
+        result.interval_trees.insert(chrom, SortedVecIntervals::new());
     }
     
     // Buffer for collecting reads with the same qname
@@ -152,7 +150,9 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
     let mut current_reads: Vec<Record> = Vec::with_capacity(2);
     
     // Process reads grouped by qname
-    for read in bam.records() {
+    for read_result in bam.records() {
+        let read = read_result?;
+        
         // Skip secondary, supplementary, and duplicate alignments
         if should_skip_alignment(&read) {
             continue;
@@ -262,13 +262,11 @@ fn process_qname_group(
     
     // Add intervals for both reads
     for read in [&read1, &read2] {
-        if let Some(tid) = read.tid() {
-            if let Some(ref_name) = header.tid2name(tid as u32) {
-                let chrom = String::from_utf8_lossy(ref_name).to_string();
-                // ? operator: propagates any error from add_read_interval
-                add_read_interval(&mut result.interval_trees, &chrom, read, qname_idx)?;
-            }
-        }
+        let tid = read.tid();
+        let ref_name = header.tid2name(tid as u32);
+        let chrom = String::from_utf8_lossy(ref_name).to_string();
+        // ? operator: propagates any error from add_read_interval
+        add_read_interval(&mut result.interval_trees, &chrom, read, qname_idx)?;
     }
     
     // Create and store the complete ReadPair
@@ -352,34 +350,33 @@ pub fn build_allele_depth_map(
     // ? operator: propagates any error from file writing
     std::fs::write(&ad_file, &query_output.stdout)?;
     
-    // Use Polars for efficient data processing (much faster than pandas)
-    let mut df = LazyFrame::scan_csv(
-        &ad_file,
-        ScanArgsCSV::default()
-            .with_separator(b'\t')
-            .with_has_header(false)
-            .with_column_names(Some(vec![
-                "chrom".to_string(),
-                "pos".to_string(), 
-                "ref".to_string(),
-                "alt".to_string(),
-                "ad".to_string()
-            ]))
-    )?  // ? operator: propagates any error from CSV scanning
-    .filter(col("alt").is_not_null())
-    .filter(col("alt").neq(lit("<*>")))
-    .collect()?; // ? operator: propagates any error from DataFrame collection
-    
-    // Convert to efficient Rust data structure
+    // Parse the TSV file directly (simpler than using Polars for now)
+    let content = std::fs::read_to_string(&ad_file)?;
     let mut allele_depth_map = AlleleDepthMap::new();
     
-    for row in df.iter() {
-        // ? operator: propagates any error from row access and type extraction
-        let chrom: &str = row.get(0)?.try_extract()?;
-        let pos: u32 = (row.get(1)?.try_extract::<i64>()? - 1) as u32; // Convert to 0-based u32
-        let ref_allele: &str = row.get(2)?.try_extract()?;
-        let alt_alleles: &str = row.get(3)?.try_extract()?;
-        let ad_str: &str = row.get(4)?.try_extract()?;
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 5 {
+            continue;
+        }
+        
+        let chrom = fields[0];
+        let pos: u32 = match fields[1].parse::<u32>() {
+            Ok(p) => p - 1, // Convert to 0-based
+            Err(_) => continue,
+        };
+        let ref_allele = fields[2];
+        let alt_alleles = fields[3];
+        let ad_str = fields[4];
+        
+        // Skip if alt is empty or <*>
+        if alt_alleles.is_empty() || alt_alleles == "<*>" {
+            continue;
+        }
         
         // Parse AD values
         let ad_values: Vec<u16> = ad_str

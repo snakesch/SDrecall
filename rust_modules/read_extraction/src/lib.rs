@@ -268,7 +268,7 @@ for (chr, start, end) in regions {
 
 /// Python module definition
 #[pymodule]
-fn rust_read_extraction(_py: Python, m: &PyModule) -> PyResult<()> {
+fn rust_read_extraction(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(bam_to_fastq_biobambam, m)?)?;
     Ok(())
 } 

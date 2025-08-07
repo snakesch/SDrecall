@@ -4,7 +4,7 @@ use rustc_hash::FxHashMap;
 use ahash::AHashMap;
 use petgraph::Graph;
 use petgraph::Undirected;
-use ndarray::{Array2, Axis}; // Add ndarray imports
+use ndarray::Array2;
 use half::f16; // Add f16 import
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -336,7 +336,7 @@ pub struct OverlapInterval<'a> {
 
 /// Read haplotype vector - stores variant information for a read
 /// This is equivalent to the Python read_hap_vectors dictionary
-pub type ReadHaplotypeVector = Vec<i8>;  // Could be variant calls, error flags, etc.
+pub type ReadHaplotypeVector = Vec<i16>;  // Could be variant calls, error flags, etc.
 
 /// Read error vector - stores error information for a read  
 pub type ReadErrorVector = Vec<f32>;     // Error probabilities or quality scores
@@ -402,6 +402,9 @@ pub struct PhasingGraphResult {
     
     /// Read reference position dictionary
     pub read_ref_pos_dict: AHashMap<String, (i64, i64)>,
+    
+    /// Low quality/noisy qnames that were filtered out during BAM processing
+    pub lowqual_qnames: HashSet<String>,
 }
 
 impl PhasingGraphResult {
@@ -412,6 +415,7 @@ impl PhasingGraphResult {
             read_hap_vectors: AHashMap::new(),
             read_error_vectors: AHashMap::new(),
             read_ref_pos_dict: AHashMap::new(),
+            lowqual_qnames: HashSet::new(),
         }
     }
     

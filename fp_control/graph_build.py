@@ -2,6 +2,7 @@ import numba
 import graph_tool.all as gt
 import numpy as np
 import pandas as pd
+import logging
 
 from collections import defaultdict
 from numba import types
@@ -281,15 +282,19 @@ def build_phasing_graph_rust(
         if intrinsic_ad_dict is None:
             intrinsic_ad_dict = {}
         
-        # Call Rust function
+        # Get current Python logging level to pass to Rust
+        python_log_level = logging.getLevelName(logger.getEffectiveLevel())
+        
+        # Call Rust function with logging level
         rust_result = build_phasing_graph_rs.build_phasing_graph_rust(
             read_pair_data,
             nested_ad_dict,
-            intrinsic_ad_dict,
             mean_read_length,
-            list(total_lowqual_qnames),
-            edge_weight_cutoff
+            edge_weight_cutoff,
+            python_log_level
         )
+
+        logger.info(f"Rust implementation: The result of the rust implementation is {rust_result}")
         
         # Convert Rust results back to graph-tool format
         edges = rust_result['edges']
@@ -298,7 +303,7 @@ def build_phasing_graph_rust(
         read_hap_vectors = rust_result['read_hap_vectors']
         read_error_vectors = rust_result['read_error_vectors']
         read_ref_pos_dict = rust_result['read_ref_pos_dict']
-        updated_lowqual_qnames = set(rust_result['updated_lowqual_qnames'])
+        updated_lowqual_qnames = set(rust_result['low_qual_qnames'])
         
         # Create graph-tool graph
         g = gt.Graph(directed=False)

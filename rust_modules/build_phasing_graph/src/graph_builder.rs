@@ -1,19 +1,15 @@
 use std::collections::HashSet;
 use log::{info, debug, warn};
-use petgraph::Graph;
+
 use petgraph::graph::NodeIndex;
 use half::f16;
 use crate::structs::{
     ReadPairMap, AlleleDepthMap, PhasingGraphResult, HaplotypeConfig, 
-    FastIntervals, OverlapInterval, ReadHaplotypeVector, ReadErrorVector
+    FastIntervals, OverlapInterval
 };
 use crate::haplotype_determination::{determine_same_haplotype, HaplotypeResult};
-use rustc_hash::FxHashMap;
-use ahash::AHashMap;
 use rust_htslib::bam::Record;
 use rust_htslib::bam::ext::BamRecordExtensions;
-use ndarray::{Array2, Axis}; // Add ndarray imports
-use half::f16; // Add f16 import
 
 /*
 ================================================================================
@@ -180,7 +176,6 @@ fn qname_idx_to_node_index(qname_idx: usize) -> NodeIndex {
 pub fn build_phasing_graph(
     read_pair_map: &ReadPairMap,
     allele_depth_map: &AlleleDepthMap,
-    intrinsic_allele_depth_map: Option<&AlleleDepthMap>,
     config: &HaplotypeConfig) -> Result<PhasingGraphResult, Box<dyn std::error::Error>> {
     
     // ========== STEP 1: Initialize and Validate Input ==========
@@ -316,7 +311,6 @@ pub fn build_phasing_graph(
                         uncovered_end,
                         &chrom,
                         allele_depth_map,
-                        intrinsic_allele_depth_map,
                         config,
                         &mut result.read_hap_vectors,
                         &mut result.read_error_vectors,
@@ -361,7 +355,7 @@ pub fn build_phasing_graph(
             // ========== STEP 6: Final Edge Weight Determination ==========
             // Determine final compatibility based on all results
             // Equivalent to Python's any_false_numba(qname_bools) check
-            let final_weight = if any_false(&compatibility_results) {
+            let _final_weight = if any_false(&compatibility_results) {
                 // Any incompatible region means overall incompatibility
                 info!("Qname_bools are {:?}, Found two pairs {} and {} are in different haplotypes", 
                       compatibility_results, qname, other_qname);
@@ -385,17 +379,17 @@ pub fn build_phasing_graph(
     }
     
     // ========== STEP 7: Graph Finalization ==========
+    // Extract lowqual_qnames from ReadPairMap to include in result
+    result.lowqual_qnames = read_pair_map.noisy_qnames.keys().cloned().collect();
+    
     info!("Finished building graph with {} vertices and {} edges", 
           result.vertex_count(), result.edge_count());
+    info!("Identified {} low-quality qnames during processing", result.lowqual_qnames.len());
     
     Ok(result)
 }
 
-// Helper function to check edges using qname_idx directly
-fn check_edge(i: usize, j: usize, checked_pairs: &HashSet<(usize, usize)>) -> bool {
-    let ordered = if i < j { (i, j) } else { (j, i) };
-    checked_pairs.contains(&ordered)
-}
+
 
 /// Extract chromosome name from a read pair
 /// 

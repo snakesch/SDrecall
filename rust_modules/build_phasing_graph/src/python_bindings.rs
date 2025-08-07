@@ -1,13 +1,36 @@
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 use numpy::{PyArray1, PyArray2, ToPyArray};
-use std::collections::HashMap;
-use ahash::AHashMap;
-use rustc_hash::FxHashMap;
-use log::info;
 
-use crate::structs::{ReadPairMap, AlleleDepthMap, HaplotypeConfig, PhasingGraphResult};
+use log::{info, LevelFilter};
+
+use crate::structs::{HaplotypeConfig, PhasingGraphResult};
 use crate::graph_builder::build_phasing_graph;
+
+/// Configure Rust logging level based on Python logging level
+/// 
+/// This function maps Python logging levels to Rust log levels and configures
+/// the Rust logging system accordingly. This ensures that debug messages in Rust
+/// are only shown when Python is configured for debug logging.
+/// 
+/// # Arguments
+/// * `level_str` - Python logging level as string ("DEBUG", "INFO", "WARNING", "ERROR")
+fn configure_rust_logging(level_str: &str) {
+    let rust_level = match level_str.to_uppercase().as_str() {
+        "DEBUG" => LevelFilter::Debug,
+        "INFO" => LevelFilter::Info, 
+        "WARNING" | "WARN" => LevelFilter::Warn,
+        "ERROR" => LevelFilter::Error,
+        "CRITICAL" => LevelFilter::Error,
+        _ => LevelFilter::Info, // Default fallback
+    };
+    
+    // Set the maximum log level for the log crate
+    // This controls which log messages are compiled in
+    log::set_max_level(rust_level);
+    
+    info!("Rust logging level set to: {:?} (from Python level: {})", rust_level, level_str);
+}
 
 /// Python-exposed function for building the phasing graph
 /// 
@@ -15,28 +38,55 @@ use crate::graph_builder::build_phasing_graph;
 /// data conversions and returning results in a format compatible with graph-tool.
 #[pyfunction]
 #[pyo3(signature = (
-    read_pair_map_data,
-    allele_depth_data, 
-    intrinsic_allele_depth_data,
+    bam_file_path,
+    reference_genome,
     mean_read_length,
-    edge_weight_cutoff=0.201
+    _edge_weight_cutoff=0.201,
+    mapq_filter=10,
+    basequal_median_filter=10,
+    filter_noisy=true,
+    use_collate=true,
+    threads=4,
+    log_level=None
 ))]
 pub fn build_phasing_graph_rust(
     py: Python<'_>,
-    read_pair_map_data: &PyDict,
-    allele_depth_data: &PyDict,
-    intrinsic_allele_depth_data: Option<&PyDict>,
+    bam_file_path: &str,
+    reference_genome: &str,
     mean_read_length: f32,
-    edge_weight_cutoff: f32,
+    _edge_weight_cutoff: f32,
+    mapq_filter: u8,
+    basequal_median_filter: u8,
+    filter_noisy: bool,
+    use_collate: bool,
+    threads: u8,
+    log_level: Option<&str>,
 ) -> PyResult<PyObject> {
-    info!("Starting Rust graph building with mean_read_length={}", mean_read_length);
+    // Configure Rust logging level based on Python logger level
+    if let Some(level_str) = log_level {
+        configure_rust_logging(level_str);
+    }
     
-    // Convert Python data to Rust structures
-    let read_pair_map = convert_read_pair_map(py, read_pair_map_data)?;
-    let allele_depth_map = convert_allele_depth_map(allele_depth_data)?;
-    let intrinsic_ad_map = intrinsic_allele_depth_data
-        .map(|d| convert_allele_depth_map(d))
-        .transpose()?;
+    info!("Starting Rust graph building with mean_read_length={}", mean_read_length);
+    info!("Processing BAM file: {}", bam_file_path);
+    
+    // Read BAM file and build read pair map directly in Rust
+    let read_pair_map = crate::bam_reading::migrate_bam_to_sorted_intervals_grouped(
+        bam_file_path,
+        mapq_filter,
+        basequal_median_filter,
+        filter_noisy,
+        use_collate,
+        threads,
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("BAM reading failed: {}", e)))?;
+    
+    // Build allele depth map
+    let allele_depth_map = crate::bam_reading::build_allele_depth_map(
+        bam_file_path,
+        reference_genome,
+        mapq_filter,
+        basequal_median_filter,
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Allele depth mapping failed: {}", e)))?;
     
     // Create configuration
     let config = HaplotypeConfig::new(mean_read_length);
@@ -45,57 +95,23 @@ pub fn build_phasing_graph_rust(
     let result = build_phasing_graph(
         &read_pair_map,
         &allele_depth_map,
-        intrinsic_ad_map.as_ref(),
         &config,
-    )?;
+    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Graph building failed: {}", e)))?;
     
     // Convert the result back to Python format
     export_graph_result_to_python(py, result)
 }
 
-/// Convert Python read pair map data to Rust ReadPairMap
-fn convert_read_pair_map(py: Python<'_>, data: &PyDict) -> PyResult<ReadPairMap> {
-    // This is a placeholder - you'll need to implement based on your actual data format
-    // The Python data structure needs to be converted to ReadPairMap
-    todo!("Implement read pair map conversion from Python data")
-}
-
-/// Convert Python allele depth data to Rust AlleleDepthMap
-fn convert_allele_depth_map(data: &PyDict) -> PyResult<AlleleDepthMap> {
-    let mut map = AlleleDepthMap::new();
-    
-    // Iterate through chromosomes
-    for (chrom_obj, positions_dict) in data.iter() {
-        let chrom: String = chrom_obj.extract()?;
-        let positions: &PyDict = positions_dict.downcast()?;
-        
-        // Iterate through positions
-        for (pos_obj, depth_data) in positions.iter() {
-            let pos: u32 = pos_obj.extract()?;
-            
-            // Convert depth data - expecting a dict with keys 0-5
-            let depth_dict: &PyDict = depth_data.downcast()?;
-            let mut depth_array = [0u16; 6];
-            
-            for i in 0..6 {
-                if let Ok(Some(val)) = depth_dict.get_item(i as i32) {
-                    depth_array[i] = val.extract()?;
-                }
-            }
-            
-            map.insert(&chrom, pos, depth_array);
-        }
-    }
-    
-    Ok(map)
-}
+// Note: BAM reading and allele depth mapping are now handled directly in Rust
+// The unimplemented conversion functions have been removed since we process
+// BAM files directly rather than converting from Python data structures
 
 /// Export the Rust graph result to Python format compatible with graph-tool
 fn export_graph_result_to_python(
     py: Python<'_>,
     result: PhasingGraphResult,
 ) -> PyResult<PyObject> {
-    let dict = PyDict::new(py);
+    let dict = PyDict::new_bound(py);
     
     // 1. Export edges with integer node indices
     let num_edges = result.graph.edge_count();
@@ -115,11 +131,12 @@ fn export_graph_result_to_python(
     }
     
     // Convert to numpy arrays
-    let edge_array = PyArray2::from_vec2(py, &edges)?;
-    let weight_array = PyArray1::from_vec(py, weights);
+    let edges_vec: Vec<Vec<u32>> = edges.iter().map(|&[a, b]| vec![a, b]).collect();
+    let edge_array = PyArray2::from_vec2_bound(py, &edges_vec)?;
+    let weight_array = PyArray1::from_vec_bound(py, weights);
     
     dict.set_item("edges", edge_array)?;
-    dict.set_item("edge_weights", weight_array)?;
+    dict.set_item("weights", weight_array)?;
     
     // 2. Export node names in the correct order (index i contains qname for node i)
     // With direct correspondence, we need to get qnames from read_pair_map
@@ -129,21 +146,21 @@ fn export_graph_result_to_python(
     for i in 0..result.graph.node_count() {
         node_names[i] = format!("read_pair_{}", i);
     }
-    let node_list = PyList::new(py, node_names);
-    dict.set_item("node_names", node_list)?;
+    let node_list = PyList::new_bound(py, node_names);
+    dict.set_item("vertex_names", node_list)?;
     
     // 3. Export weight matrix as numpy array - much simpler with ndarray!
     match result.weight_matrix() {
         Some(matrix) => {
             // Convert f16 matrix to f32 for Python compatibility
             let f32_matrix: ndarray::Array2<f32> = matrix.mapv(|x| x.to_f32());
-            let weight_matrix_array = f32_matrix.to_pyarray(py);
+            let weight_matrix_array = f32_matrix.to_pyarray_bound(py);
             dict.set_item("weight_matrix", weight_matrix_array)?;
         }
         None => {
             // Create empty f32 matrix for Python
             let empty_matrix = ndarray::Array2::<f32>::zeros((0, 0));
-            let weight_matrix_array = empty_matrix.to_pyarray(py);
+            let weight_matrix_array = empty_matrix.to_pyarray_bound(py);
             dict.set_item("weight_matrix", weight_matrix_array)?;
         }
     }
@@ -152,31 +169,32 @@ fn export_graph_result_to_python(
     // Direct mapping: qname_idx = NodeIndex.index()
     
     // 5. Export read_hap_vectors
-    let hap_vectors_dict = PyDict::new(py);
+    let hap_vectors_dict = PyDict::new_bound(py);
     for (qname, vec) in &result.read_hap_vectors {
-        let py_array = PyArray1::from_vec(py, vec.clone());
+        let py_array = PyArray1::from_vec_bound(py, vec.clone());
         hap_vectors_dict.set_item(qname, py_array)?;
     }
     dict.set_item("read_hap_vectors", hap_vectors_dict)?;
     
     // 6. Export read_error_vectors
-    let error_vectors_dict = PyDict::new(py);
+    let error_vectors_dict = PyDict::new_bound(py);
     for (qname, vec) in &result.read_error_vectors {
-        let py_array = PyArray1::from_vec(py, vec.clone());
+        let py_array = PyArray1::from_vec_bound(py, vec.clone());
         error_vectors_dict.set_item(qname, py_array)?;
     }
     dict.set_item("read_error_vectors", error_vectors_dict)?;
     
     // 7. Export read_ref_pos_dict
-    let ref_pos_dict = PyDict::new(py);
+    let ref_pos_dict = PyDict::new_bound(py);
     for (qname, (start, end)) in &result.read_ref_pos_dict {
-        let tuple = PyTuple::new(py, &[start, end]);
+        let tuple = PyTuple::new_bound(py, &[start, end]);
         ref_pos_dict.set_item(qname, tuple)?;
     }
     dict.set_item("read_ref_pos_dict", ref_pos_dict)?;
     
-    // 8. Note: low_qual_qnames tracking removed (handled in BAM reading stage)
-    let low_qual_list = PyList::empty(py);
+    // 8. Export low_qual_qnames (noisy qnames identified during BAM processing)
+    let low_qual_vec: Vec<&str> = result.lowqual_qnames.iter().map(|s| s.as_str()).collect();
+    let low_qual_list = PyList::new_bound(py, low_qual_vec);
     dict.set_item("low_qual_qnames", low_qual_list)?;
     
     // 9. Add metadata
