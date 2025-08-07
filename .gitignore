@@ -15,3 +15,4 @@ rust_modules/target/*
 rust_modules/target
 .vscode/
 .vscode/*
+CLAUDE.md
