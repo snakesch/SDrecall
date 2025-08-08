@@ -109,7 +109,7 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
     basequal_median_filter: u8,
     filter_noisy: bool,
     use_collate: bool,
-    threads: u8) -> Result<ReadPairMap, Box<dyn std::error::Error>> {
+    threads: u8) -> Result<(ReadPairMap, rust_htslib::bam::HeaderView), Box<dyn std::error::Error>> {
 
     // Optionally collate the BAM file first, make sure the temp file end with .bam suffix
     let (bam_path, _temp_file) = if use_collate {
@@ -211,7 +211,7 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
     }
     
     // The temp file will be automatically deleted when _temp_file goes out of scope
-    Ok(result)
+    Ok((result, header))
 }
 
 /// Process all reads for a single qname

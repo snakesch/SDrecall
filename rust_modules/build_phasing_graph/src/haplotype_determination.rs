@@ -38,13 +38,14 @@ pub fn extract_query_seq(record: &Record) -> Result<(Vec<u8>, Vec<i64>), Box<dyn
         .collect();
     
     // Convert to our format: A=0, T=1, C=2, G=3, N=4
+    // Handle both uppercase and lowercase for robustness (soft-masking, etc.)
     let encoded_seq: Vec<u8> = query_seq.iter().map(|&base| {
         match base {
             b'A' | b'a' => 0,
             b'T' | b't' => 1, 
             b'C' | b'c' => 2,
             b'G' | b'g' => 3,
-            _ => 4, // N or any other base
+            _ => 4, // N or any other base (including ambiguous bases)
         }
     }).collect();
     

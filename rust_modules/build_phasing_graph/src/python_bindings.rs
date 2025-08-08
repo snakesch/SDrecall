@@ -71,7 +71,7 @@ pub fn build_phasing_graph_rust(
     info!("Processing BAM file: {}", bam_file_path);
     
     // Read BAM file and build read pair map directly in Rust
-    let read_pair_map = crate::bam_reading::migrate_bam_to_sorted_intervals_grouped(
+    let (read_pair_map, header) = crate::bam_reading::migrate_bam_to_sorted_intervals_grouped(
         bam_file_path,
         mapq_filter,
         basequal_median_filter,
@@ -95,6 +95,7 @@ pub fn build_phasing_graph_rust(
     let result = build_phasing_graph(
         &read_pair_map,
         &allele_depth_map,
+        &header,
         &config,
     ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Graph building failed: {}", e)))?;
     

@@ -176,6 +176,7 @@ fn qname_idx_to_node_index(qname_idx: usize) -> NodeIndex {
 pub fn build_phasing_graph(
     read_pair_map: &ReadPairMap,
     allele_depth_map: &AlleleDepthMap,
+    header: &rust_htslib::bam::HeaderView,
     config: &HaplotypeConfig) -> Result<PhasingGraphResult, Box<dyn std::error::Error>> {
     
     // ========== STEP 1: Initialize and Validate Input ==========
@@ -195,19 +196,22 @@ pub fn build_phasing_graph(
     // We only need to ensure we have num_nodes sequential nodes (0..num_nodes-1)
     let num_nodes = read_pair_map.readpair_dict.len();
     
-    // Pre-allocate graph nodes using sequential assignment guarantee
-    // petgraph guarantees: first node = NodeIndex(0), second = NodeIndex(1), etc.
+    // Pre-allocate graph nodes ensuring sequential assignment
+    // petgraph should assign: first node = NodeIndex(0), second = NodeIndex(1), etc.
     for qname_idx in 0..num_nodes {
         // Add node with unit data - we rely on sequential assignment for correspondence
         let node = result.graph.add_node(()); // Empty unit data - no storage needed
         
-        // Verify petgraph's sequential assignment guarantee
-        assert_eq!(
-            qname_idx,
-            node.index(),
-            "Petgraph should assign NodeIndex({}) for the {}th node added",
-            qname_idx, qname_idx
-        );
+        // Verify petgraph's sequential assignment - return error instead of panic
+        if qname_idx != node.index() {
+            return Err(format!(
+                "Graph node assignment failed: expected NodeIndex({}), got NodeIndex({}). \
+                This breaks the required 1-to-1 correspondence between qname_idx and NodeIndex.",
+                qname_idx, node.index()
+            ).into());
+        }
+        
+        debug!("Verified node correspondence: qname_idx {} = NodeIndex({})", qname_idx, node.index());
     }
     
     // ========== STEP 3: Initialize Weight Matrix and Tracking ==========
@@ -227,13 +231,15 @@ pub fn build_phasing_graph(
         let node_idx = qname_idx_to_node_index(qname_idx);
         
         // ---------- Step 4a: Spatial Query ----------
-        // Get chromosome and position info for overlap queries
-        let chrom = get_read_chromosome(read_pair, read_pair_map)?;
-        let (start, end) = get_read_pair_span(read_pair);
+        // Get chromosome for overlap queries
+        let chrom = get_read_chromosome(read_pair, header)?;
         
-        // Find overlapping read pairs using the interval tree
-        let overlapping_qname_indices = read_pair_map
-            .find_overlapping_qname_indices(&chrom, start, end)?;
+        // Query overlapping reads for actual coverage regions (not gaps)
+        let overlapping_qname_indices = get_overlapping_qname_indices_for_pair(
+            read_pair_map, 
+            read_pair, 
+            &chrom
+        )?;
         
         // ---------- Step 4b: Overlap Processing ----------
         // Iterate through the overlapping reads
@@ -391,50 +397,78 @@ pub fn build_phasing_graph(
 
 
 
-/// Extract chromosome name from a read pair
+/// Extract chromosome name from a read pair using BAM header
 /// 
-/// This function needs access to the BAM header to convert tid to chromosome name
-/// In Python this is simple: paired_reads[0].reference_name
-/// In Rust, we need to handle the conversion properly
+/// This function directly accesses the chromosome name from the BAM record's tid
+/// using rust-htslib's header.tid2name() function for O(1) lookup
+/// Equivalent to Python's paired_reads[0].reference_name
 fn get_read_chromosome(
     read_pair: &crate::structs::ReadPair,
-    read_pair_map: &ReadPairMap,
+    header: &rust_htslib::bam::HeaderView,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    // For now, we'll extract the chromosome from the interval trees
-    // This assumes the read was already properly indexed in the interval trees
+    let tid = read_pair.read1.tid();
     
-    // Find which chromosome this read pair belongs to by checking interval trees
-    for (chrom, _) in &read_pair_map.interval_trees {
-        if read_pair_map.find_overlapping_qname_indices(
-            chrom, 
-            read_pair.read1.reference_start(), 
-            read_pair.read1.reference_end()
-        )?.contains(&read_pair.qname_idx) {
-            return Ok(chrom.clone());
-        }
+    // Handle unmapped reads
+    if tid < 0 {
+        return Err("Read is unmapped - no reference chromosome".into());
     }
     
-    Err("Read pair not found in any chromosome interval tree".into())
+    // Convert tid to chromosome name using BAM header
+    let chrom_bytes = header.tid2name(tid as u32);
+    let chrom = std::str::from_utf8(chrom_bytes)
+        .map_err(|e| format!("Invalid chromosome name encoding: {}", e))?;
+    
+    Ok(chrom.to_string())
 }
 
-/// Calculate the genomic span covered by a read pair
+/// Query overlapping qname indices for a read pair using actual coverage regions
 /// 
-/// Returns the minimum start position and maximum end position across all reads in the pair
-/// Equivalent to Python's:
-///   start = min(r.reference_start for r in paired_reads)
-///   end = max(r.reference_end for r in paired_reads)
-fn get_read_pair_span(read_pair: &crate::structs::ReadPair) -> (i64, i64) {
-    let read1_start = read_pair.read1.reference_start();
-    let read1_end = read_pair.read1.reference_end();
+/// This function performs separate interval tree queries for each read in the pair,
+/// avoiding the inclusion of gaps between reads that don't have actual sequence coverage.
+/// This is more accurate than the single-span approach used in the Python implementation.
+/// 
+/// Benefits over single-span approach:
+/// - More accurate: Only queries actual read coverage regions
+/// - Better performance: Avoids querying irrelevant gap regions  
+/// - Biological correctness: Matches actual sequenced bases, not gaps
+/// - Scalability: Important for long insert-size paired reads with large gaps
+/// 
+/// # Arguments
+/// * `read_pair_map` - The read pair map containing interval trees
+/// * `read_pair` - The read pair to query overlaps for
+/// * `chrom` - The chromosome name for the queries
+/// 
+/// # Returns
+/// A vector of qname_indices that overlap with any read in the pair
+fn get_overlapping_qname_indices_for_pair(
+    read_pair_map: &ReadPairMap,
+    read_pair: &crate::structs::ReadPair,
+    chrom: &str,
+) -> Result<Vec<usize>, Box<dyn std::error::Error>> {
+    use std::collections::HashSet;
     
-    let (read2_start, read2_end) = if let Some(ref read2) = read_pair.read2 {
-        (read2.reference_start(), read2.reference_end())
-    } else {
-        (read1_start, read1_end) // If no read2, use read1 coordinates
-    };
+    let mut all_overlapping_qnames = HashSet::new();
     
-    // Return the span covering both reads
-    (read1_start.min(read2_start), read1_end.max(read2_end))
+    // Query overlaps for read1
+    let read1_overlaps = read_pair_map.find_overlapping_qname_indices(
+        chrom,
+        read_pair.read1.reference_start(),
+        read_pair.read1.reference_end()
+    )?;
+    all_overlapping_qnames.extend(read1_overlaps);
+    
+    // Query overlaps for read2 if it exists
+    if let Some(ref read2) = read_pair.read2 {
+        let read2_overlaps = read_pair_map.find_overlapping_qname_indices(
+            chrom,
+            read2.reference_start(),
+            read2.reference_end()
+        )?;
+        all_overlapping_qnames.extend(read2_overlaps);
+    }
+    
+    // Convert HashSet back to Vec for compatibility with existing code
+    Ok(all_overlapping_qnames.into_iter().collect())
 }
 
 /// Extract the overlapping intervals between two pairs of reads

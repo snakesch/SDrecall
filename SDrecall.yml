@@ -6,6 +6,8 @@ channels:
   - defaults
 dependencies:
   - python=3.12
+  - numpy
+  - pandas
   - graph-tool
   - ipython
   - ca-certificates
