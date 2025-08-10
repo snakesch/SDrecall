@@ -50,15 +50,12 @@ def eliminate_misalignments(input_bam,
                             output_bam,
                             output_vcf,
                             intrinsic_bam,
-                            original_bam,
                             ref_genome,
                             sample_id,
                             target_regions,
                             avg_frag_size = 400,
                             threads = 12,
                             numba_threads = 2,
-                            conf_level = 0.01,
-                            stat_sample_size = 1000000,
                             recall_mq_cutoff = 10,
                             basequal_median_cutoff = 15,
                             edge_weight_cutoff = 0.250,
@@ -115,7 +112,7 @@ def eliminate_misalignments(input_bam,
         
         # Filter out the misaligned_reads per chromosome
         job_num, _ = configure_parallelism(threads, numba_threads/min(numba_threads, 3)) # Empirical choice
-        nm_cutoff, _ = calculate_NM_distribution_poisson(original_bam, conf_level, stat_sample_size, logger=logger)
+        # nm_cutoff, _ = calculate_NM_distribution_poisson(original_bam, conf_level, stat_sample_size, logger=logger)
 
         # Create a dedicated log directory
         log_dir = os.path.dirname(output_bam)
@@ -130,7 +127,6 @@ def eliminate_misalignments(input_bam,
                      clean_bam, 
                      intrinsic_bam, 
                      raw_bam_region,
-                     nm_cutoff,
                      recall_mq_cutoff,
                      basequal_median_cutoff,
                      edge_weight_cutoff,
@@ -245,7 +241,6 @@ if __name__ == "__main__":
     parser.add_argument("--output_bam", type=str, required=True, help="The output bam file")
     parser.add_argument("--output_vcf", type=str, required=True, help="The output VCF file")
     parser.add_argument("--intrinsic_bam", type=str, required=True, help="The intrinsic bam file")
-    parser.add_argument("--original_bam", type=str, required=True, help="The original bam file")
     parser.add_argument("--ref_genome", type=str, required=True, help="The reference genome file")
     parser.add_argument("--sample_id", type=str, required=True, help="Sample identifier")
     parser.add_argument("--target_regions", type=str, required=True, help="BED file with target regions")
@@ -254,8 +249,6 @@ if __name__ == "__main__":
     parser.add_argument("--avg_frag_size", type=int, default=400, help="The average fragment size")
     parser.add_argument("--threads", type=int, default=12, help="The number of threads")
     parser.add_argument("--numba_threads", type=int, default=2, help="The number of threads for numba")
-    parser.add_argument("--conf_level", type=float, default=0.01, help="Confidence level for statistical filtering")
-    parser.add_argument("--stat_sample_size", type=int, default=1000000, help="Sample size for statistical analysis")
     parser.add_argument("--recall_mq_cutoff", type=int, default=10, help="Mapping quality cutoff for recall")
     parser.add_argument("--basequal_median_cutoff", type=int, default=15, help="Base quality median cutoff")
     parser.add_argument("--edge_weight_cutoff", type=float, default=0.201, help="Edge weight cutoff")
@@ -268,15 +261,12 @@ if __name__ == "__main__":
         output_bam=args.output_bam,
         output_vcf=args.output_vcf,
         intrinsic_bam=args.intrinsic_bam,
-        original_bam=args.original_bam,
         ref_genome=args.ref_genome,
         sample_id=args.sample_id,
         target_regions=args.target_regions,
         avg_frag_size=args.avg_frag_size,
         threads=args.threads,
         numba_threads=args.numba_threads,
-        conf_level=args.conf_level,
-        stat_sample_size=args.stat_sample_size,
         recall_mq_cutoff=args.recall_mq_cutoff,
         basequal_median_cutoff=args.basequal_median_cutoff,
         edge_weight_cutoff=args.edge_weight_cutoff,

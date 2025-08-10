@@ -169,12 +169,11 @@ def run_full_pipeline(args):
         return post_process_vcf(paths.final_recall_vcf_path(), args, paths)
     
     # Realignment and recall phase
-    logger.info(f"Starting realignment and recall phase, calling function SDrecall_per_sample(sdrecall_paths={paths}, threads={args.threads}, numba_threads={args.numba_threads}, mq_cutoff={args.mq_cutoff}, conf_level={args.conf_level})")
+    logger.info(f"Starting realignment and recall phase, calling function SDrecall_per_sample(sdrecall_paths={paths}, threads={args.threads}, numba_threads={args.numba_threads}, mq_cutoff={args.mq_cutoff})")
     sdrecall_vcf = SDrecall_per_sample(
         sdrecall_paths=paths,
         threads=args.threads,
-        numba_threads=args.numba_threads,
-        conf_level=args.conf_level
+        numba_threads=args.numba_threads
     )
     
     logger.info(f"SDrecall pipeline completed successfully")
@@ -290,8 +289,7 @@ def run_realign_only(args):
     sdrecall_vcf = SDrecall_per_sample(
         sdrecall_paths=paths,
         threads=args.threads,
-        numba_threads=args.numba_threads,
-        conf_level=args.conf_level
+        numba_threads=args.numba_threads
     )
     
     logger.info(f"SDrecall realignment and recall completed successfully")
@@ -403,8 +401,6 @@ def _add_realignment_args(parser):
     """Add arguments specific to the realignment phase"""
     parser.add_argument('--numba_threads', type=int, default=2, 
                         help='Number of threads for numba acceleration')
-    parser.add_argument('--conf_level', type=float, default=0.01, 
-                        help='Confidence level for statistical tests')
 
 
 def _add_conventional_vcf_args(parser):
