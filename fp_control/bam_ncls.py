@@ -108,39 +108,84 @@ def calculate_mean_read_length(bam_file_path, sample_size=100000):
 
 
 def is_read_noisy(read, paired, mapq_filter, basequal_median_filter=15, filter_noisy = True):
-    """Helper function to determine if a read is noisy based on various criteria."""
+    """Decide if a read should be treated as noisy.
+
+    Rules:
+    - Only primary alignments are evaluated for noisiness. Secondary or supplementary
+      alignments are treated as non-noisy and skipped.
+    - filter_noisy controls ONLY quality/soft-clip based checks (preserves original behavior).
+    - For other structural flags (unmapped, low MAPQ, etc.), the read is considered noisy
+      regardless of filter_noisy.
+    """
+    # Only evaluate primary alignments for noise
+    if read.is_secondary or read.is_supplementary:
+        logger.debug(f"is_read_noisy: {read.query_name} skipped (secondary/supplementary alignment); not considered noisy")
+        return False
+
+    # Common fast checks for both paired and unpaired
+    if read.is_unmapped:
+        logger.debug(f"is_read_noisy: {read.query_name} flagged noisy: unmapped read")
+        return True
+
+    if read.is_qcfail:
+        logger.debug(f"is_read_noisy: {read.query_name} flagged noisy: QC fail flag set")
+        return True
+
+    if read.mapping_quality < mapq_filter:
+        logger.debug(f"is_read_noisy: {read.query_name} flagged noisy: MAPQ {read.mapping_quality} < threshold {mapq_filter}")
+        return True
+
+    if read.reference_end is None:
+        logger.debug(f"is_read_noisy: {read.query_name} flagged noisy: reference_end is None")
+        return True
+
+    if read.query_sequence is None:
+        logger.debug(f"is_read_noisy: {read.query_name} flagged noisy: missing query_sequence")
+        return True
+
+    # Paired-end specific checks
     if paired:
-        # Use short circuit evaluation to speed up the function
-        if read.is_secondary or \
-           read.is_supplementary or \
-           read.mapping_quality < mapq_filter or \
-           read.is_qcfail or \
-           read.is_unmapped or \
-           read.reference_end is None or \
-           read.reference_end - read.reference_start < 75 or \
-           read.reference_name != read.next_reference_name or \
-           not read.is_proper_pair or \
-           read.query_sequence is None:
+        aln_len = (read.reference_end - read.reference_start) if (read.reference_end is not None and read.reference_start is not None) else 0
+        if aln_len < 75:
+            logger.debug(f"is_read_noisy: {read.query_name} flagged noisy: alignment span {aln_len} < 75")
             return True
-        
-        if read.query_qualities is not None:
-            return (fast_median(np.array(read.query_qualities, dtype=np.uint8)) <= basequal_median_filter or
-                    numba_sum(np.array(read.query_qualities, dtype=np.uint8) < basequal_median_filter) >= 50 or 
-                    numba_sum(np.array([t[1] for t in read.cigartuples if t[0] == 4], dtype=np.uint16)) >= 20) and filter_noisy
+
+        # Ensure mate on same reference for proper pairing in this pipeline
+        if read.reference_name != read.next_reference_name:
+            logger.debug(f"is_read_noisy: {read.query_name} flagged noisy: reference_name ({read.reference_name}) != next_reference_name ({read.next_reference_name})")
+            return True
+
+        if not read.is_proper_pair:
+            logger.debug(f"is_read_noisy: {read.query_name} flagged noisy: not a proper pair")
+            return True
     else:
-        if read.is_secondary or \
-           read.is_supplementary or \
-           read.is_duplicate or \
-           read.is_unmapped or \
-           read.mapping_quality < mapq_filter or \
-           read.is_qcfail or \
-           read.reference_end is None or \
-           read.query_sequence is None:
+        # Single-end specific: drop optical/PCR duplicates if marked
+        if read.is_duplicate:
+            logger.debug(f"is_read_noisy: {read.query_name} flagged noisy: duplicate read (single-end mode)")
             return True
-        if read.query_qualities is not None:
-            return (fast_median(np.array(read.query_qualities, dtype=np.uint8)) <= basequal_median_filter or
-                    numba_sum(np.array(read.query_qualities, dtype=np.uint8) < basequal_median_filter) >= 50 or 
-                    numba_sum(np.array([t[1] for t in read.cigartuples if t[0] == 4], dtype=np.uint16)) >= 20) and filter_noisy
+
+    # Base quality and soft-clip based checks (controlled by filter_noisy)
+    if filter_noisy and read.query_qualities is not None:
+        q = np.array(read.query_qualities, dtype=np.uint8)
+        med_q = fast_median(q)
+        if med_q <= basequal_median_filter:
+            logger.debug(f"is_read_noisy: {read.query_name} flagged noisy: median baseQ {med_q} <= threshold {basequal_median_filter}")
+            return True
+
+        num_low = numba_sum(q < basequal_median_filter)
+        if num_low >= 50:
+            logger.debug(f"is_read_noisy: {read.query_name} flagged noisy: #bases with Q<{basequal_median_filter} is {num_low} >= 50")
+            return True
+
+        # Soft-clip length from CIGAR (op 4)
+        softclip = 0
+        if read.cigartuples is not None:
+            softclip = numba_sum(np.array([t[1] for t in read.cigartuples if t[0] == 4], dtype=np.uint16))
+        if softclip >= 20:
+            logger.debug(f"is_read_noisy: {read.query_name} flagged noisy: total soft-clip length {softclip} >= 20")
+            return True
+
+    # If none of the noisy conditions triggered
     return False
 
 
