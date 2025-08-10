@@ -156,8 +156,7 @@ def is_read_noisy(read, paired, mapq_filter, basequal_median_filter=15, filter_n
             return True
 
         if not read.is_proper_pair:
-            logger.debug(f"is_read_noisy: {read.query_name} flagged noisy: not a proper pair")
-            return True
+            logger.debug(f"is_read_noisy: warning:{read.query_name} is not a proper pair")
     else:
         # Single-end specific: drop optical/PCR duplicates if marked
         if read.is_duplicate:
