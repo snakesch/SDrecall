@@ -456,27 +456,6 @@ def extract_read_qseqs(read, read_ref_pos_dict, base_dict = {"A": np.int8(0), "T
 
 
 
-def check_noisy_read(read, read_hap_vector, read_error_vectors, logger = logger):
-    '''
-    Check whether the read haplotype is noisy for either read
-    '''
-    read_id = get_read_id(read)
-    if read_id in read_error_vectors:
-        read_error_vector = read_error_vectors[read_id]
-    else:
-        read_error_vector = get_errorvector_from_cigar(read, read.cigartuples, logger = logger)
-        read_error_vectors[read_id] = read_error_vector
-
-    mismatch_err_probs = snv_err_probs(read_error_vector, read_hap_vector)
-    err_snvs = numba_sum(mismatch_err_probs > 0.03)
-    if err_snvs >= 3:
-        logger.debug(f"The read {read_id} is noisy, there are {err_snvs} SNVs that are not possible rooted from sequencing errors, mark this pair of reads as low quality")
-        return True, read_error_vectors
-    
-    return False, read_error_vectors
-
-
-
 @numba.njit(types.int16[:](types.int16[:], types.int16[:]), fastmath=True)
 def numba_find_shared_snvs(vec1, vec2):
     """Find indices where both vectors have value -4 (SNV)"""
@@ -651,8 +630,7 @@ def determine_same_haplotype(read, other_read,
         read_hap_vector = get_hapvector_from_cigar(cigar_arr, query_sequence_encoded)
         read_hap_vectors[read_id] = read_hap_vector
 
-    noisy, read_error_vectors = check_noisy_read(read, read_hap_vector, read_error_vectors, logger = logger)
-    if noisy: total_lowqual_qnames.add(read.query_name)
+    # Removed per-read sequencing-noise screen; rely on downstream misalignment heuristics
     
     other_read_id = get_read_id(other_read)
     other_start = np.int32(other_read.reference_start)
@@ -663,8 +641,7 @@ def determine_same_haplotype(read, other_read,
         other_read_hap_vector = get_hapvector_from_cigar(np.array(other_read.cigartuples, dtype=np.int32), other_query_sequence_encoded)
         read_hap_vectors[other_read_id] = other_read_hap_vector
 
-    noisy, read_error_vectors = check_noisy_read(other_read, other_read_hap_vector, read_error_vectors, logger = logger)
-    if noisy: total_lowqual_qnames.add(other_read.query_name)
+    # Removed per-read sequencing-noise screen; rely on downstream misalignment heuristics
 
     interval_hap_vector = numba_slicing(read_hap_vector, overlap_start, overlap_end, start)
     interval_other_hap_vector = numba_slicing(other_read_hap_vector, overlap_start, overlap_end, other_start)
