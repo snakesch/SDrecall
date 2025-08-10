@@ -454,6 +454,9 @@ function independent_minimap2_masked () {
     modify_masked_genome_coords ${mid_align} ${ref_contig_sizes} ${rg_index} | \
     samtools view -S -u -@ ${threads} - | \
     samtools sort -O bam -@ ${threads} -o ${output_align} && \
+	modify_bam_sq_lines ${output_align} ${ref_genome} ${output_align/.bam/.header} && \
+	samtools reheader ${output_align/.bam/.header} ${output_align} > ${output_align}.tmp && \
+	mv ${output_align}.tmp ${output_align} && \
     samtools index ${output_align}
 
     if check_bam_validity ${output_align} 1; then
