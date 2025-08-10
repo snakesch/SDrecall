@@ -18,7 +18,7 @@ from src.log import logger
 
 # Try to import the Rust module
 try:
-    import build_phasing_graph_rs
+    import build_phasing_graph as build_phasing_graph_rs
     RUST_AVAILABLE = True
     logger.info("Rust-accelerated graph building module is available")
 except ImportError:
