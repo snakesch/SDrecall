@@ -426,20 +426,37 @@ if __name__ == "__main__":
                         help="Logging level")
     
     args = parser.parse_args()
+ 
+    # Configure threading safely:
+    # - Avoid changing NUMBA_NUM_THREADS via environment after Numba may have initialized.
+    # - Prefer runtime API; if already initialized, respect existing value.
+    try:
+        import numba
+        try:
+            numba.set_num_threads(args.threads)
+        except RuntimeError as e:
+            # Threads already launched; keep current setting to avoid errors
+            try:
+                cur = numba.get_num_threads()
+                logger.warning(f"Numba threads already initialized at {cur}; skipping change to {args.threads} ({e})")
+            except Exception:
+                logger.warning(f"Numba threads already initialized; skipping change to {args.threads} ({e})")
+    except Exception:
+        # numba not available or import failed; continue
+        pass
 
-    # Set numba and openmp threads
-    os.environ["NUMBA_NUM_THREADS"] = str(args.threads)
-    os.environ["MKL_NUM_THREADS"] = str(args.threads)
-    os.environ["OPENBLAS_NUM_THREADS"] = str(args.threads)
-    os.environ["OMP_NUM_THREADS"] = str(args.threads)
-    
+    # Set BLAS/OpenMP vars if not preset
+    os.environ.setdefault("MKL_NUM_THREADS", str(args.threads))
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", str(args.threads))
+    os.environ.setdefault("OMP_NUM_THREADS", str(args.threads))
+ 
     # Configure logging level if requested
     if args.log_level:
         import logging
         numeric_level = getattr(logging, args.log_level.upper(), None)
         if isinstance(numeric_level, int):
             logger.setLevel(numeric_level)
-    
+ 
     # Run the main function
     phased_graph, output_bam, output_vcf = realign_filter_per_cov(
         bam=args.bam,
