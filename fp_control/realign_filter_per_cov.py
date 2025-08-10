@@ -16,7 +16,7 @@ def imap_filter_out(args):
     """Worker function that processes a single region and returns results with log file path"""
     # Unpack arguments
     args, log_dir, log_level = args
-    raw_bam, output_bam, intrinsic_bam, bam_region_bed, max_varno, recall_mq_cutoff, basequal_median_cutoff, edge_weight_cutoff, numba_threads, tmp_dir, ref_genome, sample_id, job_id = args
+    raw_bam, output_bam, intrinsic_bam, bam_region_bed, recall_mq_cutoff, basequal_median_cutoff, edge_weight_cutoff, numba_threads, tmp_dir, ref_genome, sample_id, job_id = args
     import numba
     numba.set_num_threads(numba_threads)
     numba.config.THREADING_LAYER = 'tbb'
@@ -53,7 +53,7 @@ def imap_filter_out(args):
                                   f"MKL={os.environ.get('MKL_NUM_THREADS')}")
         subprocess_logger.info(f"Processing region in {raw_bam}")
         subprocess_logger.info(f"Parameters: output_bam={output_bam}, intrinsic_bam={intrinsic_bam}, "
-                               f"bam_region_bed={bam_region_bed}, max_varno={max_varno}, "
+                               f"bam_region_bed={bam_region_bed}, "
                                f"recall_mq_cutoff={recall_mq_cutoff}, basequal_median_cutoff={basequal_median_cutoff}, "
                                f"edge_weight_cutoff={edge_weight_cutoff}")
         
@@ -63,7 +63,6 @@ def imap_filter_out(args):
             output_bam=output_bam,
             intrinsic_bam=intrinsic_bam,
             bam_region_bed=bam_region_bed,
-            max_varno=max_varno,
             recall_mq_cutoff=recall_mq_cutoff,
             basequal_median_cutoff=basequal_median_cutoff,
             edge_weight_cutoff=edge_weight_cutoff,
@@ -149,7 +148,6 @@ def realign_filter_per_cov(bam,
                            output_bam = None,
                            intrinsic_bam = None,
                            bam_region_bed = None,
-                           max_varno = 5,
                            recall_mq_cutoff = 10,
                            basequal_median_cutoff = 15,
                            edge_weight_cutoff = 0.201,
@@ -174,7 +172,6 @@ def realign_filter_per_cov(bam,
     - intrinsic_bam (str): Path to the intrinsic BAM file, generated earlier in the SDrecall workflow (basically it aligns the reference sequence of one SD to the other SD)
     - raw_vcf (str): Path to the raw VCF file, the variants detected in the raw pooled alignments.
     - bam_region_bed (str, optional): Path to the BED file defining covered regions of the processing bam file, if not specified, bam_region_bed will be generated with a name after the input bam with .coverage.bed suffix
-    - max_varno (float): Maximum variant number allowed
     - recall_mq_cutoff (int): Mapping quality cutoff to be included in the analysis
     - basequal_median_cutoff (int): Base quality median cutoff to be included in the analysis (if the median BQ of a read is lower than this cutoff, we will discard this read because it is too noisy)
     - edge_weight_cutoff (float): Edge weight cutoff separating two rounds of BK clique searches
@@ -196,8 +193,6 @@ def realign_filter_per_cov(bam,
 
     # Given the top 1% mismatch count per read (one structrual variant count as 1 mismatch)
     tmp_bam = prepare_tmp_file(suffix=".bam", tmp_dir = tmp_dir).name
-
-    max_varno = float(max_varno)
 
     noisy_qnames = set([])
     mismap_qnames = set([])
@@ -361,7 +356,7 @@ def realign_filter_per_cov(bam,
                     for read in pair:
                         output_handle.write(read)
 
-    logger.warning(f"Filtered out {len(noisy_qnames)} noisy read-pairs (Editing distance without the biggest gap > {max_varno}) and {len(mismap_qnames - noisy_qnames)} read-pairs with ODD high editing distance, remaining {len(set(norm_qnames.keys()) - noisy_qnames - mismap_qnames)} read-pairs from {bam} (with total {total_num} reads) and output to {output_bam}\n\n")
+    logger.warning(f"Filtered out {len(noisy_qnames)} noisy read-pairs and {len(mismap_qnames - noisy_qnames)} read-pairs with ODD high editing distance, remaining {len(set(norm_qnames.keys()) - noisy_qnames - mismap_qnames)} read-pairs from {bam} (with total {total_num} reads) and output to {output_bam}\n\n")
 
     # Replace the input BAM file with the tmp BAM file with modified RG tags for visualization of haplotype clusters
     executeCmd(f"samtools sort -O bam -@ {threads} -T {tmp_dir} -o {bam} {tmp_bam} && \
@@ -419,7 +414,6 @@ if __name__ == "__main__":
     parser.add_argument("--output_bam", type=str, help="Path for output filtered BAM file (default: input.clean.bam)")
     parser.add_argument("--intrinsic_bam", type=str, help="Path to intrinsic BAM file")
     parser.add_argument("--bam_region_bed", type=str, help="Path to BED file defining covered regions")
-    parser.add_argument("--max_varno", type=float, default=5, help="Maximum variant number allowed")
     parser.add_argument("--recall_mq_cutoff", type=int, default=10, help="Mapping quality cutoff")
     parser.add_argument("--basequal_median_cutoff", type=int, default=15, help="Base quality median cutoff")
     parser.add_argument("--edge_weight_cutoff", type=float, default=0.201, help="Edge weight cutoff")
@@ -452,7 +446,6 @@ if __name__ == "__main__":
         output_bam=args.output_bam,
         intrinsic_bam=args.intrinsic_bam,
         bam_region_bed=args.bam_region_bed,
-        max_varno=args.max_varno,
         recall_mq_cutoff=args.recall_mq_cutoff,
         basequal_median_cutoff=args.basequal_median_cutoff,
         edge_weight_cutoff=args.edge_weight_cutoff,
