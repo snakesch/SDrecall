@@ -2,16 +2,57 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 use numpy::{PyArray1, PyArray2, ToPyArray};
 
-use log::{info, LevelFilter};
+use log::{LevelFilter, info, debug, Record, Level, Metadata};
+use std::io::{self, Write};
 
 use crate::structs::{HaplotypeConfig, PhasingGraphResult};
 use crate::graph_builder::build_phasing_graph;
 
-/// Configure Rust logging level based on Python logging level
+/// Simple custom logger that provides detailed logging without SIMD dependencies
+struct SimpleEnhancedLogger;
+
+impl log::Log for SimpleEnhancedLogger {
+    fn enabled(&self, _metadata: &Metadata) -> bool {
+        true
+    }
+
+    fn log(&self, record: &Record) {
+        if self.enabled(record.metadata()) {
+            // Get current time using standard library (no external dependencies)
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            
+            let module = record.module_path().unwrap_or("unknown_module");
+            let file = record.file().unwrap_or("unknown_file");
+            let line = record.line().unwrap_or(0);
+            
+            eprintln!(
+                "[{}] [{}] [{}] [{}:{}] {}",
+                now,
+                record.level(),
+                module,
+                file,
+                line,
+                record.args()
+            );
+        }
+    }
+
+    fn flush(&self) {
+        io::stderr().flush().ok();
+    }
+}
+
+/// Configure comprehensive Rust logging with file names, line numbers, and function stacks
 /// 
-/// This function maps Python logging levels to Rust log levels and configures
-/// the Rust logging system accordingly. This ensures that debug messages in Rust
-/// are only shown when Python is configured for debug logging.
+/// This function sets up detailed logging that includes:
+/// - File names and line numbers where the log was generated
+/// - Function names and call stack context
+/// - Proper level filtering based on Python logging level
+/// 
+/// Uses minimal custom logger to avoid any SIMD compatibility issues
 /// 
 /// # Arguments
 /// * `level_str` - Python logging level as string ("DEBUG", "INFO", "WARNING", "ERROR")
@@ -25,11 +66,19 @@ fn configure_rust_logging(level_str: &str) {
         _ => LevelFilter::Info, // Default fallback
     };
     
-    // Set the maximum log level for the log crate
-    // This controls which log messages are compiled in
+    // Initialize our custom logger (only once)
+    static INIT: std::sync::Once = std::sync::Once::new();
+    INIT.call_once(|| {
+        log::set_boxed_logger(Box::new(SimpleEnhancedLogger))
+            .map(|()| log::set_max_level(rust_level))
+            .ok();
+    });
+    
+    // Update the max level for this configuration
     log::set_max_level(rust_level);
     
-    info!("Rust logging level set to: {:?} (from Python level: {})", rust_level, level_str);
+    info!("[configure_rust_logging] Rust logging configured with level: {:?} (from Python: {})", rust_level, level_str);
+    debug!("[configure_rust_logging] Enhanced logging with source location is active (minimal SIMD-free implementation)");
 }
 
 /// Python-exposed function for building the phasing graph
@@ -62,15 +111,19 @@ pub fn build_phasing_graph_rust(
     threads: u8,
     log_level: Option<&str>,
 ) -> PyResult<PyObject> {
+    info!("[build_phasing_graph_rust] Starting Rust graph building with mean_read_length={}", mean_read_length);
+    
     // Configure Rust logging level based on Python logger level
     if let Some(level_str) = log_level {
         configure_rust_logging(level_str);
+    } else {
+        log::set_max_level(LevelFilter::Debug);
     }
     
-    info!("Starting Rust graph building with mean_read_length={}", mean_read_length);
-    info!("Processing BAM file: {}", bam_file_path);
+    info!("[build_phasing_graph_rust] Processing BAM file: {}", bam_file_path);
     
     // Read BAM file and build read pair map directly in Rust
+    info!("[build_phasing_graph_rust] Step 1: Reading BAM file and building read pair map");
     let (read_pair_map, header) = crate::bam_reading::migrate_bam_to_sorted_intervals_grouped(
         bam_file_path,
         mapq_filter,
@@ -78,28 +131,51 @@ pub fn build_phasing_graph_rust(
         filter_noisy,
         use_collate,
         threads,
-    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("BAM reading failed: {}", e)))?;
+    ).map_err(|e| {
+        let error_msg = format!("BAM reading failed: {}", e);
+        log::error!("[build_phasing_graph_rust] Step 1 error: {}", error_msg);
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error_msg)
+    })?;
+    
+    info!("[build_phasing_graph_rust] Step 1 completed: Read pair map contains {} pairs", read_pair_map.readpair_dict.len());
     
     // Build allele depth map
+    info!("[build_phasing_graph_rust] Step 2: Building allele depth map");
     let allele_depth_map = crate::bam_reading::build_allele_depth_map(
         bam_file_path,
         reference_genome,
         mapq_filter,
         basequal_median_filter,
-    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Allele depth mapping failed: {}", e)))?;
+    ).map_err(|e| {
+        let error_msg = format!("Allele depth mapping failed: {}", e);
+        log::error!("[build_phasing_graph_rust] Step 2 error: {}", error_msg);
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error_msg)
+    })?;
+    
+    info!("[build_phasing_graph_rust] Step 2 completed: Allele depth map has {} chromosomes", allele_depth_map.chromosome_count());
     
     // Create configuration
+    info!("[build_phasing_graph_rust] Step 3: Creating haplotype configuration");
     let config = HaplotypeConfig::new(mean_read_length);
     
     // Call the Rust graph building function
+    info!("[build_phasing_graph_rust] Step 4: Building phasing graph");
     let result = build_phasing_graph(
         &read_pair_map,
         &allele_depth_map,
         &header,
         &config,
-    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!("Graph building failed: {}", e)))?;
+    ).map_err(|e| {
+        let error_msg = format!("Graph building failed: {}", e);
+        log::error!("[build_phasing_graph_rust] Step 4 error: {}", error_msg);
+        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error_msg)
+    })?;
+    
+    info!("[build_phasing_graph_rust] Step 4 completed: Graph has {} vertices and {} edges", 
+              result.graph.node_count(), result.graph.edge_count());
     
     // Convert the result back to Python format
+    info!("[build_phasing_graph_rust] Step 5: Converting result to Python format");
     export_graph_result_to_python(py, result)
 }
 

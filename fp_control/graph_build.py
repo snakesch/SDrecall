@@ -246,52 +246,51 @@ def build_phasing_graph_rust(
     
     logger.info("Using Rust-accelerated graph building")
     
-    # Convert Python data structures to formats expected by Rust
+    # Rust implementation handles all BAM processing internally - no Python preprocessing needed
     try:
-        # Prepare read pair data for Rust
-        read_pair_data = {}
-        for qname_idx, paired_reads in ncls_read_dict.items():
-            qname = ncls_qname_dict[qname_idx]
-            
-            # Extract read pair information
-            chrom = paired_reads[0].reference_name
-            starts = [r.reference_start for r in paired_reads]
-            ends = [r.reference_end for r in paired_reads]
-            sequences = [r.query_sequence for r in paired_reads]
-            qualities = [r.query_qualities.tolist() if r.query_qualities is not None else [] for r in paired_reads]
-            
-            read_pair_data[qname] = {
-                'chromosome': chrom,
-                'starts': starts,
-                'ends': ends,
-                'sequences': sequences,
-                'qualities': qualities
-            }
-        
-        # Prepare allele depth data
-        empty_dict = Dict.empty(key_type=types.int8, value_type=types.int16)
-        for key in base_dict.values():
-            empty_dict[key] = np.int16(0)
-        
-        nested_ad_dict = stat_ad_to_dict(bam_file, empty_dict, reference_genome, base_dict, logger=logger)
-        if nested_ad_dict is None:
-            logger.warning("No ALT allele found in this BAM file. Skip this entire script")
-            return None, None, None, None, None, None, total_lowqual_qnames
-        
-        intrinsic_ad_dict = stat_ad_to_dict(intrinsic_bam, empty_dict, reference_genome, base_dict, logger=logger)
-        if intrinsic_ad_dict is None:
-            intrinsic_ad_dict = {}
-        
         # Get current Python logging level to pass to Rust
         python_log_level = logging.getLevelName(logger.getEffectiveLevel())
         
-        # Call Rust function with logging level
+        # Ensure Python logging is properly configured before calling Rust
+        # This is critical for pyo3-log bridge to work correctly
+        # Configure with timestamps and file/line information for Rust logs  
+        # Function names will be included directly in the message content from Rust
+        detailed_formatter = logging.Formatter(
+            '[%(asctime)s] [%(levelname)s] [%(name)s] [%(filename)s:%(lineno)d] %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        
+        root_logger = logging.getLogger()
+        if not root_logger.hasHandlers():
+            logging.basicConfig(
+                level=logging.DEBUG, 
+                format='[%(asctime)s] [%(levelname)s] [%(name)s] [%(filename)s:%(lineno)d] %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
+        else:
+            # Update existing handlers to use detailed format for Rust logs
+            for handler in root_logger.handlers:
+                if not handler.formatter or 'asctime' not in getattr(handler.formatter, '_fmt', ''):
+                    handler.setFormatter(detailed_formatter)
+        
+        # Ensure the root logger level allows the messages through
+        if root_logger.level > logger.level:
+            root_logger.setLevel(logger.level)
+            
+        logger.debug(f"Python logging configured: level={python_log_level}, root_level={logging.getLevelName(root_logger.level)}")
+        
+        # Call Rust function directly - it handles all BAM processing and allele depth calculation internally
         rust_result = build_phasing_graph_rs.build_phasing_graph_rust(
-            read_pair_data,
-            nested_ad_dict,
-            mean_read_length,
-            edge_weight_cutoff,
-            python_log_level
+            bam_file,                    # bam_file_path: str
+            reference_genome,            # reference_genome: str  
+            mean_read_length,            # mean_read_length: f32
+            edge_weight_cutoff,          # _edge_weight_cutoff: f32
+            10,                          # mapq_filter: u8 (default value)
+            15,                          # basequal_median_filter: u8 (default value)
+            True,                        # filter_noisy: bool
+            True,                        # use_collate: bool
+            8,                           # threads: u8 (default value)
+            python_log_level             # log_level: Option<&str>
         )
 
         logger.info(f"Rust implementation: The result of the rust implementation is {rust_result}")
@@ -313,7 +312,7 @@ def build_phasing_graph_rust(
         qname_prop = g.new_vertex_property("string")
         qname_to_node = {}
         
-        for i, qname in enumerate(vertex_names):
+        for qname in vertex_names:
             v = g.add_vertex()
             qname_prop[v] = qname
             qname_to_node[qname] = int(v)
@@ -323,17 +322,21 @@ def build_phasing_graph_rust(
         total_vertices = len(vertex_names)
         weight_matrix = np.eye(total_vertices, dtype=np.float32)
         
-        for i, (u_idx, v_idx, edge_weight) in enumerate(zip(edges[0], edges[1], weights)):
-            if edge_weight > edge_weight_cutoff:
-                u = g.vertex(u_idx)
-                v = g.vertex(v_idx)
-                e = g.add_edge(u, v)
-                weight_prop[e] = edge_weight
-                weight_matrix[u_idx, v_idx] = edge_weight
-                weight_matrix[v_idx, u_idx] = edge_weight
-            else:
-                weight_matrix[u_idx, v_idx] = -1
-                weight_matrix[v_idx, u_idx] = -1
+        # Handle empty edges array case (when no edges are found)
+        if edges.size > 0 and len(edges.shape) == 2 and edges.shape[0] > 0 and edges.shape[1] >= 2:
+            for u_idx, v_idx, edge_weight in zip(edges[:, 0], edges[:, 1], weights):
+                if edge_weight > edge_weight_cutoff:
+                    u = g.vertex(u_idx)
+                    v = g.vertex(v_idx)
+                    e = g.add_edge(u, v)
+                    weight_prop[e] = edge_weight
+                    weight_matrix[u_idx, v_idx] = edge_weight
+                    weight_matrix[v_idx, u_idx] = edge_weight
+                else:
+                    weight_matrix[u_idx, v_idx] = -1
+                    weight_matrix[v_idx, u_idx] = -1
+        else:
+            logger.info(f"No edges found in Rust result. Edges shape: {edges.shape}, size: {edges.size}")
         
         # Set graph properties
         g.vertex_properties["qname"] = qname_prop

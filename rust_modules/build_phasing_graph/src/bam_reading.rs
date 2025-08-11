@@ -6,6 +6,7 @@ use std::process::Command;
 use ahash::AHashMap; // Faster HashMap for string keys
 use std::path::Path;
 use tempfile::NamedTempFile;
+use log::{debug, info, warn};
 
 
 
@@ -22,43 +23,87 @@ fn is_read_noisy(
     basequal_median_filter: u8,
     filter_noisy: bool,
 ) -> bool {
-    // Only evaluate primary alignments for noise - paired-end specific checks
-    if !read.is_secondary() && !read.is_supplementary() {
-        if read.mapq() < mapq_filter ||
-           read.is_quality_check_failed() ||
-           read.is_unmapped() ||
-           read.reference_end() < read.reference_start() + 75 ||
-           read.tid() != read.mtid() ||
-           !read.is_proper_pair() ||
-           read.seq_len() == 0 {
+    let qname = String::from_utf8_lossy(read.qname());
+    
+    // Only evaluate primary alignments for noise - secondary or supplementary alignments are skipped
+    if read.is_secondary() || read.is_supplementary() {
+        debug!("[is_read_noisy] skip_secondary_supplementary - {} skipped (secondary/supplementary alignment); not considered noisy", qname);
+        return false;
+    }
+    
+    // Common fast checks for both paired and unpaired
+    if read.is_unmapped() {
+        debug!("[is_read_noisy] unmapped_check - {} flagged noisy: unmapped read", qname);
+        return true;
+    }
+    
+    if read.is_quality_check_failed() {
+        debug!("[is_read_noisy] qc_fail_check - {} flagged noisy: QC fail flag set", qname);
+        return true;
+    }
+    
+    if read.mapq() < mapq_filter {
+        debug!("[is_read_noisy] mapq_check - {} flagged noisy: MAPQ {} < threshold {}", qname, read.mapq(), mapq_filter);
+        return true;
+    }
+    
+    if read.seq_len() == 0 {
+        debug!("[is_read_noisy] seq_len_check - {} flagged noisy: missing query_sequence", qname);
+        return true;
+    }
+    
+    // Paired-end specific checks
+    let aln_len = read.reference_end() - read.reference_start();
+    if aln_len < 75 {
+        debug!("[is_read_noisy] aln_len_check - {} flagged noisy: alignment span {} < 75", qname, aln_len);
+        return true;
+    }
+    
+    // Ensure mate on same reference for proper pairing in this pipeline
+    if read.tid() != read.mtid() {
+        debug!("[is_read_noisy] mate_tid_check - {} flagged noisy: different reference chromosomes for mate pair", qname);
+        return true;
+    }
+    
+    if !read.is_proper_pair() {
+        debug!("[is_read_noisy] proper_pair_check - warning:{} is not a proper pair", qname);
+    }
+    
+    // Base quality and soft-clip based checks (controlled by filter_noisy)
+    if filter_noisy && !read.qual().is_empty() {
+        let mut qual_vec: Vec<u8> = read.qual().to_vec();
+        // Use order-stat crate for O(n) median calculation (most efficient)
+        let median_qual = if !qual_vec.is_empty() {
+            let len = qual_vec.len();
+            *order_stat::kth(&mut qual_vec, len / 2)
+        } else {
+            20u8 // Default quality if empty
+        };
+        
+        if median_qual <= basequal_median_filter {
+            debug!("[is_read_noisy] median_qual_check - {} flagged noisy: median baseQ {} <= threshold {}", qname, median_qual, basequal_median_filter);
             return true;
         }
-
-        if filter_noisy && !read.qual().is_empty() {
-            let mut qual_vec: Vec<u8> = read.qual().to_vec();
-            // Use order-stat crate for O(n) median calculation (most efficient)
-            let median_qual = if !qual_vec.is_empty() {
-                let len = qual_vec.len();
-                *order_stat::kth(&mut qual_vec, len / 2)
-            } else {
-                20u8 // Default quality if empty
-            };
-            let low_qual_count = read.qual().iter().filter(|&&q| q < basequal_median_filter).count();
-            
-            let soft_clip_bases: u32 = read.cigar()
-                .iter()
-                .filter(|c| c.char() == 'S')
-                .map(|c| c.len())
-                .sum();
-
-            if median_qual <= basequal_median_filter ||
-               low_qual_count >= 50 ||
-               soft_clip_bases >= 20 {
-                return true;
-            }
+        
+        let low_qual_count = read.qual().iter().filter(|&&q| q < basequal_median_filter).count();
+        if low_qual_count >= 50 {
+            debug!("[is_read_noisy] low_qual_count_check - {} flagged noisy: #bases with Q<{} is {} >= 50", qname, basequal_median_filter, low_qual_count);
+            return true;
+        }
+        
+        let soft_clip_bases: u32 = read.cigar()
+            .iter()
+            .filter(|c| c.char() == 'S')
+            .map(|c| c.len())
+            .sum();
+        
+        if soft_clip_bases >= 20 {
+            debug!("[is_read_noisy] soft_clip_check - {} flagged noisy: total soft-clip length {} >= 20\n", qname, soft_clip_bases);
+            return true;
         }
     }
-
+    
+    // If none of the noisy conditions triggered
     false
 }
 
@@ -111,6 +156,9 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
     use_collate: bool,
     threads: u8) -> Result<(ReadPairMap, rust_htslib::bam::HeaderView), Box<dyn std::error::Error>> {
 
+    info!("[migrate_bam_to_sorted_intervals_grouped] Starting BAM processing: file={}, mapq_filter={}, basequal_median_filter={}, filter_noisy={}, use_collate={}, threads={}", 
+         bam_file_path, mapq_filter, basequal_median_filter, filter_noisy, use_collate, threads);
+
     // Optionally collate the BAM file first, make sure the temp file end with .bam suffix
     let (bam_path, _temp_file) = if use_collate {
         // ? operator: propagates any error from collate_bam_file function
@@ -131,6 +179,7 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
     // ? operator: propagates any error from BAM file opening
     let mut bam = bam::Reader::from_path(&bam_path)?;
     let header = bam.header().clone();
+    info!("[migrate_bam_to_sorted_intervals_grouped] BAM file opened successfully, {} chromosomes found", header.target_count());
     
     let mut result = ReadPairMap::new();
     let mut qname_idx_counter = 0usize;
@@ -144,17 +193,24 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
         let chrom = String::from_utf8_lossy(ref_name).to_string();
         result.interval_trees.insert(chrom, SortedVecIntervals::new());
     }
+    debug!("[migrate_bam_to_sorted_intervals_grouped] Interval trees initialized for {} chromosomes", chrom_count);
     
     // Buffer for collecting reads with the same qname
     let mut current_qname: Option<String> = None;
     let mut current_reads: Vec<Record> = Vec::with_capacity(2);
     
+    let mut total_reads_processed = 0usize;
+    let mut skipped_alignments = 0usize;
+    info!("[migrate_bam_to_sorted_intervals_grouped] Starting to process BAM records");
+    
     // Process reads grouped by qname
     for read_result in bam.records() {
         let read = read_result?;
+        total_reads_processed += 1;
         
         // Skip secondary, supplementary, and duplicate alignments
         if should_skip_alignment(&read) {
+            skipped_alignments += 1;
             continue;
         }
         
@@ -210,6 +266,9 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
         interval_tree.finalize()?;
     }
     
+    info!("[migrate_bam_to_sorted_intervals_grouped] BAM processing complete: {} total reads processed, {} alignments skipped, {} read pairs retained, {} noisy qnames filtered",
+         total_reads_processed, skipped_alignments, result.readpair_dict.len(), result.noisy_qnames.len());
+    
     // The temp file will be automatically deleted when _temp_file goes out of scope
     Ok((result, header))
 }
@@ -230,6 +289,7 @@ fn process_qname_group(
     );
     
     if is_noisy {
+        debug!("[process_qname_group] This qname {} is noisy. Skip it.\n", qname);
         result.noisy_qnames.insert(qname.clone(), ());
         return Ok(());
     }
@@ -325,7 +385,7 @@ pub fn build_allele_depth_map(
     // Pipe to bcftools query
     let query_output = Command::new("bcftools")
         .args([
-            "query", "-f", "%CHROM\\t%POS\\t%REF\\t%ALT\\t[%AD]\\n", "-"
+            "query", "-f", "%CHROM\t%POS\t%REF\t%ALT\t[%AD]\n", "-"
         ])
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

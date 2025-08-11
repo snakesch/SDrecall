@@ -9,6 +9,15 @@ edition = "2021"
 name = "build_phasing_graph"
 crate-type = ["cdylib"]
 
+# Add conservative CPU target flags for better compatibility
+[profile.release]
+opt-level = 2  # Lower optimization to avoid CPU-specific instructions
+lto = false    # Disable LTO to avoid aggressive optimizations
+codegen-units = 1
+
+[profile.dev]
+opt-level = 0
+
 [dependencies]
 # Python integration - core requirements
 pyo3 = { workspace = true }
@@ -29,7 +38,7 @@ statrs = "0.16"         # Statistical functions
 order-stat = "0.1"      # Fast O(n) median calculation
 
 # Data processing and I/O
-polars = { version = "0.35", features = ["lazy", "strings", "temporal"] }
+# polars = { version = "0.35", features = ["lazy", "strings", "temporal"] }  # REMOVED: Causes illegal instruction on older CPUs
 tempfile = "3.8"        # Temporary file handling
 
 # Logging

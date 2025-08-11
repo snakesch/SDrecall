@@ -181,11 +181,11 @@ pub fn build_phasing_graph(
     
     // ========== STEP 1: Initialize and Validate Input ==========
     let total_read_pairs = read_pair_map.readpair_dict.len();
-    info!("There are totally {} pair of reads, mean read length is {:.1}. with adequate mapping or base quality which can be used to build the graph", 
+    info!("[build_phasing_graph] There are totally {} pair of reads, mean read length is {:.1}. with adequate mapping or base quality which can be used to build the graph", 
           total_read_pairs, config.mean_read_length);
     
     if allele_depth_map.is_empty() {
-        warn!("No ALT allele found in this BAM file. Skip this entire script");
+        warn!("[build_phasing_graph] No ALT allele found in this BAM file. Skip this entire script");
         return Ok(PhasingGraphResult::new());
     }
     
@@ -211,13 +211,13 @@ pub fn build_phasing_graph(
             ).into());
         }
         
-        debug!("Verified node correspondence: qname_idx {} = NodeIndex({})", qname_idx, node.index());
+        debug!("[build_phasing_graph] Verified node correspondence: qname_idx {} = NodeIndex({})", qname_idx, node.index());
     }
     
     // ========== STEP 3: Initialize Weight Matrix and Tracking ==========
     // Initialize weight matrix with known size
     result.initialize_weight_matrix(num_nodes);
-    info!("Initialized {}x{} weight matrix", num_nodes, num_nodes);
+    info!("[build_phasing_graph] Initialized {}x{} weight matrix", num_nodes, num_nodes);
     
     // Create a set to track which node pairs we've already checked
     let mut checked_pairs: HashSet<(usize, usize)> = HashSet::new();
@@ -259,7 +259,7 @@ pub fn build_phasing_graph(
             let other_read_pair = match read_pair_map.readpair_dict.get(&other_qname_idx) {
                 Some(pair) => pair, // HashMap get() returns Option<&ReadPair> (not owned)
                 None => {
-                    warn!("Could not find read pair for qname_idx: {}", other_qname_idx);
+                    warn!("[build_phasing_graph] Could not find read pair for qname_idx: {}", other_qname_idx);
                     continue;
                 }
             };
@@ -277,7 +277,7 @@ pub fn build_phasing_graph(
             // ---------- Step 5a: Overlap Interval Detection ----------
             // Inspect the overlap between the two pairs of reads
             let overlap_intervals = get_overlap_intervals(read_pair, other_read_pair)?;
-            debug!("Found {} overlap intervals between {} and {}", 
+            debug!("[build_phasing_graph] Found {} overlap intervals between {} and {}", 
                    overlap_intervals.len(), qname, other_qname);
             
             if overlap_intervals.is_empty() {
@@ -303,7 +303,7 @@ pub fn build_phasing_graph(
                     overlap.end
                 );
                 
-                debug!("Found {} uncovered regions for overlap {:?}", 
+                debug!("[build_phasing_graph] Found {} uncovered regions for overlap {:?}", 
                        uncovered_regions.len(), overlap);
                 
                 for uncovered_region in uncovered_regions {
@@ -328,14 +328,14 @@ pub fn build_phasing_graph(
                         HaplotypeResult::Same => {
                             compatibility_results.push(1);
                             if let Some(weight) = read_weight {
-                                info!("Weight is {}. Found the reads {} and {} are in the same haplotype, overlap region ({}-{})", 
-                                      weight, qname, other_qname, overlap.start, overlap.end);
+                                debug!("[build_phasing_graph] Weight is {}. Found the reads {} and {} are in the same haplotype, overlap region ({}:{}-{})", 
+                                      weight, qname, other_qname, chrom, overlap.start, overlap.end);
                             }
                         }
                         HaplotypeResult::Different => {
                             compatibility_results.push(-1);
-                            info!("Found the reads {} and {} are in different haplotypes, overlap region ({}-{})", 
-                                  qname, other_qname, overlap.start, overlap.end);
+                            debug!("[build_phasing_graph] Found the reads {} and {} are in different haplotypes, overlap region ({}:{}-{})", 
+                                  qname, other_qname, chrom, overlap.start, overlap.end);
                         }
                         HaplotypeResult::Unknown => {
                             compatibility_results.push(0);
@@ -363,14 +363,14 @@ pub fn build_phasing_graph(
             // Equivalent to Python's any_false_numba(qname_bools) check
             let _final_weight = if any_false(&compatibility_results) {
                 // Any incompatible region means overall incompatibility
-                info!("Qname_bools are {:?}, Found two pairs {} and {} are in different haplotypes", 
+                debug!("[build_phasing_graph] Qname_bools are {:?}, Found two pairs {} and {} are in different haplotypes\n", 
                       compatibility_results, qname, other_qname);
                 result.set_weight(qname_idx, other_qname_idx, -1.0)?;
                 None
             } else {
                 // All regions compatible or unknown
                 let weight = pair_weight.unwrap_or(0.0).max(1e-4); // Minimum weight for compatible pairs
-                debug!("Between {} and {}, the pair weight is {}", qname, other_qname, weight);
+                debug!("[build_phasing_graph] Between {} and {}, the pair weight is {}\n", qname, other_qname, weight);
                 
                 // Set weight in matrix using qname_idx directly
                 result.set_weight(qname_idx, other_qname_idx, weight)?;
@@ -388,9 +388,9 @@ pub fn build_phasing_graph(
     // Extract lowqual_qnames from ReadPairMap to include in result
     result.lowqual_qnames = read_pair_map.noisy_qnames.keys().cloned().collect();
     
-    info!("Finished building graph with {} vertices and {} edges", 
+    info!("[build_phasing_graph] Finished building graph with {} vertices and {} edges", 
           result.vertex_count(), result.edge_count());
-    info!("Identified {} low-quality qnames during processing", result.lowqual_qnames.len());
+    info!("[build_phasing_graph] Identified {} low-quality qnames during processing\n", result.lowqual_qnames.len());
     
     Ok(result)
 }
@@ -517,7 +517,7 @@ fn get_overlap_intervals<'a>(
                     read2,  // Direct reference to the record
                 });
                 
-                debug!("Found overlap interval {}-{} between reads", 
+                debug!("[get_overlap_intervals] Found overlap interval {}-{} between reads", 
                        overlap_start, overlap_end);
             }
         }
