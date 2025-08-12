@@ -10,13 +10,7 @@ name = "build_phasing_graph"
 crate-type = ["cdylib"]
 
 # Add conservative CPU target flags for better compatibility
-[profile.release]
-opt-level = 2  # Lower optimization to avoid CPU-specific instructions
-lto = false    # Disable LTO to avoid aggressive optimizations
-codegen-units = 1
 
-[profile.dev]
-opt-level = 0
 
 [dependencies]
 # Python integration - core requirements

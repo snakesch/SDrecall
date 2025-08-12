@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 use numpy::{PyArray1, PyArray2, ToPyArray};
 
-use log::{LevelFilter, info, debug, Record, Level, Metadata};
+use log::{LevelFilter, info, debug, Record, Metadata};
 use std::io::{self, Write};
 
 use crate::structs::{HaplotypeConfig, PhasingGraphResult};

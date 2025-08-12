@@ -277,7 +277,7 @@ def build_phasing_graph_rust(
         if root_logger.level > logger.level:
             root_logger.setLevel(logger.level)
             
-        logger.debug(f"Python logging configured: level={python_log_level}, root_level={logging.getLevelName(root_logger.level)}")
+        logger.info(f"Python logging configured: level={python_log_level}, root_level={logging.getLevelName(root_logger.level)}")
         
         # Call Rust function directly - it handles all BAM processing and allele depth calculation internally
         rust_result = build_phasing_graph_rs.build_phasing_graph_rust(
@@ -292,8 +292,6 @@ def build_phasing_graph_rust(
             8,                           # threads: u8 (default value)
             python_log_level             # log_level: Option<&str>
         )
-
-        logger.info(f"Rust implementation: The result of the rust implementation is {rust_result}")
         
         # Convert Rust results back to graph-tool format
         edges = rust_result['edges']
@@ -303,6 +301,13 @@ def build_phasing_graph_rust(
         read_error_vectors = rust_result['read_error_vectors']
         read_ref_pos_dict = rust_result['read_ref_pos_dict']
         updated_lowqual_qnames = set(rust_result['low_qual_qnames'])
+        logger.info(f"There are {len(updated_lowqual_qnames)} low quality qnames")
+        logger.info(f"There are {len(read_hap_vectors)} read haplotype vectors")
+        logger.info(f"There are {len(read_error_vectors)} read error vectors")
+        logger.info(f"There are {len(read_ref_pos_dict)} read reference position dict")
+        logger.info(f"There are {len(vertex_names)} vertex names")
+        logger.info(f"There are {len(edges)} edges")
+        logger.info(f"There are {len(weights)} weights")
         
         # Create graph-tool graph
         g = gt.Graph(directed=False)
@@ -325,16 +330,15 @@ def build_phasing_graph_rust(
         # Handle empty edges array case (when no edges are found)
         if edges.size > 0 and len(edges.shape) == 2 and edges.shape[0] > 0 and edges.shape[1] >= 2:
             for u_idx, v_idx, edge_weight in zip(edges[:, 0], edges[:, 1], weights):
-                if edge_weight > edge_weight_cutoff:
-                    u = g.vertex(u_idx)
-                    v = g.vertex(v_idx)
-                    e = g.add_edge(u, v)
-                    weight_prop[e] = edge_weight
-                    weight_matrix[u_idx, v_idx] = edge_weight
-                    weight_matrix[v_idx, u_idx] = edge_weight
-                else:
-                    weight_matrix[u_idx, v_idx] = -1
-                    weight_matrix[v_idx, u_idx] = -1
+                # Add all edges - cutoff filtering happens later in phasing step
+                # Note: Rust implementation currently has simplified shared SNV detection
+                # which results in lower edge weights than Python version
+                u = g.vertex(u_idx)
+                v = g.vertex(v_idx)
+                e = g.add_edge(u, v)
+                weight_prop[e] = edge_weight
+                weight_matrix[u_idx, v_idx] = edge_weight
+                weight_matrix[v_idx, u_idx] = edge_weight
         else:
             logger.info(f"No edges found in Rust result. Edges shape: {edges.shape}, size: {edges.size}")
         

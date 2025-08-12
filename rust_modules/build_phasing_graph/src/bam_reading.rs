@@ -2,13 +2,12 @@ use rust_htslib::bam::{self, Read, Record};
 use rust_htslib::bam::ext::BamRecordExtensions;
 use crate::structs::{ReadPair, SortedVecIntervals, ReadPairMap, AlleleDepthMap};
 
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::io::{BufRead, BufReader};
 use ahash::AHashMap; // Faster HashMap for string keys
 use std::path::Path;
 use tempfile::NamedTempFile;
-use log::{debug, info, warn};
-
-
+use log::{debug, info};
 
 
 fn should_skip_alignment(read: &Record) -> bool {
@@ -193,7 +192,7 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
         let chrom = String::from_utf8_lossy(ref_name).to_string();
         result.interval_trees.insert(chrom, SortedVecIntervals::new());
     }
-    debug!("[migrate_bam_to_sorted_intervals_grouped] Interval trees initialized for {} chromosomes", chrom_count);
+    info!("[migrate_bam_to_sorted_intervals_grouped] Interval trees initialized for {} chromosomes", chrom_count);
     
     // Buffer for collecting reads with the same qname
     let mut current_qname: Option<String> = None;
@@ -363,62 +362,41 @@ pub fn build_allele_depth_map(
     mapq_filter: u8,
     base_qual_filter: u8,
 ) -> Result<AlleleDepthMap, Box<dyn std::error::Error>> {
-    let ad_file = format!("{}.ad", bam_file);
     
-    // Use bcftools mpileup (keeping the efficient C implementation)
-    let output = Command::new("bcftools")
+    info!("[build_allele_depth_map] Starting with BAM: {}, MAPQ>={}, BaseQ>={}", bam_file, mapq_filter, base_qual_filter);
+    
+    // Stream mpileup stdout directly into query stdin, and write query stdout to the .ad file
+    let mut mpileup_child = Command::new("bcftools")
         .args([
-            "mpileup", "-Ou", 
+            "mpileup", "-Ou",
             "--fasta-ref", reference_genome,
             "-a", "FORMAT/AD",
             "--indels-2.0",
+            "-A",
             "-q", &mapq_filter.to_string(),
             "-Q", &base_qual_filter.to_string(),
-            bam_file
+            bam_file,
         ])
-        .output()?; // ? operator: propagates any error from command execution
-    
-    if !output.status.success() {
-        return Err(format!("bcftools mpileup failed: {}", String::from_utf8_lossy(&output.stderr)).into());
-    }
-    
-    // Pipe to bcftools query
-    let query_output = Command::new("bcftools")
-        .args([
-            "query", "-f", "%CHROM\t%POS\t%REF\t%ALT\t[%AD]\n", "-"
-        ])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()?; // ? operator: propagates any error from process spawning
-    
-    // Write the mpileup output to the query command
-    let mut child = query_output;
-    if let Some(mut stdin) = child.stdin.take() {
-        use std::io::Write;
-        // ? operator: propagates any error from writing to stdin
-        stdin.write_all(&output.stdout)?;
-    }
-    
-    // ? operator: propagates any error from waiting for child process
-    let query_output = child.wait_with_output()?;
-    
-    if !query_output.status.success() {
-        return Err(format!("bcftools query failed: {}", String::from_utf8_lossy(&query_output.stderr)).into());
-    }
-    
-    // Write to temporary file for Polars to read
-    // ? operator: propagates any error from file writing
-    std::fs::write(&ad_file, &query_output.stdout)?;
-    
-    // Parse the TSV file directly (simpler than using Polars for now)
-    let content = std::fs::read_to_string(&ad_file)?;
+        .stdout(Stdio::piped())
+        .spawn()?;
+
+    let mpileup_stdout = mpileup_child.stdout.take().ok_or("Failed to capture mpileup stdout")?;
+    let mut query_child = Command::new("bcftools")
+        .args(["query", "-f", "%CHROM\t%POS\t%REF\t%ALT\t[%AD]\\n", "-"])
+        .stdin(Stdio::from(mpileup_stdout))
+        .stdout(Stdio::piped())
+        .spawn()?;
+
+    // Stream-parse bcftools query output directly into allele_depth_map
+    let query_stdout = query_child.stdout.take().ok_or("Failed to capture bcftools query stdout")?;
+    let reader = BufReader::new(query_stdout);
     let mut allele_depth_map = AlleleDepthMap::new();
-    
-    for line in content.lines() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        
+    let mut line_count = 0usize;
+    for line_res in reader.lines() {
+        let line = line_res?;
+        if line.trim().is_empty() { continue; }
+        line_count += 1;
+
         let fields: Vec<&str> = line.split('\t').collect();
         if fields.len() < 5 {
             continue;
@@ -433,10 +411,7 @@ pub fn build_allele_depth_map(
         let alt_alleles = fields[3];
         let ad_str = fields[4];
         
-        // Skip if alt is empty or <*>
-        if alt_alleles.is_empty() || alt_alleles == "<*>" {
-            continue;
-        }
+        // Even if ALT is empty, still record REF depth/DP (positions with no ALT)
         
         // Parse AD values
         let ad_values: Vec<u16> = ad_str
@@ -455,11 +430,19 @@ pub fn build_allele_depth_map(
             continue;
         }
         
-        // Parse ALT alleles  
-        let alt_list: Vec<&str> = alt_alleles
+        // Parse ALT alleles  (filter placeholders and empties)
+        let mut alt_list: Vec<&str> = alt_alleles
             .trim_end_matches(",<*>")
             .split(',')
             .collect();
+
+        // Remove placeholders and empty entries
+        alt_list.retain(|&alt| !alt.is_empty() && alt != "<*>");
+
+        // Only report positions with at least one ALT allele after filtering
+        if alt_list.is_empty() {
+            continue;
+        }
             
         // Create position entry - just a simple array
         let mut position_data = AlleleDepthMap::new_position_data(total_depth);
@@ -490,11 +473,20 @@ pub fn build_allele_depth_map(
         }
         
         allele_depth_map.insert(chrom, pos, position_data);
+        debug!("[build_allele_depth_map] Inserted position data for {} at position {} with ref {} and alt {} where the ADs are {:?}", chrom, pos, ref_allele, alt_alleles, position_data);
     }
-    
-    // Clean up temporary file
-    std::fs::remove_file(&ad_file).ok();
-    
+    info!("[build_allele_depth_map] Processed {} lines, created map with {} chromosomes", line_count, allele_depth_map.chromosome_count());
+
+    // Ensure both processes exited successfully
+    let query_status = query_child.wait()?;
+    let mpileup_status = mpileup_child.wait()?;
+    if !mpileup_status.success() {
+        return Err("bcftools mpileup failed".into());
+    }
+    if !query_status.success() {
+        return Err("bcftools query failed".into());
+    }
+
     Ok(allele_depth_map)
 }
 
