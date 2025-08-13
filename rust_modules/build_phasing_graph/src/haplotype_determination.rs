@@ -604,9 +604,12 @@ fn tolerate_mismatches_from_hap_vectors(
 ) -> (bool, usize) {
     let qname1 = std::str::from_utf8(record1.qname()).unwrap_or("unknown");
     let qname2 = std::str::from_utf8(record2.qname()).unwrap_or("unknown");
+    // Append sam flag of the read to the qname to make a unique read id
+    let read1_id = format!("{}_{}", qname1, record1.flags());
+    let read2_id = format!("{}_{}", qname2, record2.flags());
     
     debug!("[tolerate_mismatches_from_hap_vectors] Analyzing {} mismatches between reads {} and {}", 
-           mismatch_positions.len(), qname1, qname2);
+           mismatch_positions.len(), read1_id, read2_id);
     debug!("[tolerate_mismatches_from_hap_vectors] Mismatch positions: {:?}", mismatch_positions);
     
     let mut tolerable_count = 0;
@@ -624,6 +627,8 @@ fn tolerate_mismatches_from_hap_vectors(
         // Check if this is an indel mismatch (not tolerable)
         let is_indel1 = hap1 == -6 || hap1 > 1;  // Deletion or insertion
         let is_indel2 = hap2 == -6 || hap2 > 1;  // Deletion or insertion
+        let is_snv1 = hap1 == -4;
+        let is_snv2 = hap2 == -4;
         
         if is_indel1 || is_indel2 {
             debug!("[tolerate_mismatches_from_hap_vectors] Position {} has indel mismatch (hap1={}, hap2={}) - NOT TOLERABLE", 
@@ -641,10 +646,10 @@ fn tolerate_mismatches_from_hap_vectors(
         );
         
         debug!("[tolerate_mismatches_from_hap_vectors] Position {}: read1({}) error={}, read2({}) error={}", 
-               genomic_pos, qname1, error1, qname2, error2);
+               genomic_pos, read1_id, error1, read2_id, error2);
         
         // If either read has a sequencing error at this position, we can tolerate it
-        if error1 || error2 {
+        if (error1 && is_snv1) || (error2 && is_snv2) {
             tolerable_count += 1;
             debug!("[tolerate_mismatches_from_hap_vectors] Position {} TOLERABLE (sequencing error detected)", genomic_pos);
         } else {
@@ -693,8 +698,8 @@ fn find_mismatch_positions_from_hap_vectors(
         let hap1 = hap_vec1[i];
         let hap2 = hap_vec2[i];
         
-        // If haplotype values differ, it's a mismatch or either one is a -4 (SNV)
-        if hap1 != hap2 || hap1 == -4 || hap2 == -4 {
+        // If haplotype values differ, it's an SNV
+        if hap1 != hap2 {
             let genomic_pos = interval_start + i as i64;
             mismatches.push(genomic_pos);
         }
@@ -786,9 +791,11 @@ pub fn determine_same_haplotype(
     // Extract qnames from records
     let qname1 = std::str::from_utf8(read1.qname())?;
     let qname2 = std::str::from_utf8(read2.qname())?;
+    let read1_id = format!("{}_{}", qname1, read1.flags());
+    let read2_id = format!("{}_{}", qname2, read2.flags());
     
     debug!("[determine_same_haplotype] Comparing reads {} and {} at {}:{}-{}", 
-           qname1, qname2, chrom, start, end);
+           read1_id, read2_id, chrom, start, end);
     
     // Step 1: Extract query sequences and reference positions
     let (seq1, ref_pos1) = extract_query_seq(read1)?;
@@ -812,7 +819,7 @@ pub fn determine_same_haplotype(
         // Error vectors are only used for sequencing error detection in mismatches.
         // This saves expensive CIGAR parsing + quality score conversion.
         
-        debug!("[determine_same_haplotype] Sequences IDENTICAL between reads {} and {}", qname1, qname2);
+        debug!("[determine_same_haplotype] Sequences IDENTICAL between reads {} and {}", read1_id, read2_id);
         debug!("[determine_same_haplotype] Interval: {}:{}-{} (length={})", chrom, start, end, end - start);
         
         // Sequences are identical - likely same haplotype
@@ -888,19 +895,37 @@ pub fn determine_same_haplotype(
         let interval_hap2 = slice_hap_vector(&hap_vec2, read2.pos(), start, end);
         
         // Find mismatch positions using haplotype vectors (CORRECT APPROACH)
-        let mismatch_positions = find_mismatch_positions_from_hap_vectors(
+        let mut mismatch_positions = find_mismatch_positions_from_hap_vectors(
             &interval_hap1, &interval_hap2, start, end
         );
-        
-        // If no mismatches found (shouldn't happen since sequences differ), treat as unknown
-        if mismatch_positions.is_empty() {
-            warn!("[determine_same_haplotype] No mismatches found despite sequence differences -> UNKNOWN, interval_seq1={:?}, interval_seq2={:?}, interval_hap1={:?}, interval_hap2={:?}", interval_seq1, interval_seq2, interval_hap1, interval_hap2);
-            return Ok((HaplotypeResult::Unknown, None));
-        }
         
         // Check if mismatches occur at indel positions - these are not tolerable
         if has_indel_mismatches_from_hap_vectors(&interval_hap1, &interval_hap2, &mismatch_positions, start) {
             debug!("[determine_same_haplotype] Found indel mismatches between reads, marking as different haplotypes");
+            return Ok((HaplotypeResult::Different, None));
+        }
+
+        // Further check the shared SNV positions to see if they share the same ALT allele
+        let (matching_shared_snv_pos, discrepant_shared_snv_pos) = stat_shared_snv_matches(
+            &interval_hap1, &interval_hap2, start, &seq1, &ref_pos1, &seq2, &ref_pos2, read1, read2
+        )?;
+
+        // If no mismatches found (shouldn't happen since sequences differ), treat as unknown
+        if mismatch_positions.is_empty() && discrepant_shared_snv_pos.is_empty() {
+            warn!("[determine_same_haplotype] No mismatches found despite sequence differences -> Different Haplotypes for conservative estimation, interval_seq1={:?}, interval_seq2={:?}, interval_hap1={:?}, interval_hap2={:?}. The different hap genomic positions are: {:?}. The shared mismatch positions with different ALT alleles are: {:?}", interval_seq1, interval_seq2, interval_hap1, interval_hap2, mismatch_positions, discrepant_shared_snv_pos);
+            return Ok((HaplotypeResult::Different, None));
+        }
+
+        if !discrepant_shared_snv_pos.is_empty() {
+            info!("[determine_same_haplotype] Found discrepant shared SNV positions: {:?}, the interval is {}:{}-{}, the two reads compared are {} and {}. Within this overlap interval, their hap vectors are {:?} and {:?}, their query seq are {:?} and {:?}", discrepant_shared_snv_pos, chrom, start, end, read1_id, read2_id, interval_hap1, interval_hap2, interval_seq1, interval_seq2);
+        }
+
+        // Merge discrepant_shared_snv_pos into mismatch_positions for downstream analysis
+        debug!("[determine_same_haplotype] The different hap genomic positions are: {:?}. The shared mismatch positions with different ALT alleles are: {:?}", mismatch_positions, discrepant_shared_snv_pos);
+        mismatch_positions.extend(discrepant_shared_snv_pos);
+
+        if mismatch_positions.len() >= 3 {
+            info!("[determine_same_haplotype] Found {} mismatches, conservatively treat them as from different haplotypes. The interval is {}:{}-{}, the two reads compared are {} and {}. Within this overlap interval, their hap vectors are {:?} and {:?}, their query seq are {:?} and {:?}", mismatch_positions.len(), chrom, start, end, read1_id, read2_id, interval_hap1, interval_hap2, interval_seq1, interval_seq2);
             return Ok((HaplotypeResult::Different, None));
         }
         
@@ -916,7 +941,7 @@ pub fn determine_same_haplotype(
         let error_vec1 = get_error_vector(read1, read_error_vectors)?;
         let error_vec2 = get_error_vector(read2, read_error_vectors)?;
         
-        debug!("[determine_same_haplotype] Sequence mismatch detected between reads {} and {}", qname1, qname2);
+        debug!("[determine_same_haplotype] Sequence mismatch detected between reads {} and {}", read1_id, read2_id);
         debug!("[determine_same_haplotype] Interval: {}:{}-{} (length={})", chrom, start, end, end - start);
         debug!("[determine_same_haplotype] Sequences: read1_len={}, read2_len={}", interval_seq1.len(), interval_seq2.len());
         
@@ -945,10 +970,11 @@ pub fn determine_same_haplotype(
             let interval_hap1 = slice_hap_vector(&hap_vec1, read1.pos(), start, end);
             let interval_hap2 = slice_hap_vector(&hap_vec2, read2.pos(), start, end);
             
-            // Count shared variants
+            // Here we really need to identify the shared SNVs and indels
+            // Not by pick the smaller SNV/Indel count in either haplotype
             let (snv1, indel1, _) = count_variants(&interval_hap1);
             let (snv2, indel2, _) = count_variants(&interval_hap2);
-            let shared_snvs = snv1.min(snv2);
+            let shared_snvs = matching_shared_snv_pos.len();
             let shared_indels = indel1.min(indel2);
             
             debug!("[determine_same_haplotype] Variant counts: read1(snv={}, indel={}), read2(snv={}, indel={}), shared(snv={}, indel={})", 
@@ -971,6 +997,8 @@ pub fn determine_same_haplotype(
             
             // Apply penalty for tolerated sequencing errors (like Python: weight - tolerated_count * 20)
             weight -= tolerated_count as f32 * 20.0;
+            // Pick max between 0 and weight
+            weight = weight.max(0.0);
             
             debug!("[determine_same_haplotype] Penalty applied: -{} x 20.0 = -{:.1}", tolerated_count, tolerated_count as f32 * 20.0);
             
@@ -998,7 +1026,7 @@ pub fn determine_same_haplotype(
 }
 
 
-/// **RUST IMPLEMENTATION OF PYTHON'S `count_shared_snv_matches()` FUNCTION**
+/// **RUST IMPLEMENTATION OF PYTHON'S `stat_shared_snv_matches()` FUNCTION**
 /// 
 /// Extract positions where two overlapping reads share the same SNV and require that the
 /// alternate bases are exactly the same in both reads. No allele depth data is used here.
@@ -1006,10 +1034,10 @@ pub fn determine_same_haplotype(
 /// 
 /// Equivalent to Python's psv_shared_snvs() function in fp_control/pairwise_read_inspection.py lines 471-555
 /// 
-/// Returns (matching_shared_snv_count, shared_snv_count) where:
-/// - matching_shared_snv_count: number of shared SNV positions with identical alt bases
-/// - shared_snv_count: total positions where both reads have SNVs (-4)
-pub fn count_shared_snv_matches(
+/// Returns (matching_shared_snv_positions, discrepant_shared_snv_positions) where:
+/// - matching_shared_snv_positions: genomic positions where both reads have SNVs with identical alt bases
+/// - discrepant_shared_snv_positions: genomic positions where both reads have SNVs but with different alt bases
+pub fn stat_shared_snv_matches(
     interval_hap1: &[i16],
     interval_hap2: &[i16], 
     interval_start: i64,
@@ -1019,59 +1047,63 @@ pub fn count_shared_snv_matches(
     ref_pos2: &[i64],
     record1: &Record,
     record2: &Record,
-) -> Result<(usize, usize), Box<dyn std::error::Error>> {
+) -> Result<(Vec<i64>, Vec<i64>), Box<dyn std::error::Error>> {
     let qname1 = std::str::from_utf8(record1.qname())?;
     let qname2 = std::str::from_utf8(record2.qname())?;
     
-    info!("[count_shared_snv_matches] Analyzing shared SNVs between reads {} and {}", qname1, qname2);
+    debug!("[stat_shared_snv_matches] Analyzing shared SNVs between reads {} and {}", qname1, qname2);
     
     // Find indices where both vectors have SNVs (-4)
-    let mut shared_snv_positions = Vec::new();
+    let mut all_shared_snv_positions = Vec::new();
     let min_len = interval_hap1.len().min(interval_hap2.len());
     
     for i in 0..min_len {
         if interval_hap1[i] == -4 && interval_hap2[i] == -4 {
             let genomic_pos = interval_start + i as i64;
-            shared_snv_positions.push((i, genomic_pos));
+            all_shared_snv_positions.push(genomic_pos);
         }
     }
     
-    let shared_snv_count = shared_snv_positions.len();
-    info!("[count_shared_snv_matches] Found {} positions with shared SNVs", shared_snv_count);
+    debug!("[stat_shared_snv_matches] Found {} positions with shared SNVs", all_shared_snv_positions.len());
     
-    if shared_snv_count == 0 {
-        return Ok((0, 0));
+    if all_shared_snv_positions.is_empty() {
+        return Ok((Vec::new(), Vec::new()));
     }
     
-    let mut matching_shared_snv_count = 0;
+    let mut matching_shared_snv_positions = Vec::new();
+    let mut discrepant_shared_snv_positions = Vec::new();
     
-    // Process each shared SNV position and confirm identical alt bases
-    for (_hap_index, genomic_pos) in shared_snv_positions {
+    // Process each shared SNV position and check if alt bases are identical
+    for genomic_pos in &all_shared_snv_positions {
         // Extract bases at this position using reference position mapping
-        let alt_base1_opt = get_base_at_position(seq1, ref_pos1, genomic_pos);
-        let alt_base2_opt = get_base_at_position(seq2, ref_pos2, genomic_pos);
+        let alt_base1_opt = get_base_at_position(seq1, ref_pos1, *genomic_pos);
+        let alt_base2_opt = get_base_at_position(seq2, ref_pos2, *genomic_pos);
         
         let (alt_base1, alt_base2) = match (alt_base1_opt, alt_base2_opt) {
             (Some(b1), Some(b2)) => (b1, b2),
             _ => {
-                info!("[count_shared_snv_matches] Cannot extract bases at position {} - skipping", genomic_pos);
+                debug!("[stat_shared_snv_matches] Cannot extract bases at position {} - skipping", genomic_pos);
                 continue;
             }
         };
         
-        // Verify both reads have the same alt base (and not N=4)
+        // Check if both reads have the same alt base (and not N=4)
         if alt_base1 != 4 && alt_base1 == alt_base2 {
-            matching_shared_snv_count += 1;
-            info!("[count_shared_snv_matches] Both reads have same alt base {} at position {}", alt_base1, genomic_pos);
+            matching_shared_snv_positions.push(*genomic_pos);
+            debug!("[stat_shared_snv_matches] Both reads have same alt base {} at position {}", alt_base1, genomic_pos);
+        } else if alt_base1 != 4 && alt_base2 != 4 && alt_base1 != alt_base2 {
+            discrepant_shared_snv_positions.push(*genomic_pos);
+            debug!("[stat_shared_snv_matches] Alt bases differ at position {}: {} vs {}", 
+                   genomic_pos, alt_base1, alt_base2);
         } else {
-            info!("[count_shared_snv_matches] Alt bases differ or are N at position {}: {} vs {}", 
+            debug!("[stat_shared_snv_matches] One or both alt bases are N at position {}: {} vs {}", 
                    genomic_pos, alt_base1, alt_base2);
         }
     }
     
-    info!("[count_shared_snv_matches] Final result: {} exact matches out of {} shared SNVs", 
-           matching_shared_snv_count, shared_snv_count);
-    Ok((matching_shared_snv_count, shared_snv_count))
+    debug!("[stat_shared_snv_matches] Final result: {} matching positions, {} discrepant positions out of {} total shared SNV positions", 
+           matching_shared_snv_positions.len(), discrepant_shared_snv_positions.len(), all_shared_snv_positions.len());
+    Ok((matching_shared_snv_positions, discrepant_shared_snv_positions))
 }
 
 /// Helper function to extract base at a specific genomic position from a read

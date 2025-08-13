@@ -5,7 +5,6 @@ use ahash::AHashMap;
 use petgraph::Graph;
 use petgraph::Undirected;
 use ndarray::Array2;
-use half::f16; // Add f16 import
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Interval {
@@ -385,19 +384,19 @@ impl FastIntervals {
     }
 }
 
-/// Phasing graph structure using petgraph with unit nodes and f16 weights
+/// Phasing graph structure using petgraph with unit nodes and f32 weights
 /// Node data is () since we use direct correspondence: qname_idx = NodeIndex.index()
-/// Edge weight is f16 for memory efficiency
+/// Edge weight is f32 for Python compatibility
 /// This ensures direct mapping: qname_idx = NodeIndex = matrix index
-pub type PhasingGraph = Graph<(), f16, Undirected>;
+pub type PhasingGraph = Graph<(), f32, Undirected>;
 
 /// Complete phasing graph result
 pub struct PhasingGraphResult {
     /// The main graph structure with unit nodes (direct qname_idx ↔ NodeIndex correspondence)
     pub graph: PhasingGraph,
     
-    /// Weight matrix using half-precision for 50% memory reduction
-    pub weight_matrix: Option<Array2<f16>>,
+    /// Weight matrix using f32 precision for Python compatibility
+    pub weight_matrix: Option<Array2<f32>>,
     
     /// Read haplotype vectors
     pub read_hap_vectors: AHashMap<String, ReadHaplotypeVector>,
@@ -424,22 +423,22 @@ impl PhasingGraphResult {
         }
     }
     
-    /// Initialize the weight matrix with f16 precision
+    /// Initialize the weight matrix with f32 precision
     pub fn initialize_weight_matrix(&mut self, size: usize) {
         if self.weight_matrix.is_none() {
-            // Create identity matrix with f16 precision
-            let mut matrix = Array2::<f16>::zeros((size, size));
+            // Create identity matrix with f32 precision
+            let mut matrix = Array2::<f32>::zeros((size, size));
             
-            // Set diagonal to 1.0 (f16 can represent this exactly)
+            // Set diagonal to 1.0
             for i in 0..size {
-                matrix[[i, i]] = f16::ONE;
+                matrix[[i, i]] = 1.0;
             }
             
             self.weight_matrix = Some(matrix);
         }
     }
     
-    /// Set weight between two nodes with f16 precision
+    /// Set weight between two nodes with f32 precision
     pub fn set_weight(&mut self, i: usize, j: usize, weight: f32) -> Result<(), String> {
         match &mut self.weight_matrix {
             Some(ref mut matrix) => {
@@ -449,25 +448,22 @@ impl PhasingGraphResult {
                                      i, j, matrix.nrows(), matrix.ncols()));
                 }
                 
-                // Convert f32 to f16 - this is where precision reduction happens
-                let weight_f16 = f16::from_f32(weight);
-                
-                // Set symmetric values
-                matrix[[i, j]] = weight_f16;
-                matrix[[j, i]] = weight_f16;
+                // Set symmetric values directly with f32
+                matrix[[i, j]] = weight;
+                matrix[[j, i]] = weight;
                 Ok(())
             }
             None => Err("Weight matrix not initialized. Call initialize_weight_matrix() first.".to_string())
         }
     }
     
-    /// Get weight as f32 for calculations
+    /// Get weight as f32
     pub fn get_weight(&self, i: usize, j: usize) -> Option<f32> {
-        self.weight_matrix.as_ref()?.get([i, j]).map(|&w| w.to_f32())
+        self.weight_matrix.as_ref()?.get([i, j]).copied()
     }
     
     /// Get reference to weight matrix
-    pub fn weight_matrix(&self) -> Option<&Array2<f16>> {
+    pub fn weight_matrix(&self) -> Option<&Array2<f32>> {
         self.weight_matrix.as_ref()
     }
     

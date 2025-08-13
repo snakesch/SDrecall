@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use log::{info, debug, warn};
 
 use petgraph::graph::NodeIndex;
-use half::f16;
 use crate::structs::{
     ReadPairMap, AlleleDepthMap, PhasingGraphResult, HaplotypeConfig, 
     FastIntervals, OverlapInterval
@@ -84,16 +83,16 @@ Step 5: Pairwise Read Compatibility Analysis
 │ │ • Find uncovered regions (avoid double-counting)   │   │
 │ │ • Dynamic quality check during analysis            │   │
 │ │ • Call determine_same_haplotype() for each region  │   │
-│ │ • Collect compatibility results [1, -1, 0]         │   │
+│ │ • Collect shared haplotype results [1, -1, 0]     │   │
 │ │ • Accumulate pair weights                          │   │
 │ └─────────────────────────────────────────────────────┘   │
 │                                                             │
-│ Output: compatibility_results[], pair_weight               │
+│ Output: share_hap_results[], pair_weight               │
 └─────────────────────────────────────────────────────────────┘
 
 Step 6: Final Edge Weight Determination
 ┌─────────────────────────────────────┐
-│ Analyze compatibility_results:      │
+│ Analyze share_hap_results:      │
 │                                     │
 │ ┌─ Any False (-1)? ──────────┐   │
 │ │                              │   │
@@ -285,9 +284,9 @@ pub fn build_phasing_graph(
             }
             
             // ---------- Step 5b: Region-by-Region Haplotype Analysis ----------
-            // Process overlapping regions to determine haplotype compatibility
+            // Process overlapping regions to determine shared haplotype status
             // Using more descriptive variable names than Python's qname_bools
-            let mut compatibility_results: Vec<i32> = Vec::with_capacity(4);
+            let mut share_hap_results: Vec<i32> = Vec::with_capacity(4);
             let mut pair_weight: Option<f32> = None;
             
             // Track inspected overlaps to avoid redundant processing
@@ -323,33 +322,34 @@ pub fn build_phasing_graph(
                         &mut result.read_ref_pos_dict,
                     )?;
                     
-                    // Process the haplotype comparison result
+                    // Process the haplotype comparison result, if Different, break the loop
                     match haplotype_result {
                         HaplotypeResult::Same => {
-                            compatibility_results.push(1);
+                            share_hap_results.push(1);
                             if let Some(weight) = read_weight {
                                 debug!("[build_phasing_graph] Weight is {}. Found the reads {} and {} are in the same haplotype, overlap region ({}:{}-{})", 
                                       weight, qname, other_qname, chrom, overlap.start, overlap.end);
                             }
                         }
                         HaplotypeResult::Different => {
-                            compatibility_results.push(-1);
+                            share_hap_results.push(-1);
                             debug!("[build_phasing_graph] Found the reads {} and {} are in different haplotypes, overlap region ({}:{}-{})", 
                                   qname, other_qname, chrom, overlap.start, overlap.end);
+                            break;
                         }
                         HaplotypeResult::Unknown => {
-                            compatibility_results.push(0);
+                            share_hap_results.push(0);
                         }
                     }
                     
                     // Update pair weight
                     if let Some(weight) = read_weight {
                         let weight = weight.max(0.0); // Ensure non-negative
-                        let norm_weight = weight / (config.mean_read_length * 10.0);
+                        // Note: weight is already normalized by determine_same_haplotype()
                         
                         match pair_weight {
-                            None => pair_weight = Some(norm_weight),
-                            Some(ref mut pw) => *pw += norm_weight,
+                            None => pair_weight = Some(weight),
+                            Some(ref mut pw) => *pw += weight,
                         }
                     }
                 }
@@ -359,12 +359,12 @@ pub fn build_phasing_graph(
             }
             
             // ========== STEP 6: Final Edge Weight Determination ==========
-            // Determine final compatibility based on all results
+            // Determine final shared haplotype status based on all results
             // Equivalent to Python's any_false_numba(qname_bools) check
-            let _final_weight = if any_false(&compatibility_results) {
+            let _final_weight = if any_false(&share_hap_results) {
                 // Any incompatible region means overall incompatibility
-                debug!("[build_phasing_graph] Qname_bools are {:?}, Found two pairs {} and {} are in different haplotypes\n", 
-                      compatibility_results, qname, other_qname);
+                debug!("[build_phasing_graph] Share_hap_results are {:?}, Found two pairs {} and {} are in different haplotypes\n", 
+                      share_hap_results, qname, other_qname);
                 result.set_weight(qname_idx, other_qname_idx, -1.0)?;
                 None
             } else {
@@ -375,9 +375,8 @@ pub fn build_phasing_graph(
                 // Set weight in matrix using qname_idx directly
                 result.set_weight(qname_idx, other_qname_idx, weight)?;
                 
-                // Add edge to graph with f16 weight
-                let weight_f16 = f16::from_f32(weight);
-                result.graph.add_edge(node_idx, other_node_idx, weight_f16);
+                // Add edge to graph with f32 weight
+                result.graph.add_edge(node_idx, other_node_idx, weight);
                 
                 Some(weight)
             };
@@ -583,5 +582,5 @@ fn find_uncovered_regions(
 /// Equivalent to Python's any_false_numba function
 /// Returns true if any element equals -1, false otherwise
 fn any_false(arr: &[i32]) -> bool {
-    arr.iter().any(|&x| x == -1)
+    arr.iter().any(|&x| x < 0)
 }

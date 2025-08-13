@@ -203,9 +203,9 @@ fn export_graph_result_to_python(
         let target_idx = target.index();
         edges.push([source_idx as u32, target_idx as u32]);
         
-        // Convert f16 weight to f32 for Python
-        let weight_f16 = result.graph[edge];
-        weights.push(weight_f16.to_f32());
+        // Get f32 weight directly from graph
+        let weight = result.graph[edge];
+        weights.push(weight);
     }
     
     // Convert to numpy arrays
@@ -230,19 +230,16 @@ fn export_graph_result_to_python(
     let node_list = PyList::new_bound(py, node_names);
     dict.set_item("vertex_names", node_list)?;
     
-    // 3. Export weight matrix as numpy array - much simpler with ndarray!
+    // 3. Export weight matrix as numpy array - direct f32 export
     match result.weight_matrix() {
         Some(matrix) => {
-            // Convert f16 matrix to f32 for Python compatibility
-            let f32_matrix: ndarray::Array2<f32> = matrix.mapv(|x| x.to_f32());
-            let weight_matrix_array = f32_matrix.to_pyarray_bound(py);
+            // Weight matrix is already f32, export directly
+            let weight_matrix_array = matrix.to_pyarray_bound(py);
             dict.set_item("weight_matrix", weight_matrix_array)?;
         }
         None => {
-            // Create empty f32 matrix for Python
-            let empty_matrix = ndarray::Array2::<f32>::zeros((0, 0));
-            let weight_matrix_array = empty_matrix.to_pyarray_bound(py);
-            dict.set_item("weight_matrix", weight_matrix_array)?;
+            // Return Error
+            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Weight matrix is None"));
         }
     }
     
