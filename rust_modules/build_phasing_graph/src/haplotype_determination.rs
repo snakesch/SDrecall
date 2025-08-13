@@ -917,7 +917,7 @@ pub fn determine_same_haplotype(
         }
 
         if !discrepant_shared_snv_pos.is_empty() {
-            info!("[determine_same_haplotype] Found discrepant shared SNV positions: {:?}, the interval is {}:{}-{}, the two reads compared are {} and {}. Within this overlap interval, their hap vectors are {:?} and {:?}, their query seq are {:?} and {:?}", discrepant_shared_snv_pos, chrom, start, end, read1_id, read2_id, interval_hap1, interval_hap2, interval_seq1, interval_seq2);
+            debug!("[determine_same_haplotype] Found discrepant shared SNV positions: {:?}, the interval is {}:{}-{}, the two reads compared are {} and {}. Within this overlap interval, their hap vectors are {:?} and {:?}, their query seq are {:?} and {:?}", discrepant_shared_snv_pos, chrom, start, end, read1_id, read2_id, interval_hap1, interval_hap2, interval_seq1, interval_seq2);
         }
 
         // Merge discrepant_shared_snv_pos into mismatch_positions for downstream analysis
@@ -925,7 +925,7 @@ pub fn determine_same_haplotype(
         mismatch_positions.extend(discrepant_shared_snv_pos);
 
         if mismatch_positions.len() >= 3 {
-            info!("[determine_same_haplotype] Found {} mismatches, conservatively treat them as from different haplotypes. The interval is {}:{}-{}, the two reads compared are {} and {}. Within this overlap interval, their hap vectors are {:?} and {:?}, their query seq are {:?} and {:?}", mismatch_positions.len(), chrom, start, end, read1_id, read2_id, interval_hap1, interval_hap2, interval_seq1, interval_seq2);
+            debug!("[determine_same_haplotype] Found {} mismatches, conservatively treat them as from different haplotypes. The interval is {}:{}-{}, the two reads compared are {} and {}. Within this overlap interval, their hap vectors are {:?} and {:?}, their query seq are {:?} and {:?}", mismatch_positions.len(), chrom, start, end, read1_id, read2_id, interval_hap1, interval_hap2, interval_seq1, interval_seq2);
             return Ok((HaplotypeResult::Different, None));
         }
         

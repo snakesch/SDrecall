@@ -76,7 +76,8 @@ fn is_read_noisy(
             let len = qual_vec.len();
             *order_stat::kth(&mut qual_vec, len / 2)
         } else {
-            20u8 // Default quality if empty
+            debug!("[is_read_noisy] median_qual_check - {} flagged noisy: empty qual vector", qname);
+            return true;
         };
         
         if median_qual <= basequal_median_filter {
