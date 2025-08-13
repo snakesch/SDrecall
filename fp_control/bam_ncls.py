@@ -270,9 +270,11 @@ def migrate_bam_to_ncls(bam_file,
 
         n = 0
         noisy_qnames = set()
+        total_qnames = set()
 
         for read in bam:
             qname = read.query_name
+            total_qnames.add(qname)
             if qname in noisy_qnames:
                 continue
 
@@ -309,5 +311,8 @@ def migrate_bam_to_ncls(bam_file,
             starts = np.array([int(qname_intervals[qname_idx][0]) for qname_idx in qname_indices])
             ends = np.array([int(qname_intervals[qname_idx][1]) for qname_idx in qname_indices])
             ncls_dict[chrom] = NCLS(starts, ends, qname_indices)
+
+    logger.info(f"Containing {len(qname_dict)} qnames in NCLS, left out {len(noisy_qnames)} noisy qnames, totally went through {len(total_qnames)} qnames")
+    logger.info(f"Containing {len(qname_idx_dict)} key-value pairs in qname_idx_dict, the largest qname_idx is {max(qname_idx_dict.values())}")
 
     return ncls_dict, read_dict, qname_dict, qname_idx_dict, noisy_qnames

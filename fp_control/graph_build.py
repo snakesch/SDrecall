@@ -607,11 +607,6 @@ def build_phasing_graph(bam_file,
                 inspected_overlaps.add(overlap_start, overlap_end)
                 n += 1
 
-            if other_qname in total_lowqual_qnames or qname in total_lowqual_qnames:
-                weight_matrix[int(qv), int(oqv)] = -1
-                weight_matrix[int(oqv), int(qv)] = -1
-                continue
-
             qname_bools = qname_bools[:n]
             pair_weight = 0 if pair_weight is None else pair_weight
             pair_weight = pair_weight if pair_weight > 0 else 1e-4
