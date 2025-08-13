@@ -263,7 +263,7 @@ def build_phasing_graph_rust(
         root_logger = logging.getLogger()
         if not root_logger.hasHandlers():
             logging.basicConfig(
-                level=logging.DEBUG, 
+                level=logger.level, 
                 format='[%(asctime)s] [%(levelname)s] [%(name)s] [%(filename)s:%(lineno)d] %(message)s',
                 datefmt='%Y-%m-%d %H:%M:%S'
             )
