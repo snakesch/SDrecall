@@ -3,7 +3,7 @@
 /// This module contains the core algorithm for determining whether two read pairs
 /// come from the same haplotype by analyzing their sequences and CIGAR operations.
 
-use log::{debug, warn, error, info};
+use log::{debug, warn, error};
 use ahash::AHashMap;
 use rust_htslib::bam::Record;
 use rust_htslib::bam::ext::BamRecordExtensions;
