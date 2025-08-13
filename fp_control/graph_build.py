@@ -342,18 +342,17 @@ def build_phasing_graph_rust(
         # Handle empty edges array case (when no edges are found)
         if edges.size > 0 and len(edges.shape) == 2 and edges.shape[0] > 0 and edges.shape[1] >= 2:
             for u_idx, v_idx, edge_weight in zip(edges[:, 0], edges[:, 1], weights):
-                if edge_weight > 0.1:
-                    # Convert numpy int32 to Python int to avoid Numba typing issues
-                    u_idx = int(u_idx)
-                    v_idx = int(v_idx)
-                    # Add all edges - cutoff filtering happens later in phasing step
-                    # Note: Rust implementation currently has simplified shared SNV detection
-                    # which results in lower edge weights than Python version
-                    u = g.vertex(u_idx)
-                    v = g.vertex(v_idx)
-                    e = g.add_edge(u, v)
-                    weight_prop[e] = float(edge_weight)
-                    # Note: weight_matrix already contains all weights from Rust
+                # Convert numpy int32 to Python int to avoid Numba typing issues
+                u_idx = int(u_idx)
+                v_idx = int(v_idx)
+                # Add all edges - cutoff filtering happens later in phasing step
+                # Note: Rust implementation currently has simplified shared SNV detection
+                # which results in lower edge weights than Python version
+                u = g.vertex(u_idx)
+                v = g.vertex(v_idx)
+                e = g.add_edge(u, v)
+                weight_prop[e] = float(edge_weight)
+                # Note: weight_matrix already contains all weights from Rust
         else:
             logger.info(f"No edges found in Rust result. Edges shape: {edges.shape}, size: {edges.size}")
         
