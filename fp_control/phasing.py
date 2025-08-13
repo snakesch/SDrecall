@@ -115,7 +115,7 @@ def find_cliques_in_components(graph, weight_matrix, ew_cutoff = 0.201, logger =
                     # logger.info(f"Adding the {len(clique)} vertices in the clique to the small row indices")
                     continue
                 else:
-                    # logger.info(f"The clique is big enough to be directly yielded")
+                    logger.info(f"The clique contains {len(clique)} read pairs, which is big enough to be directly yielded")
                     yield "main_round", clique
 
     logger.info(f"Remaining {len(small_row_indices)} vertices that are not included in the cliques. Here we find cliques again among them:\n{small_row_indices}")
