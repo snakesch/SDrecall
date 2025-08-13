@@ -276,7 +276,13 @@ def build_phasing_graph_rust(
         # Ensure the root logger level allows the messages through
         if root_logger.level > logger.level:
             root_logger.setLevel(logger.level)
-            
+        
+        # Avoid duplicate logs from this module logger propagating to root
+        try:
+            logger.propagate = False
+        except Exception:
+            pass
+        
         logger.info(f"Python logging configured: level={python_log_level}, root_level={logging.getLevelName(root_logger.level)}")
         
         # Call Rust function directly - it handles all BAM processing and allele depth calculation internally
@@ -322,23 +328,31 @@ def build_phasing_graph_rust(
             qname_prop[v] = qname
             qname_to_node[qname] = int(v)
         
+        # Get weight matrix from Rust (contains all weights including -1 for incompatible pairs)
+        assert 'weight_matrix' in rust_result and rust_result['weight_matrix'] is not None, "No weight matrix from Rust"
+        weight_matrix = rust_result['weight_matrix'].astype(np.float32)
+        logger.info(f"Using Rust weight matrix with shape {weight_matrix.shape}")
+        # Count negative weights (incompatible pairs)
+        negative_weights = np.sum(weight_matrix < 0) // 2  # Divide by 2 since matrix is symmetric
+        logger.info(f"Weight matrix contains {negative_weights} incompatible pairs (weight=-1)")
+        
         # Add edges
         weight_prop = g.new_edge_property("float")
-        total_vertices = len(vertex_names)
-        weight_matrix = np.eye(total_vertices, dtype=np.float32)
         
         # Handle empty edges array case (when no edges are found)
         if edges.size > 0 and len(edges.shape) == 2 and edges.shape[0] > 0 and edges.shape[1] >= 2:
             for u_idx, v_idx, edge_weight in zip(edges[:, 0], edges[:, 1], weights):
+                # Convert numpy int32 to Python int to avoid Numba typing issues
+                u_idx = int(u_idx)
+                v_idx = int(v_idx)
                 # Add all edges - cutoff filtering happens later in phasing step
                 # Note: Rust implementation currently has simplified shared SNV detection
                 # which results in lower edge weights than Python version
                 u = g.vertex(u_idx)
                 v = g.vertex(v_idx)
                 e = g.add_edge(u, v)
-                weight_prop[e] = edge_weight
-                weight_matrix[u_idx, v_idx] = edge_weight
-                weight_matrix[v_idx, u_idx] = edge_weight
+                weight_prop[e] = float(edge_weight)
+                # Note: weight_matrix already contains all weights from Rust
         else:
             logger.info(f"No edges found in Rust result. Edges shape: {edges.shape}, size: {edges.size}")
         

@@ -5,7 +5,7 @@ use numpy::{PyArray1, PyArray2, ToPyArray};
 use log::{LevelFilter, info, debug, Record, Metadata};
 use std::io::{self, Write};
 
-use crate::structs::{HaplotypeConfig, PhasingGraphResult};
+use crate::structs::{HaplotypeConfig, PhasingGraphResult, ReadPairMap};
 use crate::graph_builder::build_phasing_graph;
 
 /// Simple custom logger that provides detailed logging without SIMD dependencies
@@ -176,7 +176,7 @@ pub fn build_phasing_graph_rust(
     
     // Convert the result back to Python format
     info!("[build_phasing_graph_rust] Step 5: Converting result to Python format");
-    export_graph_result_to_python(py, result)
+    export_graph_result_to_python(py, result, &read_pair_map)
 }
 
 // Note: BAM reading and allele depth mapping are now handled directly in Rust
@@ -187,6 +187,7 @@ pub fn build_phasing_graph_rust(
 fn export_graph_result_to_python(
     py: Python<'_>,
     result: PhasingGraphResult,
+    read_pair_map: &ReadPairMap,
 ) -> PyResult<PyObject> {
     let dict = PyDict::new_bound(py);
     
@@ -216,13 +217,16 @@ fn export_graph_result_to_python(
     dict.set_item("weights", weight_array)?;
     
     // 2. Export node names in the correct order (index i contains qname for node i)
-    // With direct correspondence, we need to get qnames from read_pair_map
+    // With direct correspondence: qname_idx = NodeIndex.index()
     let mut node_names = vec![String::new(); result.graph.node_count()];
-    // TODO: This would need the read_pair_map passed in to get qnames by index
-    // For now, we'll create placeholder names based on index
-    for i in 0..result.graph.node_count() {
-        node_names[i] = format!("read_pair_{}", i);
+    
+    // Get actual qnames from read_pair_map using direct correspondence
+    for (qname_idx, read_pair) in &read_pair_map.readpair_dict {
+        if *qname_idx < node_names.len() {
+            node_names[*qname_idx] = read_pair.qname.clone();
+        }
     }
+    
     let node_list = PyList::new_bound(py, node_names);
     dict.set_item("vertex_names", node_list)?;
     

@@ -81,7 +81,7 @@ def find_cliques_in_components(graph, weight_matrix, ew_cutoff = 0.201, logger =
     # Find row indices where the entire row is below or equal to 0.1
     small_row_mask = np.all(weight_matrix <= 0.1, axis=1)
     big_row_mask = np.logical_not(small_row_mask)
-    small_row_indices = set(np.where(small_row_mask)[0])
+    small_row_indices = set(np.where(small_row_mask)[0].astype(np.int32)) # Convert this set to set of np.int32
 
     # Ensure the weight matrix is contiguous in memory, which consumes less memory and is faster to process
     if not weight_matrix.flags['C_CONTIGUOUS']:

@@ -3,7 +3,7 @@
 /// This module contains the core algorithm for determining whether two read pairs
 /// come from the same haplotype by analyzing their sequences and CIGAR operations.
 
-use log::{debug, warn, error};
+use log::{debug, warn, error, info};
 use ahash::AHashMap;
 use rust_htslib::bam::Record;
 use rust_htslib::bam::ext::BamRecordExtensions;
@@ -693,8 +693,8 @@ fn find_mismatch_positions_from_hap_vectors(
         let hap1 = hap_vec1[i];
         let hap2 = hap_vec2[i];
         
-        // If haplotype values differ, it's a mismatch
-        if hap1 != hap2 {
+        // If haplotype values differ, it's a mismatch or either one is a -4 (SNV)
+        if hap1 != hap2 || hap1 == -4 || hap2 == -4 {
             let genomic_pos = interval_start + i as i64;
             mismatches.push(genomic_pos);
         }
@@ -894,7 +894,7 @@ pub fn determine_same_haplotype(
         
         // If no mismatches found (shouldn't happen since sequences differ), treat as unknown
         if mismatch_positions.is_empty() {
-            warn!("[determine_same_haplotype] No mismatches found despite sequence differences -> UNKNOWN");
+            warn!("[determine_same_haplotype] No mismatches found despite sequence differences -> UNKNOWN, interval_seq1={:?}, interval_seq2={:?}, interval_hap1={:?}, interval_hap2={:?}", interval_seq1, interval_seq2, interval_hap1, interval_hap2);
             return Ok((HaplotypeResult::Unknown, None));
         }
         
@@ -998,17 +998,18 @@ pub fn determine_same_haplotype(
 }
 
 
-/// **RUST IMPLEMENTATION OF PYTHON'S `psv_shared_snvs()` FUNCTION**
+/// **RUST IMPLEMENTATION OF PYTHON'S `count_shared_snv_matches()` FUNCTION**
 /// 
-/// Extract positions where two overlapping reads share the same SNV and check if supported by intrinsic AD data.
+/// Extract positions where two overlapping reads share the same SNV and require that the
+/// alternate bases are exactly the same in both reads. No allele depth data is used here.
 /// This is a critical function for proper edge weight calculation that was missing in the simplified Rust version.
 /// 
 /// Equivalent to Python's psv_shared_snvs() function in fp_control/pairwise_read_inspection.py lines 471-555
 /// 
-/// Returns (psv_snv_count, shared_snv_count) where:
-/// - shared_snv_count: Total positions where both reads have SNVs (-4 in haplotype vectors)
-/// - psv_snv_count: Subset of shared SNVs that are supported by intrinsic allele depth data (Paralogous Sequence Variants)
-pub fn psv_shared_snvs(
+/// Returns (matching_shared_snv_count, shared_snv_count) where:
+/// - matching_shared_snv_count: number of shared SNV positions with identical alt bases
+/// - shared_snv_count: total positions where both reads have SNVs (-4)
+pub fn count_shared_snv_matches(
     interval_hap1: &[i16],
     interval_hap2: &[i16], 
     interval_start: i64,
@@ -1018,13 +1019,11 @@ pub fn psv_shared_snvs(
     ref_pos2: &[i64],
     record1: &Record,
     record2: &Record,
-    intrinsic_allele_depth_map: &AlleleDepthMap,
-    chrom: &str,
 ) -> Result<(usize, usize), Box<dyn std::error::Error>> {
     let qname1 = std::str::from_utf8(record1.qname())?;
     let qname2 = std::str::from_utf8(record2.qname())?;
     
-    debug!("[psv_shared_snvs] Analyzing shared SNVs between reads {} and {}", qname1, qname2);
+    info!("[count_shared_snv_matches] Analyzing shared SNVs between reads {} and {}", qname1, qname2);
     
     // Find indices where both vectors have SNVs (-4)
     let mut shared_snv_positions = Vec::new();
@@ -1038,53 +1037,41 @@ pub fn psv_shared_snvs(
     }
     
     let shared_snv_count = shared_snv_positions.len();
-    debug!("[psv_shared_snvs] Found {} positions with shared SNVs", shared_snv_count);
+    info!("[count_shared_snv_matches] Found {} positions with shared SNVs", shared_snv_count);
     
     if shared_snv_count == 0 {
         return Ok((0, 0));
     }
     
-    let mut psv_snv_count = 0;
+    let mut matching_shared_snv_count = 0;
     
-    // Process each shared SNV position
-    for (hap_index, genomic_pos) in shared_snv_positions {
+    // Process each shared SNV position and confirm identical alt bases
+    for (_hap_index, genomic_pos) in shared_snv_positions {
         // Extract bases at this position using reference position mapping
-        let alt_base1_opt = get_base_at_position(seq1, ref_pos1, record1.pos(), genomic_pos);
-        let alt_base2_opt = get_base_at_position(seq2, ref_pos2, record2.pos(), genomic_pos);
+        let alt_base1_opt = get_base_at_position(seq1, ref_pos1, genomic_pos);
+        let alt_base2_opt = get_base_at_position(seq2, ref_pos2, genomic_pos);
         
         let (alt_base1, alt_base2) = match (alt_base1_opt, alt_base2_opt) {
             (Some(b1), Some(b2)) => (b1, b2),
             _ => {
-                debug!("[psv_shared_snvs] Cannot extract bases at position {} - skipping", genomic_pos);
+                info!("[count_shared_snv_matches] Cannot extract bases at position {} - skipping", genomic_pos);
                 continue;
             }
         };
         
-        // Verify both reads have the same alt base
-        if alt_base1 != alt_base2 || alt_base1 == 4 {  // Skip if not matching or is N
-            debug!("[psv_shared_snvs] Alt bases don't match at position {}: {} vs {} - skipping", 
-                   genomic_pos, alt_base1, alt_base2);
-            continue;
-        }
-        
-        debug!("[psv_shared_snvs] Both reads have same alt base {} at position {}", alt_base1, genomic_pos);
-        
-        // Check if this alt allele is supported in the intrinsic AD dict
-        if let Some(pos_data) = intrinsic_allele_depth_map.get(chrom, genomic_pos as u32) {
-            let ad = AlleleDepthMap::get_allele_depth(pos_data, alt_base1 as usize);
-            if ad > 0 {
-                psv_snv_count += 1;
-                debug!("[psv_shared_snvs] Position {} is PSV-supported (AD={})", genomic_pos, ad);
-            } else {
-                debug!("[psv_shared_snvs] Position {} has AD=0 for alt base {}", genomic_pos, alt_base1);
-            }
+        // Verify both reads have the same alt base (and not N=4)
+        if alt_base1 != 4 && alt_base1 == alt_base2 {
+            matching_shared_snv_count += 1;
+            info!("[count_shared_snv_matches] Both reads have same alt base {} at position {}", alt_base1, genomic_pos);
         } else {
-            debug!("[psv_shared_snvs] Position {} not in intrinsic AD dict", genomic_pos);
+            info!("[count_shared_snv_matches] Alt bases differ or are N at position {}: {} vs {}", 
+                   genomic_pos, alt_base1, alt_base2);
         }
     }
     
-    debug!("[psv_shared_snvs] Final result: {} PSVs out of {} shared SNVs", psv_snv_count, shared_snv_count);
-    Ok((psv_snv_count, shared_snv_count))
+    info!("[count_shared_snv_matches] Final result: {} exact matches out of {} shared SNVs", 
+           matching_shared_snv_count, shared_snv_count);
+    Ok((matching_shared_snv_count, shared_snv_count))
 }
 
 /// Helper function to extract base at a specific genomic position from a read
@@ -1093,8 +1080,7 @@ pub fn psv_shared_snvs(
 /// Returns None if the position is not covered by this read
 fn get_base_at_position(
     query_seq: &[u8],
-    ref_positions: &[i64], 
-    read_start: i64,
+    ref_positions: &[i64],
     genomic_pos: i64,
 ) -> Option<u8> {
     // Find query index for this genomic position
