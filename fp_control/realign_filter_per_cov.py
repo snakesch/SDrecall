@@ -192,6 +192,24 @@ def realign_filter_per_cov(bam,
 
     chunk_id = os.path.basename(bam).split(".")[-2]
 
+    # Use original Python implementation with NCLS preprocessing
+    bam_ncls = migrate_bam_to_ncls(bam,
+                                   mapq_filter = recall_mq_cutoff,
+                                   basequal_median_filter = basequal_median_cutoff,
+                                   logger=logger)
+
+    logger.info(f"Successfully migrated the BAM file {bam} to NCLS format, this part is necessary for both Python and Rust implementation\n\n")
+
+    # Now migrate the intrinsic BAM file to NCLS format
+    intrin_bam_ncls = migrate_bam_to_ncls(intrinsic_bam,
+                                          mapq_filter = 0,
+                                          basequal_median_filter = 0,
+                                          paired = False,
+                                          filter_noisy = False,
+                                          logger=logger)
+    # Since intrinsic BAM reads are reference sequences, therefore there are no low quality reads
+    intrin_bam_ncls = intrin_bam_ncls[:-1]
+
     # Given the top 1% mismatch count per read (one structrual variant count as 1 mismatch)
     tmp_bam = prepare_tmp_file(suffix=".bam", tmp_dir = tmp_dir).name
 
@@ -225,25 +243,10 @@ def realign_filter_per_cov(bam,
         
     else:
         logger.info("Using Python implementation - performing BAM preprocessing")
-        # Use original Python implementation with NCLS preprocessing
-        bam_ncls = migrate_bam_to_ncls(bam,
-                                       mapq_filter = recall_mq_cutoff,
-                                       basequal_median_filter = basequal_median_cutoff,
-                                       logger=logger)
 
         # parse the results from the tuple returned by migrate_bam_to_ncls
         ncls_dict, read_dict, qname_dict, qname_idx_dict, total_lowqual_qnames = bam_ncls
-        logger.info(f"Successfully migrated the BAM file {bam} to NCLS format\n\n")
-
-        # Now migrate the intrinsic BAM file to NCLS format
-        intrin_bam_ncls = migrate_bam_to_ncls(intrinsic_bam,
-                                              mapq_filter = 0,
-                                              basequal_median_filter = 0,
-                                              paired = False,
-                                              filter_noisy = False,
-                                              logger=logger)
-        # Since intrinsic BAM reads are reference sequences, therefore there are no low quality reads
-        intrin_bam_ncls = intrin_bam_ncls[:-1]
+        
         logger.info(f"Successfully migrated the intrinsic BAM file {intrinsic_bam} to NCLS format\n")
         logger.info(f"Intrinsic BAM contains {len(intrin_bam_ncls[1])} reads in total.\n\n")
         
