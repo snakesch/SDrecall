@@ -191,6 +191,24 @@ def realign_filter_per_cov(bam,
 
     chunk_id = os.path.basename(bam).split(".")[-2]
 
+    # Use original Python implementation with NCLS preprocessing
+    bam_ncls = migrate_bam_to_ncls(bam,
+                                   mapq_filter = recall_mq_cutoff,
+                                   basequal_median_filter = basequal_median_cutoff,
+                                   logger=logger)
+
+    logger.info(f"Successfully migrated the BAM file {bam} to NCLS format, this part is necessary for both Python and Rust implementation\n\n")
+
+    # Now migrate the intrinsic BAM file to NCLS format
+    intrin_bam_ncls = migrate_bam_to_ncls(intrinsic_bam,
+                                          mapq_filter = 0,
+                                          basequal_median_filter = 0,
+                                          paired = False,
+                                          filter_noisy = False,
+                                          logger=logger)
+    # Since intrinsic BAM reads are reference sequences, therefore there are no low quality reads
+    intrin_bam_ncls = intrin_bam_ncls[:-1]
+
     # Given the top 1% mismatch count per read (one structrual variant count as 1 mismatch)
     tmp_bam = prepare_tmp_file(suffix=".bam", tmp_dir = tmp_dir).name
 
