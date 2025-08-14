@@ -495,7 +495,7 @@ function bcftools_call_per_RG {
 
     export OPENBLAS_NUM_THREADS=${cpu_threads}
     log "Running bcftools mpileup --indels-2.0 --threads ${cpu_threads} -A -a FORMAT/AD,FORMAT/DP -q 10 -Q 15 -f ${masked_genome} ${masked_bam} | bcftools call --threads ${cpu_threads} -mv -P "4e-2" -f GQ -Ou | bcftools norm --threads ${cpu_threads} -m -both -f ${masked_genome} --multi-overlaps 0 -a -Ou - "
-    bcftools mpileup --indels-2.0 --threads ${cpu_threads} -A-a FORMAT/AD,FORMAT/DP -q 10 -Q 15 -f ${masked_genome} ${masked_bam} | \
+    bcftools mpileup --indels-2.0 --threads ${cpu_threads} -A -a FORMAT/AD,FORMAT/DP -q 10 -Q 15 -f ${masked_genome} ${masked_bam} | \
     bcftools call --threads ${cpu_threads} -mv -P "4e-2" -f GQ -Ou | \
     bcftools norm --threads ${cpu_threads} -m -both -f ${masked_genome} --multi-overlaps 0 -a -Ou - | \
     bcftools norm --threads ${cpu_threads} -d exact - | \

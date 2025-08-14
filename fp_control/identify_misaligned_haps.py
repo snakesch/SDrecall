@@ -498,7 +498,7 @@ def identify_misalignment_per_region(region,
         overlapping_con_seq = consensus_sequence[overlapping_span[0] - span[0]:overlapping_span[1] - span[0] + 1]
         final_clusters[haplotype_idx] = (overlapping_con_seq, reads, overlapping_span, qnames)
 
-    logger.info(f"The Final haplotype dict looks like this \n{'\n'.join([f'{haplotype_idx}: encoded_consensus_sequence: {con_seq.tolist()}, reads: {reads}, span: {span}, qnames: {qnames}' for haplotype_idx, (con_seq, reads, span, qnames) in final_clusters.items()])}")
+    logger.debug(f"The Final haplotype dict looks like this \n{'\n'.join([f'{haplotype_idx}: encoded_consensus_sequence: {con_seq.tolist()}, reads: {reads}, span: {span}, qnames: {qnames}' for haplotype_idx, (con_seq, reads, span, qnames) in final_clusters.items()])}")
     if len(final_clusters) <= 2:
         logger.warning(f"Only {len(final_clusters)} haplotype clusters are found for region {region_str}. Do not need to choose 2 haplotypes, Skip this region.\n")
         return None, total_hapvectors, total_errvectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx, read_ref_pos_dict
