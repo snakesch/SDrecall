@@ -45,47 +45,56 @@ function display_vcf {
 
 
 function display_table {
-    if [[ -z $2 ]]; then local rows=10; else local rows=${2}; fi
-    if [[ -z $3 ]]; then local delimiter="\t"; else local delimiter=${3}; fi
+	# Allow reading from stdin: use '-' as filename or detect piped stdin with no filename
+	if [[ "$1" == "-" ]] || { [[ -z "$1" ]] && [ ! -t 0 ]; }; then
+		local tmp_tag=$(randomID)
+		local stdin_tmp="/tmp/${tmp_tag}.tsv"
+		cat - > "${stdin_tmp}"
+		display_table "${stdin_tmp}" "$2" "$3"
+		silent_remove_tmps "${stdin_tmp}"
+		return
+	fi
+	if [[ -z $2 ]]; then local rows=10; else local rows=${2}; fi
+	if [[ -z $3 ]]; then local delimiter="\t"; else local delimiter=${3}; fi
 
-    if [[ ${delimiter} == "\t" ]]; then
-        local del_arg=""
-    else
-        local del_arg="-d ${delimiter}"
-    fi
+	if [[ ${delimiter} == "\t" ]]; then
+		local del_arg=""
+	else
+		local del_arg="-d ${delimiter}"
+	fi
 
-    if [[ ${1} =~ \.vcf$ ]] || \
-       [[ ${1} =~ \.vcf\.gz$ ]] || \
-       [[ ${1} =~ \.bcf$ ]]; then
-        log "Input an VCF file ${1}. Using bcftools to extract the records and view the content of first ${rows} lines."
-        display_vcf ${1} ${rows}
-        return;
-    fi
+	if [[ ${1} =~ \.vcf$ ]] || \
+	   [[ ${1} =~ \.vcf\.gz$ ]] || \
+	   [[ ${1} =~ \.bcf$ ]]; then
+		log "Input an VCF file ${1}. Using bcftools to extract the records and view the content of first ${rows} lines."
+		display_vcf ${1} ${rows}
+		return;
+	fi
 
-    ## Another dependency? (Needs to install tsv-utils with conda install bioconda::tsv-utils)
-    local row_num=$(tail -n +2 ${1} | wc -l)
-    local col_num=$(head -1 ${1} | awk '{print NF;}')
+	## Another dependency? (Needs to install tsv-utils with conda install bioconda::tsv-utils)
+	local row_num=$(tail -n +2 ${1} | wc -l)
+	local col_num=$(head -1 ${1} | awk '{print NF;}')
 
-    if [[ ${1} =~ \.gz$ ]]; then
-        local tmp_tag=$(randomID)
-        zcat ${1} > ${1/.gz/}.${tmp_tag} && \
-        local input=${1/.gz/}.${tmp_tag}
-    else
-        local input=${1}
-    fi
+	if [[ ${1} =~ \.gz$ ]]; then
+		local tmp_tag=$(randomID)
+		zcat ${1} > ${1/.gz/}.${tmp_tag} && \
+		local input=${1/.gz/}.${tmp_tag}
+	else
+		local input=${1}
+	fi
 
 
-    log  "${1} has ${row_num} rows and ${col_num} columns. It looks like:"
-    if [[ ${rows} -le 0 ]]; then
-        tsv-pretty -u ${del_arg} -m 5000 -l 200 -a ${input} >&2 2> /dev/null
-    else
-        tsv-pretty -u ${del_arg} -m 5000 -l 200 -a ${input} | \
-        head -n ${rows} - >&2 2> /dev/null || >&2 echo ""
-    fi
+	log  "${1} has ${row_num} rows and ${col_num} columns. It looks like:"
+	if [[ ${rows} -le 0 ]]; then
+		tsv-pretty -u ${del_arg} -m 5000 -l 200 -a ${input} >&2 2> /dev/null
+	else
+		tsv-pretty -u ${del_arg} -m 5000 -l 200 -a ${input} | \
+		head -n ${rows} - >&2 2> /dev/null || >&2 echo ""
+	fi
 
-    if [[ ${input} != "${1}" ]]; then
-        silent_remove_tmps ${input}
-    fi
+	if [[ ${input} != "${1}" ]]; then
+		silent_remove_tmps ${input}
+	fi
 }
 
 
@@ -442,7 +451,7 @@ function independent_minimap2_masked () {
 
     local mid_align=${output_align/.bam/.sam}
 
-    if [[ ${masked_genome/.fasta/.mmi} -ot ${masked_genome} ]]; then
+    if [[ ${masked_genome/.fasta/.mmi} -ot ${masked_genome} ]] || [[ ! -f ${masked_genome/.fasta/.mmi} ]]; then
         minimap2 -x ${mode} -d ${masked_genome/.fasta/.mmi} ${masked_genome}
     fi
 
