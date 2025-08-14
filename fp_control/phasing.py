@@ -129,7 +129,7 @@ def find_cliques_in_components(graph, weight_matrix, ew_cutoff = 0.201, logger =
         logger.info(f"Start to find the largest clique in the small weight matrix, which contains {numba_sum(small_row_mask)} rows and columns. Contiguous? {small_weight_matrix.flags['C_CONTIGUOUS']}")
         cliques_iter = gce_algorithm(selected_indices, small_weight_matrix, cutoff = ew_cutoff/2, logger = logger)
         for clique in cliques_iter:
-            logger.info(f"Second round (edge weight cutoff = {ew_cutoff/2}): Receiving a clique containing {[graph.vertex_properties['qname'][qid] for qid in clique]} qnames in the small weight matrix")
+            logger.info(f"Second round (edge weight cutoff = {ew_cutoff/2}): Receiving a clique containing {len(clique)} qnames in the small weight matrix")
             yield "second_round", clique
 
 
@@ -213,7 +213,7 @@ def phasing_realigned_reads(phased_graph, weight_matrix, edge_weight_cutoff, log
     for vid, hid in qname_hap_info.items():
         qname = phased_graph.vp.qname[vid]
         hap_qname_info[hid].add(qname)
-    logger.info(f"The final haplotype clusters are {hap_qname_info}")
+    logger.info(f"The final haplotype clusters are \n{'\n'.join([f'{hid}: {qnames}' for hid, qnames in hap_qname_info.items()])}")
 
     # Return the maps for both directions
     return qname_hap_info, hap_qname_info
