@@ -358,7 +358,7 @@ def migrate_bam_to_ncls(bam_file,
 
 	# Collate input BAM by qname if samtools is available
 	logger.info(f"Starting BAM processing: file={bam_file}, mapq_filter={mapq_filter}, basequal_median_filter={basequal_median_filter}, filter_noisy={filter_noisy}, paired={paired}")
-	collated_path = _collate_bam_file(bam_file, threads=4, logger=logger)
+	collated_path = _collate_bam_file(bam_file, threads=4, logger=logger) if paired else None
 	use_bam = collated_path or bam_file
 
 	with pysam.AlignmentFile(use_bam, "rb") as bam:
