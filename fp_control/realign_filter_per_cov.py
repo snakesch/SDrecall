@@ -192,6 +192,8 @@ def realign_filter_per_cov(bam,
 
     chunk_id = os.path.basename(bam).split(".")[-2]
 
+    logger.info(f"First need to migrate the BAM {bam} alignment records to NCLS format. This ncls part is not used in Rust graph-building, but will finally be required for downstream phasing")
+
     # Use original Python implementation with NCLS preprocessing
     bam_ncls = migrate_bam_to_ncls(bam,
                                    mapq_filter = recall_mq_cutoff,
@@ -207,6 +209,8 @@ def realign_filter_per_cov(bam,
                                           paired = False,
                                           filter_noisy = False,
                                           logger=logger)
+
+    logger.info(f"Successfully migrated the intrinsic BAM file {intrinsic_bam} to NCLS format\n")
     # Since intrinsic BAM reads are reference sequences, therefore there are no low quality reads
     intrin_bam_ncls = intrin_bam_ncls[:-1]
 
@@ -456,6 +460,7 @@ if __name__ == "__main__":
                         help="Logging level")
     
     args = parser.parse_args()
+    logger.info(f"Directly run realign_filter_per_cov with args: {args}")
  
     # Configure threading safely:
     # - Avoid changing NUMBA_NUM_THREADS via environment after Numba may have initialized.
@@ -482,10 +487,12 @@ if __name__ == "__main__":
  
     # Configure logging level if requested
     if args.log_level:
-        import logging
         numeric_level = getattr(logging, args.log_level.upper(), None)
         if isinstance(numeric_level, int):
             logger.setLevel(numeric_level)
+    else:
+        logger.setLevel(logging.INFO)
+    logger.info(f"Direct run realign_filter_per_cov: Set logging level to {args.log_level}")
  
     # Run the main function
     phased_graph, output_bam, output_vcf = realign_filter_per_cov(

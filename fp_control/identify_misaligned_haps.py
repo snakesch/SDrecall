@@ -683,14 +683,14 @@ def inspect_by_haplotypes(input_bam,
     scatter_hid_dict = defaultdict(bool) # Initialize a dictionary to store if the haplotype is scattered
     logger.info("All the haplotype IDs are :\n{}\n".format(list(hap_qname_info.keys())))
     varcounts_among_refseqs = defaultdict(dict)
-    total_qnames = {}
+    total_qnames = set()
     # hid_cov_beds = {}
 
     # Iterate over all the haplotypes
     for hid, qnames in hap_qname_info.items():
         # If only one read pair is in the iterating haplotype, it is a scattered haplotype, it should not be considered since the poor coverage
         qnames = [ qn for qn in qnames if qn not in total_lowqual_qnames ]
-        total_qnames.update(qnames)
+        total_qnames.update(set(qnames))
         if len(qnames) < 3:
             scatter_hid_dict[hid] = True
             continue
