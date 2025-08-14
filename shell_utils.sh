@@ -407,7 +407,8 @@ function modify_masked_genome_coords () {
                                    $0 ~ /^@/ {print;} \
                                    $0 !~ /^@/ {printf "%s:%s", $1, rg_tag; \
                                                for (i=2;i<NF;i++) printf "\t%s", $i;
-                                               printf "\t%s\n", $NF;}' - | uniq -
+                                               printf "\t%s\n", $NF;}' - | uniq - | \
+    mawk -F '\t' '$1 !~ /^@/ {print;}' -
 }
 
 
@@ -452,7 +453,14 @@ function independent_minimap2_masked () {
     local mid_align=${output_align/.bam/.sam}
 
     if [[ ${masked_genome/.fasta/.mmi} -ot ${masked_genome} ]] || [[ ! -f ${masked_genome/.fasta/.mmi} ]]; then
+        log "Minimap2 index file ${masked_genome/.fasta/.mmi} not existed or outdated. Generate it."
         minimap2 -x ${mode} -d ${masked_genome/.fasta/.mmi} ${masked_genome}
+    fi
+
+    if [[ ! -f ${ref_genome}.fai ]]; then
+        log "Reference genome index file ${ref_genome}.fai not existed. Generate it."
+        samtools faidx ${ref_genome} && \
+        ls -lh ${ref_genome}.fai
     fi
 
     log "Running minimap2 --eqx --MD -F 1000 -ax ${mode} --end-bonus 10 --no-end-flt -t ${threads} \
@@ -460,16 +468,16 @@ function independent_minimap2_masked () {
     ${masked_genome/.fasta/.mmi} ${forward_reads} ${reverse_reads}" && \
     minimap2 -ax ${mode} --eqx --MD -F 1000 --end-bonus 10 --no-end-flt -t ${threads} ${kwargs} -R "@RG\tID:${samp_ID}\tLB:SureSelectXT\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}" \
     ${masked_genome/.fasta/.mmi} ${forward_reads} ${reverse_reads} > ${mid_align} && \
-    samtools view ${mid_align} | display_table - 20 && \
-    modify_masked_genome_coords ${mid_align} ${ref_contig_sizes} ${rg_index} | \
-    samtools view -S -u -@ ${threads} - | \
-    samtools sort -O bam -@ ${threads} -o ${output_align} && echo ${output_align} && \
-    log "Modify the bam header with modify_bam_sq_lines ${output_align} ${ref_genome} ${output_align/.bam/.header}" && \
-    modify_bam_sq_lines ${output_align} ${ref_genome} ${output_align/.bam/.header} && \
-    cat ${output_align/.bam/.header} && \
-    samtools reheader ${output_align/.bam/.header} ${output_align} > ${output_align}.tmp && \
-    mv ${output_align}.tmp ${output_align} && \
-    samtools index ${output_align}
+    log "Modify the bam header with modify_bam_sq_lines ${mid_align} ${ref_genome} ${output_align/.bam/.header}" && \
+    modify_bam_sq_lines ${mid_align} ${ref_genome} ${output_align/.bam/.header} && \
+    log "Modify the masked genome coordinates with modify_masked_genome_coords ${mid_align} ${ref_contig_sizes} ${rg_index}" && \
+    modify_masked_genome_coords ${mid_align} ${ref_contig_sizes} ${rg_index} >> ${output_align/.bam/.header} && \
+    cat ${output_align/.bam/.header} | \
+    samtools view -S -u -@ ${threads} -t ${ref_genome}.fai - | \
+    samtools sort -O bam -@ ${threads} -o ${output_align} && \
+    samtools index ${output_align} && \
+    silent_remove_tmps ${mid_align} ${output_align/.bam/.header} && \
+    ls -lh ${output_align}
 
     if check_bam_validity ${output_align} 1; then
         :
