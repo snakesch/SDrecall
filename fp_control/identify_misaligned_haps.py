@@ -683,12 +683,14 @@ def inspect_by_haplotypes(input_bam,
     scatter_hid_dict = defaultdict(bool) # Initialize a dictionary to store if the haplotype is scattered
     logger.info("All the haplotype IDs are :\n{}\n".format(list(hap_qname_info.keys())))
     varcounts_among_refseqs = defaultdict(dict)
+    total_qnames = {}
     # hid_cov_beds = {}
 
     # Iterate over all the haplotypes
     for hid, qnames in hap_qname_info.items():
         # If only one read pair is in the iterating haplotype, it is a scattered haplotype, it should not be considered since the poor coverage
         qnames = [ qn for qn in qnames if qn not in total_lowqual_qnames ]
+        total_qnames.update(qnames)
         if len(qnames) < 3:
             scatter_hid_dict[hid] = True
             continue
@@ -761,6 +763,9 @@ def inspect_by_haplotypes(input_bam,
     logger.info(f"extreme variant density haplotypes: {hid_extreme_vard}")
     # Log the scattered haplotypes
     logger.info(f"scatter haplotypes: {scatter_hid_dict}")
+    # Log qnames that does not enter the ILP, and being directly categorized as mismap qnames
+    scatter_qnames = set([qname for hid in scatter_hid_dict if scatter_hid_dict[hid] for qname in hap_qname_info[hid]])
+    logger.info(f"{len(scatter_qnames)} qnames that does not enter the ILP for belonging to very small haplotypes, and being directly categorized as mismap qnames: {scatter_qnames}")
 
     # Calculate the maximum similarity score for all the haplotypes
     # Detailed explanation of the similarity score is in the docstring of the function cal_similarity_score
@@ -785,7 +790,7 @@ def inspect_by_haplotypes(input_bam,
     if sweep_regions is None:
         mismap_hids = set([hid for hid in hid_extreme_vard if hid_extreme_vard[hid]])
         mismap_qnames = set([qname for hid in mismap_hids for qname in hap_qname_info[hid]])
-        total_qnames = set([qname for qnames in hap_qname_info.values() for qname in qnames])
+        mismap_qnames.update(scatter_qnames)
         correct_map_qnames = total_qnames - mismap_qnames
         logger.warning(f"No regions are found encompassed by more than 2 haplotypes. So we only filter out the haplotypes with extreme variant density. Filtered out {len(mismap_qnames)} read pairs and left {len(correct_map_qnames)} read pairs.")
         logger.info(f"Here is the qnames seemed mismapped: \n{mismap_qnames}\nAnd the mismap haplotype IDs: \n{mismap_hids}\n")
@@ -865,7 +870,8 @@ def inspect_by_haplotypes(input_bam,
         correct_map_hids = correct_map_hids - mismap_hids
 
         mismap_qnames = set([qname for hid in mismap_hids for qname in hap_qname_info[hid]])
-        correct_map_qnames = set([qname for hid in correct_map_hids for qname in hap_qname_info[hid]])
+        mismap_qnames.update(scatter_qnames)
+        correct_map_qnames = total_qnames - mismap_qnames
         logger.info(f"Identify {len(mismap_hids)} mismapped haplotypes, {len(mismap_qnames)} mismapped qnames by solving the BINARY INTEGER LINEAR PROGRAMMING.\n")
         logger.info(f"Here is the qnames seemed mismapped: \n{mismap_qnames}\nAnd the mismap haplotype IDs: \n{mismap_hids}\n")
         logger.info(f"Here is the qnames seemed correctly mapped: \n{correct_map_qnames}\nAnd the correct map haplotype IDs: \n{correct_map_hids}\n")
