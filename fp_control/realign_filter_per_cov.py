@@ -21,7 +21,7 @@ def imap_filter_out(args):
     numba.set_num_threads(numba_threads)
     numba.config.THREADING_LAYER = 'tbb'
 
-    # Create unique log file for this subprocess
+        # Create unique log file for this subprocess
     log_file = os.path.join(log_dir, f"subprocess_{job_id}_{os.path.basename(raw_bam)}.log")
     
     # Configure file logger
@@ -44,6 +44,11 @@ def imap_filter_out(args):
     subprocess_logger.setLevel(log_level)  # Use logger level from src/log.py logger
     subprocess_logger.addHandler(file_handler)
     subprocess_logger.propagate = False  # Don't send logs to parent loggers
+
+    # Also capture Rust logs (pyo3-log forwards under 'build_phasing_graph.*')
+    rust_logger = logging.getLogger("build_phasing_graph")
+    rust_logger.setLevel(log_level)
+    rust_logger.addHandler(file_handler)
     
     try:
         # Log the start of processing with all parameters for debugging
@@ -92,6 +97,11 @@ def imap_filter_out(args):
         gc.collect()
         # Return error result with log file path
         return f"{raw_bam},NaN,NaN,{log_file}"
+    finally:
+        try:
+            rust_logger.removeHandler(file_handler)
+        except:
+            pass
 
 
 

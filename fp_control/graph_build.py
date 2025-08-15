@@ -260,29 +260,12 @@ def build_phasing_graph_rust(
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         
+        # Ensure Python logging allows forwarded Rust logs; per-task FileHandler is attached
+        # to 'build_phasing_graph' in imap_filter_out, so do not touch handlers here.
         root_logger = logging.getLogger()
-        if not root_logger.hasHandlers():
-            logging.basicConfig(
-                level=logger.level, 
-                format='[%(asctime)s] [%(levelname)s] [%(name)s] [%(filename)s:%(lineno)d] %(message)s',
-                datefmt='%Y-%m-%d %H:%M:%S'
-            )
-        else:
-            # Update existing handlers to use detailed format for Rust logs
-            for handler in root_logger.handlers:
-                if not handler.formatter or 'asctime' not in getattr(handler.formatter, '_fmt', ''):
-                    handler.setFormatter(detailed_formatter)
-        
-        # Ensure the root logger level allows the messages through
         if root_logger.level > logger.level:
             root_logger.setLevel(logger.level)
-        
-        # Avoid duplicate logs from this module logger propagating to root
-        try:
-            logger.propagate = False
-        except Exception:
-            pass
-        
+
         logger.info(f"Python logging configured: level={python_log_level}, root_level={logging.getLevelName(root_logger.level)}")
         
         # Call Rust function directly - it handles all BAM processing and allele depth calculation internally

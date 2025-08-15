@@ -67,7 +67,6 @@ pub fn build_phasing_graph_rust(
     threads: u8,
     log_level: Option<&str>,
 ) -> PyResult<PyObject> {
-    info!("[build_phasing_graph_rust] Starting Rust graph building with mean_read_length={}", mean_read_length);
     
     // Configure Rust logging level based on Python logger level
     if let Some(level_str) = log_level {
@@ -76,6 +75,7 @@ pub fn build_phasing_graph_rust(
         log::set_max_level(LevelFilter::Debug);
     }
     
+    info!("[build_phasing_graph_rust] Starting Rust graph building with mean_read_length={}", mean_read_length);
     info!("[build_phasing_graph_rust] Processing BAM file: {}", bam_file_path);
     
     // Read BAM file and build read pair map directly in Rust
