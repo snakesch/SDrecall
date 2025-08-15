@@ -46,7 +46,7 @@ def slice_bam_per_bed(bed, bam, ref_genome, chunk_id, threads = 4, tmp_dir = "/t
                 samtools view --no-header - >> {cov_sam} && \
                 samtools sort -O bam -o {cov_bam} {cov_sam} && \
                 samtools index {cov_bam} && \
-                bash {shell_utils} silent_remove_files {cov_sam}"
+                bash {shell_utils} silent_remove_tmps {cov_sam}"
     elif re.match(r"^chr.*\d+$", bed):
         region = bed # When input the region str, both start and end are 1-indexed and inclusive
         cmd = f"bash {shell_utils} modify_bam_sq_lines {bam} {ref_genome} {cov_sam} && \
@@ -55,7 +55,7 @@ def slice_bam_per_bed(bed, bam, ref_genome, chunk_id, threads = 4, tmp_dir = "/t
                 samtools view --no-header - >> {cov_sam} && \
                 samtools sort -O bam -o {cov_bam} {cov_sam} && \
                 samtools index {cov_bam} && \
-                bash {shell_utils} silent_remove_files {cov_sam}"
+                bash {shell_utils} silent_remove_tmps {cov_sam}"
     try:
         executeCmd(cmd, logger = logger)
     except RuntimeError:
