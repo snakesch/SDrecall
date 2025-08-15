@@ -452,7 +452,7 @@ def migrate_bam_to_ncls(bam_file,
 	logger.info(f"Containing {len(qname_dict)} qnames in NCLS, left out {len(noisy_qnames)} noisy qnames, totally went through {len(total_qnames)} qnames")
 	logger.info(f"Containing {len(qname_idx_dict)} key-value pairs in qname_idx_dict, the largest qname_idx is {max(qname_idx_dict.values()) if len(qname_idx_dict)>0 else -1}")
 
-	if len(total_qnames) <= 2:
+	if len(total_qnames) and paired <= 2:
 		return None
 
 	# Cleanup temp collated file

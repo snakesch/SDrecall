@@ -298,6 +298,10 @@ def build_phasing_graph_rust(
             8,                           # threads: u8 (default value)
             python_log_level             # log_level: Option<&str>
         )
+
+        if rust_result is None:
+            logger.warning("Rust returned None. Skipping this region.")
+            return None, None, None, None, None, None, total_lowqual_qnames
         
         # Convert Rust results back to graph-tool format
         edges = rust_result['edges']
@@ -307,6 +311,12 @@ def build_phasing_graph_rust(
         read_error_vectors = rust_result['read_error_vectors']
         read_ref_pos_dict = rust_result['read_ref_pos_dict']
         updated_lowqual_qnames = set(rust_result['low_qual_qnames'])
+
+        # Early exit for empty result
+        if vertex_names is None or len(vertex_names) <= 2:
+            logger.warning(f"Rust returned {len(vertex_names)} vertices. Skipping this region.")
+            return None, None, None, None, None, None, updated_lowqual_qnames
+
         logger.info(f"There are {len(updated_lowqual_qnames)} low quality qnames, which is a {type(updated_lowqual_qnames)} of qnames")
         logger.info(f"There are {len(read_hap_vectors)} read haplotype vectors, which is a {type(read_hap_vectors)} of dict")
         logger.info(f"There are {len(read_error_vectors)} read error vectors, which is a {type(read_error_vectors)} of dict")
@@ -329,9 +339,17 @@ def build_phasing_graph_rust(
             qname_to_node[qname] = int(v)
         
         # Get weight matrix from Rust (contains all weights including -1 for incompatible pairs)
-        assert 'weight_matrix' in rust_result and rust_result['weight_matrix'] is not None, "No weight matrix from Rust"
-        weight_matrix = rust_result['weight_matrix'].astype(np.float32)
+        wm_obj = rust_result.get('weight_matrix', None)
+        if wm_obj is None:
+            logger.warning("Rust returned no weight matrix (None). Skipping this region.")
+            return None, None, None, None, None, None, updated_lowqual_qnames
+            
+        weight_matrix = wm_obj.astype(np.float32)
+        if weight_matrix.size == 0 or weight_matrix.shape[0] == 0:
+            logger.warning(f"Rust returned empty weight matrix with shape {weight_matrix.shape}. Skipping this region.")
+            return None, None, None, None, None, None, updated_lowqual_qnames
         logger.info(f"Using Rust weight matrix with shape {weight_matrix.shape}")
+
         # Count negative weights (incompatible pairs)
         negative_weights = np.sum(weight_matrix < 0) // 2  # Divide by 2 since matrix is symmetric
         logger.info(f"Weight matrix contains {negative_weights} incompatible pairs (weight=-1)")

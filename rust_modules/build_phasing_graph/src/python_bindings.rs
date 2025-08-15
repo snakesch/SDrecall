@@ -2,7 +2,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 use numpy::{PyArray1, PyArray2, ToPyArray};
 
-use log::{LevelFilter, info, debug, Record, Metadata};
+use log::{LevelFilter, info, debug, warn, error, Record, Metadata};
 use std::io::{self, Write};
 
 use crate::structs::{HaplotypeConfig, PhasingGraphResult, ReadPairMap};
@@ -133,7 +133,7 @@ pub fn build_phasing_graph_rust(
         threads,
     ).map_err(|e| {
         let error_msg = format!("BAM reading failed: {}", e);
-        log::error!("[build_phasing_graph_rust] Step 1 error: {}", error_msg);
+        error!("[build_phasing_graph_rust] Step 1 error: {}", error_msg);
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error_msg)
     })?;
     
@@ -148,7 +148,7 @@ pub fn build_phasing_graph_rust(
         basequal_median_filter,
     ).map_err(|e| {
         let error_msg = format!("Allele depth mapping failed: {}", e);
-        log::error!("[build_phasing_graph_rust] Step 2 error: {}", error_msg);
+        error!("[build_phasing_graph_rust] Step 2 error: {}", error_msg);
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error_msg)
     })?;
     
@@ -167,9 +167,23 @@ pub fn build_phasing_graph_rust(
         &config,
     ).map_err(|e| {
         let error_msg = format!("Graph building failed: {}", e);
-        log::error!("[build_phasing_graph_rust] Step 4 error: {}", error_msg);
+        error!("[build_phasing_graph_rust] Step 4 error: {}", error_msg);
         PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(error_msg)
     })?;
+
+    // If result.weight_matrix is None, return None early
+    if result.weight_matrix.is_none() {
+        warn!("[build_phasing_graph_rust] Step 4 completed: Graph has {} vertices and {} edges. Skipping this region.", 
+              result.graph.node_count(), result.graph.edge_count());
+        return Ok(py.None().into_py(py));
+    }
+
+    // If result.graph.node_count() <= 2, return None early
+    if result.graph.node_count() <= 2 {
+        warn!("[build_phasing_graph_rust] Step 4 completed: Graph has {} vertices and {} edges. Skipping this region.", 
+              result.graph.node_count(), result.graph.edge_count());
+        return Ok(py.None().into_py(py));
+    }
     
     info!("[build_phasing_graph_rust] Step 4 completed: Graph has {} vertices and {} edges", 
               result.graph.node_count(), result.graph.edge_count());
@@ -238,8 +252,9 @@ fn export_graph_result_to_python(
             dict.set_item("weight_matrix", weight_matrix_array)?;
         }
         None => {
-            // Return Error
-            return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>("Weight matrix is None"));
+            // Return None early instead of Error
+            warn!("[export_graph_result_to_python] Weight matrix is None");
+            return Ok(py.None().into_py(py));
         }
     }
     
