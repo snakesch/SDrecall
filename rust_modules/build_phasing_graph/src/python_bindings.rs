@@ -2,48 +2,12 @@ use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PyTuple};
 use numpy::{PyArray1, PyArray2, ToPyArray};
 
-use log::{LevelFilter, info, debug, warn, error, Record, Metadata};
-use std::io::{self, Write};
+use log::{LevelFilter, info, debug, warn, error};
+use pyo3_log;
 
 use crate::structs::{HaplotypeConfig, PhasingGraphResult, ReadPairMap};
 use crate::graph_builder::build_phasing_graph;
 
-/// Simple custom logger that provides detailed logging without SIMD dependencies
-struct SimpleEnhancedLogger;
-
-impl log::Log for SimpleEnhancedLogger {
-    fn enabled(&self, _metadata: &Metadata) -> bool {
-        true
-    }
-
-    fn log(&self, record: &Record) {
-        if self.enabled(record.metadata()) {
-            // Get current time using standard library (no external dependencies)
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            
-            let module = record.module_path().unwrap_or("unknown_module");
-            let file = record.file().unwrap_or("unknown_file");
-            let line = record.line().unwrap_or(0);
-            
-            eprintln!(
-                "[{}] [{}] [{}] [{}:{}] {}",
-                now,
-                record.level(),
-                module,
-                file,
-                line,
-                record.args()
-            );
-        }
-    }
-
-    fn flush(&self) {
-        io::stderr().flush().ok();
-    }
-}
 
 /// Configure comprehensive Rust logging with file names, line numbers, and function stacks
 /// 
@@ -61,24 +25,16 @@ fn configure_rust_logging(level_str: &str) {
         "DEBUG" => LevelFilter::Debug,
         "INFO" => LevelFilter::Info, 
         "WARNING" | "WARN" => LevelFilter::Warn,
-        "ERROR" => LevelFilter::Error,
-        "CRITICAL" => LevelFilter::Error,
-        _ => LevelFilter::Info, // Default fallback
+        "ERROR" | "CRITICAL" => LevelFilter::Error,
+        _ => LevelFilter::Info,
     };
-    
-    // Initialize our custom logger (only once)
-    static INIT: std::sync::Once = std::sync::Once::new();
-    INIT.call_once(|| {
-        log::set_boxed_logger(Box::new(SimpleEnhancedLogger))
-            .map(|()| log::set_max_level(rust_level))
-            .ok();
-    });
-    
-    // Update the max level for this configuration
+
+    // Initialize pyo3-log once per process; safe to call multiple times
+    let _ = pyo3_log::try_init();
     log::set_max_level(rust_level);
-    
+
     info!("[configure_rust_logging] Rust logging configured with level: {:?} (from Python: {})", rust_level, level_str);
-    debug!("[configure_rust_logging] Enhanced logging with source location is active (minimal SIMD-free implementation)");
+    debug!("[configure_rust_logging] pyo3-log forwarding active");
 }
 
 /// Python-exposed function for building the phasing graph

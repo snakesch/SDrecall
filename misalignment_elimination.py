@@ -170,7 +170,7 @@ def eliminate_misalignments(input_bam,
                         with open(log_file, 'r') as f:
                             log_tail = "".join(f.readlines()[-5:])  # Last 5 lines
                         print(f"  Status: WARNING - Check log file for details", file=sys.stderr)
-                        print(f"  Error summary:\n{log_tail}", file=sys.stderr)
+                        print(f"  LOG summary:\n{log_tail}", file=sys.stderr)
                     except:
                         print(f"  Status: WARNING - Could not read log file", file=sys.stderr)
                     
