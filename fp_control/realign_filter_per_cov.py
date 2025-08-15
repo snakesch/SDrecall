@@ -199,6 +199,9 @@ def realign_filter_per_cov(bam,
                                    mapq_filter = recall_mq_cutoff,
                                    basequal_median_filter = basequal_median_cutoff,
                                    logger=logger)
+    if bam_ncls is None:
+        logger.warning(f"BAM file {bam} has less than 3 reads, skip this region.")
+        return None, None, None
 
     logger.info(f"Successfully migrated the BAM file {bam} to NCLS format, this part is necessary for both Python and Rust implementation\n\n")
 

@@ -19,6 +19,7 @@ def imap_slice_bam_per_bed(tup_args):
 @log_command
 def slice_bam_per_bed(bed, bam, ref_genome, chunk_id, threads = 4, tmp_dir = "/tmp", logger = logger):
     cov_bam = bam.replace(".bam", f".{chunk_id}.bam")
+    cov_sam = cov_bam.replace(".bam", ".sam")
     cov_bam_header = cov_bam.replace(".bam", ".header")
     bam_index = bam + ".bai"
     if not os.path.exists(bam_index):
@@ -39,20 +40,22 @@ def slice_bam_per_bed(bed, bam, ref_genome, chunk_id, threads = 4, tmp_dir = "/t
 
     if os.path.exists(bed):
         # Coordinates in bed file are 0-indexed and half-open
-        cmd = f"samtools view -@ {threads} -u -P -L {bed} {bam} | \
-                samtools sort -@ {threads} -T {tmp_dir}/{chunk_id}_{os.path.basename(cov_bam)} -o {cov_bam} -O bam - && \
-                bash {shell_utils} modify_bam_sq_lines {cov_bam} {ref_genome} {cov_bam_header} && \
-                samtools reheader {cov_bam_header} {cov_bam} > {cov_bam}.tmp && \
-                mv {cov_bam}.tmp {cov_bam} && \
-                samtools index {cov_bam}"
+        cmd = f"bash {shell_utils} modify_bam_sq_lines {bam} {ref_genome} {cov_sam} && \
+                samtools view -@ {threads} -u -P -L {bed} {bam} | \
+                samtools sort -@ {threads} -T {tmp_dir}/{chunk_id}_{os.path.basename(cov_bam)} -u - | \
+                samtools view --no-header - >> {cov_sam} && \
+                samtools sort -O bam -o {cov_bam} {cov_sam} && \
+                samtools index {cov_bam} && \
+                bash {shell_utils} silent_remove_files {cov_sam}"
     elif re.match(r"^chr.*\d+$", bed):
         region = bed # When input the region str, both start and end are 1-indexed and inclusive
-        cmd = f"samtools view -@ {threads} -u -P {bam} {region} | \
-                samtools sort -@ {threads} -T {tmp_dir}/{chunk_id}_{os.path.basename(cov_bam)} -o {cov_bam} -O bam - && \
-                bash {shell_utils} modify_bam_sq_lines {cov_bam} {ref_genome} {cov_bam_header} && \
-                samtools reheader {cov_bam_header} {cov_bam} > {cov_bam}.tmp && \
-                mv {cov_bam}.tmp {cov_bam} && \
-                samtools index {cov_bam}"
+        cmd = f"bash {shell_utils} modify_bam_sq_lines {bam} {ref_genome} {cov_sam} && \
+                samtools view -@ {threads} -u -P {bam} {region} | \
+                samtools sort -@ {threads} -T {tmp_dir}/{chunk_id}_{os.path.basename(cov_bam)} -u - | \
+                samtools view --no-header - >> {cov_sam} && \
+                samtools sort -O bam -o {cov_bam} {cov_sam} && \
+                samtools index {cov_bam} && \
+                bash {shell_utils} silent_remove_files {cov_sam}"
     try:
         executeCmd(cmd, logger = logger)
     except RuntimeError:

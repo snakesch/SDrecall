@@ -452,10 +452,11 @@ function independent_minimap2_masked () {
 
     local mid_align=${output_align/.bam/.sam}
 
-    if [[ ${masked_genome/.fasta/.mmi} -ot ${masked_genome} ]] || [[ ! -f ${masked_genome/.fasta/.mmi} ]]; then
-        log "Minimap2 index file ${masked_genome/.fasta/.mmi} not existed or outdated. Generate it."
-        minimap2 -x ${mode} -d ${masked_genome/.fasta/.mmi} ${masked_genome}
-    fi
+    log "Minimap2 index file ${masked_genome/.fasta/.mmi} should be generated with minimap2 -x ${mode} -d ${masked_genome/.fasta/.mmi} ${masked_genome}"
+    mmi=${masked_genome/.fasta/.mmi}
+    tmp=$(mktemp "${mmi}.tmp.XXXXXX")
+    minimap2 -x "$mode" -d "$tmp" "$masked_genome" && \
+    mv -f "$tmp" "$mmi"
 
     if [[ ! -f ${ref_genome}.fai ]]; then
         log "Reference genome index file ${ref_genome}.fai not existed. Generate it."
