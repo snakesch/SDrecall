@@ -174,7 +174,7 @@ def eliminate_misalignments(input_bam,
                     except:
                         print(f"  Status: WARNING - Could not read log file", file=sys.stderr)
                     
-                print(f"{datetime.now()}: ************************************{i}_subprocess_end_for_filtering_{raw_bam}************************************", file=sys.stderr)
+                print(f"\n{datetime.now()}: ************************************{i}_subprocess_end_for_filtering_{raw_bam}************************************\n", file=sys.stderr)
 
             pool.close()
             gc.collect()
