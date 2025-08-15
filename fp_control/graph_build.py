@@ -313,7 +313,10 @@ def build_phasing_graph_rust(
         updated_lowqual_qnames = set(rust_result['low_qual_qnames'])
 
         # Early exit for empty result
-        if vertex_names is None or len(vertex_names) <= 2:
+        if vertex_names is None:
+            logger.warning(f"Rust returned no vertices. Skipping this region.")
+            return None, None, None, None, None, None, updated_lowqual_qnames
+        if len(vertex_names) <= 2:
             logger.warning(f"Rust returned {len(vertex_names)} vertices. Skipping this region.")
             return None, None, None, None, None, None, updated_lowqual_qnames
 
