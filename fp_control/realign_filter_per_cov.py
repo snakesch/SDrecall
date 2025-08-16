@@ -51,9 +51,12 @@ def imap_filter_out(args):
     rust_logger.addHandler(file_handler)
     
     try:
+        # Derive tool threads from numba budget to avoid oversubscription
+        tool_threads = max(1, int(numba_threads) - 1)
+        
         # Log the start of processing with all parameters for debugging
         subprocess_logger.warning(f"Log level: {subprocess_logger.level}")
-        subprocess_logger.warning(f"Thread settings: numba={numba.get_num_threads()}, " + 
+        subprocess_logger.warning(f"Thread settings: per_job(tool)={tool_threads}, numba={numba.get_num_threads()}, " + 
                                   f"OMP={os.environ.get('OMP_NUM_THREADS')}, " + 
                                   f"MKL={os.environ.get('MKL_NUM_THREADS')}")
         subprocess_logger.info(f"Processing region in {raw_bam}")
@@ -71,6 +74,7 @@ def imap_filter_out(args):
             recall_mq_cutoff=recall_mq_cutoff,
             basequal_median_cutoff=basequal_median_cutoff,
             edge_weight_cutoff=edge_weight_cutoff,
+            threads=tool_threads,
             tmp_dir=tmp_dir,
             ref_genome=ref_genome,
             sample_id=sample_id,
@@ -252,6 +256,7 @@ def realign_filter_per_cov(bam,
                                                                                                                                                               mean_read_length,
                                                                                                                                                               set(),  # total_lowqual_qnames - empty initially
                                                                                                                                                               ref_genome,
+                                                                                                                                                              threads=threads,
                                                                                                                                                               logger = logger)
         if phased_graph is None:
             return None, None, None
@@ -280,6 +285,7 @@ def realign_filter_per_cov(bam,
                                                                                                                                                               mean_read_length,
                                                                                                                                                               total_lowqual_qnames,
                                                                                                                                                               ref_genome,
+                                                                                                                                                              threads=threads,
                                                                                                                                                               logger = logger)
         if phased_graph is None:
             return None, None, None
@@ -452,9 +458,8 @@ def realign_filter_per_cov(bam,
 if __name__ == "__main__":
     import argparse
     
-    parser = argparse.ArgumentParser(description="Realign and filter reads per coverage region")
-    
-    # Required parameters
+    parser = argparse.ArgumentParser(description='Realign and filter reads per coverage region')
+
     parser.add_argument("--bam", type=str, required=True, help="Path to input BAM file")
     
     # Optional parameters

@@ -224,6 +224,7 @@ def build_phasing_graph_rust(
     reference_genome: str,
     base_dict: TypeDict = {"A": np.int8(0), "T": np.int8(1), "C": np.int8(2), "G": np.int8(3), "N": np.int8(4)},
     edge_weight_cutoff: float = 0.201,
+    threads: int = 8,
     logger = logger
 ) -> Tuple[Optional[gt.Graph], Optional[np.ndarray], Optional[TypeDict], Optional[TypeDict], Optional[TypeDict], Optional[TypeDict], Set[str]]:
     """
@@ -278,7 +279,7 @@ def build_phasing_graph_rust(
             15,                          # basequal_median_filter: u8 (default value)
             True,                        # filter_noisy: bool
             True,                        # use_collate: bool
-            8,                           # threads: u8 (default value)
+            int(max(1, threads)),        # threads: u8 (cap >=1)
             python_log_level             # log_level: Option<&str>
         )
 
@@ -372,9 +373,9 @@ def build_phasing_graph_rust(
         logger.error(f"Error in Rust implementation: {e}")
         logger.info("Falling back to Python implementation")
         return build_phasing_graph(
-            bam_file, intrinsic_bam, ncls_dict, ncls_read_dict, ncls_qname_dict,
-            mean_read_length, total_lowqual_qnames, reference_genome, base_dict, logger
-        )
+        bam_file, intrinsic_bam, ncls_dict, ncls_read_dict, ncls_qname_dict,
+        mean_read_length, total_lowqual_qnames, reference_genome, base_dict, threads=threads, logger=logger
+    )
 
 
 def build_phasing_graph(bam_file,
@@ -386,6 +387,7 @@ def build_phasing_graph(bam_file,
                         total_lowqual_qnames,
                         reference_genome,
                         base_dict = {"A": np.int8(0), "T": np.int8(1), "C": np.int8(2), "G": np.int8(3), "N": np.int8(4)},
+                        threads: int = 8,
                         logger = logger):
     '''
     Construct a phasing graph from BAM data for efficient haplotype identification.
@@ -483,6 +485,12 @@ def build_phasing_graph(bam_file,
     
     intrinsic_ad_dict = stat_ad_to_dict(intrinsic_bam, empty_dict, reference_genome, base_dict, logger = logger)
     if intrinsic_ad_dict is None: intrinsic_ad_dict = {}
+    
+    # Limit OpenMP/BLAS threads for any native libs used under the hood
+    import os as _os
+    _os.environ.setdefault("OMP_NUM_THREADS", str(int(max(1, threads))))
+    _os.environ.setdefault("MKL_NUM_THREADS", str(int(max(1, threads))))
+    _os.environ.setdefault("OPENBLAS_NUM_THREADS", str(int(max(1, threads))))
 
     qname_check_dict = {}
     # Use NCLS read dict to iterate through all the reads to build a graph. One good thing is that every key: value stores a pair of read objects
@@ -645,6 +653,7 @@ def build_phasing_graph_auto(
     reference_genome: str,
     base_dict: TypeDict = {"A": np.int8(0), "T": np.int8(1), "C": np.int8(2), "G": np.int8(3), "N": np.int8(4)},
     prefer_rust: bool = True,
+    threads: int = 8,
     logger = logger
 ) -> Tuple[Optional[gt.Graph], Optional[np.ndarray], Optional[TypeDict], Optional[TypeDict], Optional[TypeDict], Optional[TypeDict], Set[str]]:
     """
@@ -678,7 +687,7 @@ def build_phasing_graph_auto(
         try:
             return build_phasing_graph_rust(
                 bam_file, intrinsic_bam, ncls_dict, ncls_read_dict, ncls_qname_dict,
-                mean_read_length, total_lowqual_qnames, reference_genome, base_dict, logger=logger
+                mean_read_length, total_lowqual_qnames, reference_genome, base_dict, threads=threads, logger=logger
             )
         except Exception as e:
             logger.warning(f"Rust implementation failed: {e}")

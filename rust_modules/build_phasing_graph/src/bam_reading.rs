@@ -6,8 +6,9 @@ use std::process::{Command, Stdio};
 use std::io::{BufRead, BufReader};
 use ahash::AHashMap; // Faster HashMap for string keys
 use std::path::Path;
+use std::thread;
 use tempfile::NamedTempFile;
-use log::{debug, info};
+use log::{debug, info, warn, error};
 
 
 fn should_skip_alignment(read: &Record) -> bool {
@@ -379,17 +380,42 @@ pub fn build_allele_depth_map(
             bam_file,
         ])
         .stdout(Stdio::piped())
+		.stderr(Stdio::piped())
         .spawn()?;
 
+	// drain stderr concurrently
+	let mpileup_stderr_jh = if let Some(stderr) = mpileup_child.stderr.take() {
+		Some(thread::spawn(move || {
+			for line in BufReader::new(stderr).lines().flatten() {
+				if line.to_lowercase().contains("warn") { warn!("{}", line); }
+				else if line.to_lowercase().contains("error") { error!("{}", line); }
+				else { info!("{}", line); }
+			}
+		}))
+	} else { None };
+
     let mpileup_stdout = mpileup_child.stdout.take().ok_or("Failed to capture mpileup stdout")?;
+
     let mut query_child = Command::new("bcftools")
         .args(["query", "-f", "%CHROM\t%POS\t%REF\t%ALT\t[%AD]\\n", "-"])
         .stdin(Stdio::from(mpileup_stdout))
         .stdout(Stdio::piped())
+		.stderr(Stdio::piped())
         .spawn()?;
+
+	let query_stderr_jh = if let Some(stderr) = query_child.stderr.take() {
+		Some(thread::spawn(move || {
+			for line in BufReader::new(stderr).lines().flatten() {
+				if line.to_lowercase().contains("warn") { warn!("{}", line); }
+				else if line.to_lowercase().contains("error") { error!("{}", line); }
+				else { info!("{}", line); }
+			}
+		}))
+	} else { None };
 
     // Stream-parse bcftools query output directly into allele_depth_map
     let query_stdout = query_child.stdout.take().ok_or("Failed to capture bcftools query stdout")?;
+
     let reader = BufReader::new(query_stdout);
     let mut allele_depth_map = AlleleDepthMap::new();
     let mut line_count = 0usize;
@@ -481,6 +507,9 @@ pub fn build_allele_depth_map(
     // Ensure both processes exited successfully
     let query_status = query_child.wait()?;
     let mpileup_status = mpileup_child.wait()?;
+    if let Some(jh) = mpileup_stderr_jh { let _ = jh.join(); }
+	if let Some(jh) = query_stderr_jh { let _ = jh.join(); }
+
     if !mpileup_status.success() {
         return Err("bcftools mpileup failed".into());
     }
