@@ -200,6 +200,7 @@ def establish_beds_per_RG_cluster(cluster_dict={"SD_qnodes":{},
                                             genome=contig_sizes, 
                                             logger=logger, 
                                             path=masked_genome_path)
+    logger.info(f"Masked genome: {masked_genome_path} built based on the query region bed file: {paths['Query_bed']} and reference genome: {ref_genome}")
     
     # Perform intrinsic alignment
     bam_path = getIntrinsicBam( rg_bed = paths["Query_bed"], 

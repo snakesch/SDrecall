@@ -132,7 +132,7 @@ def filter_intrinsic_alignments(bam_file, output_file=None, logger=logger):
         Path to output filtered BAM file
     """
     # Updated regex: the :label part is not required.
-    qname_regex = re.compile(r'(.*):(\d+)-(\d+):(.+)')
+    qname_regex = re.compile(r'(.+):(\d+)-(\d+)(:.+)?')
     tmp_output = prepare_tmp_file(suffix=".bam").name
     
     # Compute allowed status for each distinct interval.
