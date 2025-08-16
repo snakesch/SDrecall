@@ -9,6 +9,8 @@ use std::path::Path;
 use std::thread;
 use tempfile::NamedTempFile;
 use log::{debug, info, warn, error};
+use std::sync::{Arc, Mutex};
+use std::collections::VecDeque;
 
 
 fn should_skip_alignment(read: &Record) -> bool {
@@ -383,16 +385,21 @@ pub fn build_allele_depth_map(
 		.stderr(Stdio::piped())
         .spawn()?;
 
-	// drain stderr concurrently
-	let mpileup_stderr_jh = if let Some(stderr) = mpileup_child.stderr.take() {
-		Some(thread::spawn(move || {
-			for line in BufReader::new(stderr).lines().flatten() {
-				if line.to_lowercase().contains("warn") { warn!("{}", line); }
-				else if line.to_lowercase().contains("error") { error!("{}", line); }
-				else { info!("{}", line); }
-			}
-		}))
-	} else { None };
+    // drain mpileup stderr concurrently into a bounded buffer (no logging here to avoid GIL contention)
+    let mpileup_stderr_buf: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::with_capacity(500)));
+    let mpileup_stderr_buf_reader = Arc::clone(&mpileup_stderr_buf);
+    let mpileup_stderr_jh = if let Some(stderr) = mpileup_child.stderr.take() {
+        Some(thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line_res in reader.lines() {
+                if let Ok(line) = line_res {
+                    let mut buf = mpileup_stderr_buf_reader.lock().unwrap();
+                    if buf.len() == buf.capacity() { buf.pop_front(); }
+                    buf.push_back(line);
+                }
+            }
+        }))
+    } else { None };
 
     let mpileup_stdout = mpileup_child.stdout.take().ok_or("Failed to capture mpileup stdout")?;
 
@@ -403,15 +410,21 @@ pub fn build_allele_depth_map(
 		.stderr(Stdio::piped())
         .spawn()?;
 
-	let query_stderr_jh = if let Some(stderr) = query_child.stderr.take() {
-		Some(thread::spawn(move || {
-			for line in BufReader::new(stderr).lines().flatten() {
-				if line.to_lowercase().contains("warn") { warn!("{}", line); }
-				else if line.to_lowercase().contains("error") { error!("{}", line); }
-				else { info!("{}", line); }
-			}
-		}))
-	} else { None };
+    // drain query stderr concurrently into a bounded buffer (no logging here)
+    let query_stderr_buf: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::with_capacity(500)));
+    let query_stderr_buf_reader = Arc::clone(&query_stderr_buf);
+    let query_stderr_jh = if let Some(stderr) = query_child.stderr.take() {
+        Some(thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line_res in reader.lines() {
+                if let Ok(line) = line_res {
+                    let mut buf = query_stderr_buf_reader.lock().unwrap();
+                    if buf.len() == buf.capacity() { buf.pop_front(); }
+                    buf.push_back(line);
+                }
+            }
+        }))
+    } else { None };
 
     // Stream-parse bcftools query output directly into allele_depth_map
     let query_stdout = query_child.stdout.take().ok_or("Failed to capture bcftools query stdout")?;
@@ -508,7 +521,25 @@ pub fn build_allele_depth_map(
     let query_status = query_child.wait()?;
     let mpileup_status = mpileup_child.wait()?;
     if let Some(jh) = mpileup_stderr_jh { let _ = jh.join(); }
-	if let Some(jh) = query_stderr_jh { let _ = jh.join(); }
+    if let Some(jh) = query_stderr_jh { let _ = jh.join(); }
+
+    // Flush buffered stderr lines to logger now (on main thread)
+    if let Ok(buf) = mpileup_stderr_buf.lock() {
+        for line in buf.iter() {
+            let lower = line.to_lowercase();
+            if lower.contains("error") { error!("{}", line); }
+            else if lower.contains("warn") { warn!("{}", line); }
+            else { info!("{}", line); }
+        }
+    }
+    if let Ok(buf) = query_stderr_buf.lock() {
+        for line in buf.iter() {
+            let lower = line.to_lowercase();
+            if lower.contains("error") { error!("{}", line); }
+            else if lower.contains("warn") { warn!("{}", line); }
+            else { info!("{}", line); }
+        }
+    }
 
     if !mpileup_status.success() {
         return Err("bcftools mpileup failed".into());
