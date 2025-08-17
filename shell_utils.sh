@@ -408,7 +408,8 @@ function modify_masked_genome_coords () {
                                    $0 !~ /^@/ {printf "%s:%s", $1, rg_tag; \
                                                for (i=2;i<NF;i++) printf "\t%s", $i;
                                                printf "\t%s\n", $NF;}' - | uniq - | \
-    mawk -F '\t' '$1 !~ /^@/ {print;}' -
+    mawk -F '\t' '$0 !~ /^@/ {print;}' - | \
+	mawk -F '\t' '$2 < 256 {print;}' -
 }
 
 
@@ -474,7 +475,7 @@ function independent_minimap2_masked () {
     log "Modify the masked genome coordinates with modify_masked_genome_coords ${mid_align} ${ref_contig_sizes} ${rg_index}" && \
     modify_masked_genome_coords ${mid_align} ${ref_contig_sizes} ${rg_index} >> ${output_align/.bam/.header} && \
     cat ${output_align/.bam/.header} | \
-    samtools view -S -u -@ ${threads} -t ${ref_genome}.fai - | \
+    samtools view -u -S -@ ${threads} -t ${ref_genome}.fai - | \
     samtools sort -O bam -@ ${threads} -o ${output_align} && \
     samtools index ${output_align} && \
     silent_remove_tmps ${mid_align} ${output_align/.bam/.header} && \
