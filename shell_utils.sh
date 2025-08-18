@@ -353,8 +353,7 @@ function modify_bam_sq_lines () {
     local output_header=${3}
 
     samtools view -H ${input_bam} | grep -v "@SQ" | grep -v "@PG" > ${output_header} && \
-    generate_sq_lines ${ref_fasta} >> ${output_header} && \
-    ls -lht ${output_header}
+    generate_sq_lines ${ref_fasta} >> ${output_header}
 }
 
 

@@ -388,8 +388,8 @@ pub fn build_allele_depth_map(
     // drain mpileup stderr concurrently into a bounded buffer (no logging here to avoid GIL contention)
     let mpileup_stderr_buf: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::with_capacity(500)));
     let mpileup_stderr_buf_reader = Arc::clone(&mpileup_stderr_buf);
-    let mpileup_stderr_jh = if let Some(stderr) = mpileup_child.stderr.take() {
-        Some(thread::spawn(move || {
+	let mpileup_stderr_jh = if let Some(stderr) = mpileup_child.stderr.take() {
+		Some(thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for line_res in reader.lines() {
                 if let Ok(line) = line_res {
@@ -397,9 +397,9 @@ pub fn build_allele_depth_map(
                     if buf.len() == buf.capacity() { buf.pop_front(); }
                     buf.push_back(line);
                 }
-            }
-        }))
-    } else { None };
+			}
+		}))
+	} else { None };
 
     let mpileup_stdout = mpileup_child.stdout.take().ok_or("Failed to capture mpileup stdout")?;
 
@@ -413,8 +413,8 @@ pub fn build_allele_depth_map(
     // drain query stderr concurrently into a bounded buffer (no logging here)
     let query_stderr_buf: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::with_capacity(500)));
     let query_stderr_buf_reader = Arc::clone(&query_stderr_buf);
-    let query_stderr_jh = if let Some(stderr) = query_child.stderr.take() {
-        Some(thread::spawn(move || {
+	let query_stderr_jh = if let Some(stderr) = query_child.stderr.take() {
+		Some(thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for line_res in reader.lines() {
                 if let Ok(line) = line_res {
@@ -422,9 +422,9 @@ pub fn build_allele_depth_map(
                     if buf.len() == buf.capacity() { buf.pop_front(); }
                     buf.push_back(line);
                 }
-            }
-        }))
-    } else { None };
+			}
+		}))
+	} else { None };
 
     // Stream-parse bcftools query output directly into allele_depth_map
     let query_stdout = query_child.stdout.take().ok_or("Failed to capture bcftools query stdout")?;
@@ -521,7 +521,7 @@ pub fn build_allele_depth_map(
     let query_status = query_child.wait()?;
     let mpileup_status = mpileup_child.wait()?;
     if let Some(jh) = mpileup_stderr_jh { let _ = jh.join(); }
-    if let Some(jh) = query_stderr_jh { let _ = jh.join(); }
+	if let Some(jh) = query_stderr_jh { let _ = jh.join(); }
 
     // Flush buffered stderr lines to logger now (on main thread)
     if let Ok(buf) = mpileup_stderr_buf.lock() {
