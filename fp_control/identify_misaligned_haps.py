@@ -43,6 +43,108 @@ def ref_genome_similarity(query_read_vector,
     return var_size, alt_var_size
 
 
+@numba.njit(types.Tuple((types.int32[:], types.int32[:]))(types.int16[:], types.int16[:], types.int32), fastmath=True)
+def numba_shared_variant_positions(vec1,
+                                   vec2,
+                                   overlap_start):
+    """
+    Return absolute genomic positions for shared SNVs and shared indels between two
+    haplotype vectors aligned over the same overlap span.
+
+    Inputs:
+      - vec1, vec2: int16 haplotype vectors (same length)
+        encodings: SNV=-4; deletion=-6 over length; insertion>1 at single index; match=1; NA<=-8
+      - overlap_start: absolute genomic start (int32) of the vectors' first index
+
+    Outputs:
+      - shared_snv_pos_abs: int32 array of absolute positions where both have SNV (-4)
+      - shared_indel_pos_abs: int32 array of absolute positions where both indicate indel
+        (either deletion -6 or insertion > 1)
+    """
+    n = vec1.size
+    # Preallocate with max possible and truncate
+    snv_out = np.empty(n, dtype=np.int32)
+    indel_out = np.empty(n, dtype=np.int32)
+    snv_count = 0
+    indel_count = 0
+    for i in range(n):
+        v1 = vec1[i]
+        v2 = vec2[i]
+        # Shared SNV
+        if v1 == -4 and v2 == -4:
+            snv_out[snv_count] = overlap_start + i
+            snv_count += 1
+        # Shared indel: deletion (-6) or insertion marker (>1)
+        # Note insertion is marked at a single index with positive value > 1
+        is_indel1 = (v1 == -6) or (v1 > 1)
+        is_indel2 = (v2 == -6) or (v2 > 1)
+        if is_indel1 and is_indel2:
+            indel_out[indel_count] = overlap_start + i
+            indel_count += 1
+    return snv_out[:snv_count], indel_out[:indel_count]
+
+
+@numba.njit(types.void(types.int32[:], types.int32, types.int32[:], types.int8[:], types.int32[:, :]), fastmath=True)
+def update_tally_for_read(shared_pos_abs,
+                          read_start,
+                          ref_qseq_positions,
+                          qseq_encoded,
+                          tally):
+    """
+    In-place update of tally for one read.
+    - shared_pos_abs: absolute genomic positions (int32[:]) to tally
+    - read_start: read.reference_start (int32)
+    - ref_qseq_positions: mapping ref_offset -> query_index (int32[:])
+    - qseq_encoded: encoded query sequence (int8[:]); A=0,T=1,C=2,G=3,N=4
+    - tally: (num_pos, 5) int32 matrix; rows align with shared_pos_abs order
+    """
+    num_pos = shared_pos_abs.size
+    for i in range(num_pos):
+        pos = shared_pos_abs[i]
+        idx = pos - read_start
+        if idx < 0 or idx >= ref_qseq_positions.size:
+            continue
+        qidx = ref_qseq_positions[idx]
+        if qidx < 0:
+            continue
+        base = qseq_encoded[qidx]
+        if base >= 0 and base < 4:  # exclude N (4)
+            tally[i, base] += 1
+
+
+@numba.njit(types.int8[:](types.int32[:], types.int32, types.int32[:], types.int8[:]), fastmath=True)
+def map_positions_to_bases(shared_pos_abs,
+                           read_start,
+                           ref_qseq_positions,
+                           qseq_encoded):
+    """
+    Map absolute genomic positions to the read's encoded base (0..3; N=4) via ref->query index map.
+    Returns int8 array with -1 for positions not covered by the read.
+    """
+    n = shared_pos_abs.size
+    out = np.full(n, np.int8(-1))
+    for i in range(n):
+        idx = shared_pos_abs[i] - read_start
+        if idx < 0 or idx >= ref_qseq_positions.size:
+            continue
+        qidx = ref_qseq_positions[idx]
+        if qidx >= 0:
+            out[i] = qseq_encoded[qidx]
+    return out
+
+
+@numba.njit(types.int32(types.int8[:], types.int8[:]), fastmath=True)
+def count_equal_alt(cons_codes,
+                    hom_bases):
+    """
+    Count positions where both consensus ALT and homolog base are defined (>=0) and equal.
+    """
+    cnt = 0
+    for i in range(cons_codes.size):
+        if cons_codes[i] >= 0 and hom_bases[i] >= 0 and cons_codes[i] == hom_bases[i]:
+            cnt += 1
+    return cnt
+
 
 @numba.njit
 def rank_unique_values(arr):
@@ -562,6 +664,7 @@ def stat_refseq_similarity(intrin_bam_ncls,
                            span,
                            hid,
                            consensus_sequence,
+                           reads,
                            total_genomic_haps,
                            read_ref_pos_dict,
                            varcounts_among_refseqs,
@@ -611,11 +714,46 @@ def stat_refseq_similarity(intrin_bam_ncls,
 
         # Identify paralogous sequence variants (PSVs) originated from paralogous reference sequences
         varcount, alt_varcount = ref_genome_similarity(interval_con_seq, interval_genomic_hap)
-        logger.debug(f"For haplotype {hid}, within region {span}, comparing to the genomic sequence {homo_refseq_qname}. Variant count is {varcount} and variant count comparing against homologous counterpart sequence is {alt_varcount}.")
-        if homo_refseq_qname in varcounts_among_refseqs[hid]:
-            varcounts_among_refseqs[hid][homo_refseq_qname].append((varcount, alt_varcount))
+
+        # Compute positions with shared SNV and shared indel statuses in both vectors
+        shared_snv_pos_abs, shared_indel_pos_abs = numba_shared_variant_positions(interval_con_seq.astype(np.int16),
+                                                                                  interval_genomic_hap.astype(np.int16),
+                                                                                  np.int32(span[0]))
+        if shared_snv_pos_abs.size > 0:
+            # Tally consensus ALT codes at shared positions from member reads
+            num_pos = shared_snv_pos_abs.size
+            tally = np.zeros((num_pos, 5), dtype=np.int32)  # bases 0..4
+
+            # Use Numba helper to update tally per read
+            for r in reads:
+                ref_qseq_positions, qseq_ref_positions, qseq_encoded, _, read_ref_pos_dict = extract_read_qseqs(r, read_ref_pos_dict)
+                update_tally_for_read(shared_snv_pos_abs.astype(np.int32),
+                                      np.int32(r.reference_start),
+                                      ref_qseq_positions,
+                                      qseq_encoded,
+                                      tally)
+
+            # Majority base among A/T/C/G (codes 0..3)
+            atcg = tally[:, :4]
+            coverage = atcg.sum(axis=1)
+            cons_codes = np.where(coverage > 0, atcg.argmax(axis=1).astype(np.int8), np.int8(-1))
+
+            # ALT codes from the homologous read using Numba-mapped bases
+            h_ref_positions, h_qseq_ref_positions, h_qseq_encoded, _, read_ref_pos_dict = extract_read_qseqs(homo_refseq, read_ref_pos_dict)
+            h_base = map_positions_to_bases(shared_snv_pos_abs.astype(np.int32),
+                                            np.int32(homo_refseq_start),
+                                            h_ref_positions,
+                                            h_qseq_encoded)
+
+            shared_psv = count_equal_alt(cons_codes.astype(np.int8), h_base)
         else:
-            varcounts_among_refseqs[hid][homo_refseq_qname] = [(varcount, alt_varcount)]
+            shared_psv = 0
+
+        logger.debug(f"For haplotype {hid}, within region {span}, comparing to the genomic sequence {homo_refseq_qname}. Variant count is {varcount}, alt-var count vs homologs is {alt_varcount}, shared PSV (ALT-consistent) count is {shared_psv}.")
+        if homo_refseq_qname in varcounts_among_refseqs[hid]:
+            varcounts_among_refseqs[hid][homo_refseq_qname].append((varcount, alt_varcount, shared_psv))
+        else:
+            varcounts_among_refseqs[hid][homo_refseq_qname] = [(varcount, alt_varcount, shared_psv)]
 
     return varcounts_among_refseqs, read_ref_pos_dict
 
@@ -645,17 +783,14 @@ def cal_similarity_score(varcounts_among_refseqs):
 
     # Iterate over all the reference genome similarities for all the haplotypes
     for hid, gdict in varcounts_among_refseqs.items():
-        max_varcount_delta = 0
+        max_psv = 0
         for _, pairs in gdict.items():
-            total_varcount = np.sum([t[0] for t in pairs])
-            total_alt_varcount = np.sum([t[1] for t in pairs])
-            similarity = total_varcount / total_alt_varcount if total_alt_varcount > 0 else total_varcount
-            delta = total_varcount - total_alt_varcount
-            # logger.info(f"For haplotype {hid}, comparing to mapping against the genomic sequence {genomic_seq_qname}. Variant count ratio is {similarity} and variant count delta is {delta}.")
-            similarity_score = delta + similarity
-            max_varcount_delta = max(max_varcount_delta, similarity_score)
+            # pairs now contain tuples of (varcount, alt_varcount, shared_psv)
+            total_shared_psv = np.sum([t[2] for t in pairs])
+            if total_shared_psv > max_psv:
+                max_psv = total_shared_psv
 
-        hap_max_sim_scores[hid] = max_varcount_delta if max_varcount_delta > 0 else 0
+        hap_max_sim_scores[hid] = max_psv
 
     return hap_max_sim_scores
 
@@ -755,6 +890,7 @@ def inspect_by_haplotypes(input_bam,
                                                                                 span,
                                                                                 hid,
                                                                                 consensus_sequence,
+                                                                                reads,
                                                                                 total_genomic_haps,
                                                                                 read_ref_pos_dict,
                                                                                 varcounts_among_refseqs,
