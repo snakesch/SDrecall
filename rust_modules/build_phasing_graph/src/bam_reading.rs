@@ -54,6 +54,13 @@ fn is_read_noisy(
         return true;
     }
     
+    // New criterion: flag reads with >=3 mismatches having low base qualities (Phred <= 15)
+    let lowq_mis = count_low_qual_mismatches_cigar_eqx(read, 15);
+    if lowq_mis >= 3 {
+        debug!("[is_read_noisy] low_qual_mismatch_check - {} flagged noisy: {} mismatches with baseQ <= 15", qname, lowq_mis);
+        return true;
+    }
+
     // Paired-end specific checks
     let aln_len = read.reference_end() - read.reference_start();
     if aln_len < 75 {
@@ -561,5 +568,31 @@ fn base_to_index(base: char) -> usize {
         'G' => 3,
         _ => 4,  // N or any other base
     }
+}
+
+/// Count mismatches whose read base qualities are <= qual_threshold using CIGAR 'X' only.
+/// Requires alignments produced with --eqx so that mismatches are represented explicitly.
+fn count_low_qual_mismatches_cigar_eqx(read: &Record, qual_threshold: u8) -> usize {
+    let mut read_offset: usize = 0;
+    let quals = read.qual();
+    let mut count = 0usize;
+    for op in read.cigar().iter() {
+        let len = op.len() as usize;
+        match op.char() {
+            'X' => {
+                let end = read_offset.saturating_add(len).min(quals.len());
+                for q in &quals[read_offset..end] {
+                    if *q <= qual_threshold { count += 1; }
+                }
+                read_offset += len;
+            }
+            'M' | '=' => { read_offset += len; }
+            'I' | 'S' => { read_offset += len; }
+            'D' | 'N' => { /* consumes ref only */ }
+            'H' | 'P' => { /* consumes neither */ }
+            _ => {}
+        }
+    }
+    count
 }
 

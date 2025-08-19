@@ -321,10 +321,10 @@ def judge_misalignment_by_extreme_vardensity(seq):
 def calculate_coefficient(arr2d):
     # Span size is the weight for later mean value calculation
     rank = arr2d[:, 7]
-    span = (arr2d[:, 1] - arr2d[:, 0])
+    span = (arr2d[:, 1] - arr2d[:, 0])/100
     depth_frac = (1 - arr2d[:, 4]/arr2d[:, 2]).astype(types.float32)
 
-    return rank * span * np.sqrt(depth_frac)
+    return (rank * span).astype(types.float32)*depth_frac
 
 
 
@@ -826,7 +826,7 @@ def inspect_by_haplotypes(input_bam,
         # If only one read pair is in the iterating haplotype, it is a scattered haplotype, it should not be considered since the poor coverage
         qnames = [ qn for qn in qnames if qn not in total_lowqual_qnames ]
         total_qnames.update(set(qnames))
-        if len(qnames) < 3:
+        if len(qnames) <= 3:
             scatter_hid_dict[hid] = True
             continue
 
@@ -976,7 +976,7 @@ def inspect_by_haplotypes(input_bam,
         total_record_df = total_record_df.loc[np.logical_not(total_record_df["extreme_vard"]) & \
                                               np.logical_not(total_record_df["scatter_hap"]) & \
                                               (total_record_df["total_depth"] >= 5) & \
-                                              (total_record_df["hap_max_sim_scores"] <= 8), :]
+                                              (total_record_df["hap_max_sim_scores"] <= 5), :]
         # total_record_df.loc[:, "coefficient"] = np.clip(total_record_df["coefficient"] + total_record_df["hap_max_sim_scores"], 10e-3, None)
         if total_record_df.shape[0] == 0:
             failed_lp = True
