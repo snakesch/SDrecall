@@ -40,8 +40,8 @@ fn read_bed_regions(bed_path: &str) -> Result<Vec<(String, u64, u64)>> {
 
 /// Check if a read should be included based on multi-aligned filter
 fn should_include_read(record: &bam::Record, multi_aligned: bool) -> bool {
-    // Always require MAPQ < 50 for inclusion (new mandatory condition)
-    if record.mapq() >= 50 {
+    // Always require MAPQ < 60 for inclusion (new mandatory condition)
+    if record.mapq() >= 60 {
         return false;
     }
 
@@ -94,7 +94,7 @@ fn should_include_read(record: &bam::Record, multi_aligned: bool) -> bool {
 
     // If both AS and XS are available, check deviation
     if let (Some(as_score), Some(xs_score)) = (as_score_opt, xs_score_opt) {
-        (as_score - xs_score).abs() <= 5
+        (as_score - xs_score).abs() <= 10
     } else {
         // If AS or XS is missing, fallback to just the MAPQ < 50 check (already enforced above)
         // This satisfies the "alternative condition" without additional logic

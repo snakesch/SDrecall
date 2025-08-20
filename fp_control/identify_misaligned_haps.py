@@ -351,7 +351,7 @@ def sweep_region_inspection(input_bam,
 
 def calculate_coefficient_per_group(record_df, logger=logger):
     # Generate a rank for haplotypes
-    record_df["rank"] = rank_unique_values(record_df["var_count"].to_numpy() * 50 + record_df["indel_count"].to_numpy())
+    record_df["rank"] = rank_unique_values(record_df["hap_max_sim_scores"].to_numpy())
     # logger.info(f"Before calculating the coefficient for this region, the dataframe looks like :\n{record_df[:10].to_string(index=False)}\n")
     record_df["coefficient"] = calculate_coefficient(record_df.loc[:, ["start",
                                                                        "end",
@@ -779,20 +779,28 @@ def cal_similarity_score(varcounts_among_refseqs):
     '''
     # Initialize a dictionary to store the maximum similarity between the haplotype and the reference sequence from homologous counterparts
     hap_max_sim_scores = {}
+    hap_max_psvs = {}
     # For each haplotype, find the maximum similarity delta.
 
     # Iterate over all the reference genome similarities for all the haplotypes
     for hid, gdict in varcounts_among_refseqs.items():
-        max_psv = 0
+        max_psv = -100
+        max_psv_c = 0
         for _, pairs in gdict.items():
             # pairs now contain tuples of (varcount, alt_varcount, shared_psv)
             total_shared_psv = np.sum([t[2] for t in pairs])
-            if total_shared_psv > max_psv:
-                max_psv = total_shared_psv
+            alt_varcount = np.sum([t[1] for t in pairs])
+            shared_psv_ratio = total_shared_psv / np.sum([t[0] for t in pairs])
+            mixed_psv_metric = 4 * shared_psv_ratio + total_shared_psv - (alt_varcount - total_shared_psv)
+            if mixed_psv_metric > max_psv:
+                max_psv = mixed_psv_metric
+            if total_shared_psv > max_psv_c:
+                max_psv_c = total_shared_psv
 
         hap_max_sim_scores[hid] = max_psv
+        hap_max_psvs[hid] = max_psv_c
 
-    return hap_max_sim_scores
+    return hap_max_sim_scores, hap_max_psvs
 
 
 
@@ -905,9 +913,10 @@ def inspect_by_haplotypes(input_bam,
 
     # Calculate the maximum similarity score for all the haplotypes
     # Detailed explanation of the similarity score is in the docstring of the function cal_similarity_score
-    hap_max_sim_scores = cal_similarity_score(varcounts_among_refseqs)
+    hap_max_sim_scores, hap_max_psvs = cal_similarity_score(varcounts_among_refseqs)
     # Log the final reference sequence similarities for all the haplotypes
     logger.info(f"Final ref sequence similarities for all the haplotypes are {hap_max_sim_scores}")
+    logger.info(f"Final ref sequence PSVs for all the haplotypes are {hap_max_psvs}")
 
     sweep_region_bed = input_bam.replace(".bam", ".sweep.bed")
     # Remove the scattered haplotypes from the sweep regions
@@ -970,13 +979,14 @@ def inspect_by_haplotypes(input_bam,
         total_record_df["scatter_hap"] = total_record_df["hap_id"].map(scatter_hid_dict).fillna(False)
         total_record_df["hap_var_count"] = total_record_df["hap_id"].map(hid_var_count)
         total_record_df["hap_max_sim_scores"] = total_record_df["hap_id"].map(hap_max_sim_scores).fillna(0)
+        total_record_df["hap_max_psvs"] = total_record_df["hap_id"].map(hap_max_psvs).fillna(0)
         # total_record_df.loc[:, "coefficient"] = total_record_df["coefficient"] * 100 + total_record_df.loc[:, "var_count"]
         total_record_df.to_csv(compare_haplotype_meta_tab.replace(".tsv", ".raw.tsv"), sep = "\t", index = False)
         logger.info(f"Successfully saved the raw haplotype comparison meta table to {compare_haplotype_meta_tab.replace('.tsv', '.raw.tsv')}. And it looks like \n{total_record_df[:10].to_string(index=False)}\n")
         total_record_df = total_record_df.loc[np.logical_not(total_record_df["extreme_vard"]) & \
                                               np.logical_not(total_record_df["scatter_hap"]) & \
                                               (total_record_df["total_depth"] >= 5) & \
-                                              (total_record_df["hap_max_sim_scores"] <= 5), :]
+                                              (total_record_df["hap_max_sim_scores"] <= 10), :]
         # total_record_df.loc[:, "coefficient"] = np.clip(total_record_df["coefficient"] + total_record_df["hap_max_sim_scores"], 10e-3, None)
         if total_record_df.shape[0] == 0:
             failed_lp = True
