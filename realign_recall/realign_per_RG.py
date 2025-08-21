@@ -39,8 +39,10 @@ def process_masked_bam( rg_tag,
     raw_masked_vcf = raw_masked_bam.replace(".bam", ".vcf.gz")
     reads_dir = os.path.dirname(sd_freads)
     paired_reads_dir = os.path.join(reads_dir, f"paired_after_rmdups")
-    rmdup_sd_freads = os.path.join(paired_reads_dir, os.path.basename(sd_freads))
-    rmdup_sd_rreads = os.path.join(paired_reads_dir, os.path.basename(sd_rreads))
+    rmdup_sd_freads = sd_freads.replace(".fastq", ".rmdup.fastq")
+    rmdup_sd_rreads = sd_rreads.replace(".fastq", ".rmdup.fastq")
+    rmdup_sd_paired_freads = os.path.join(paired_reads_dir, os.path.basename(rmdup_sd_freads))
+    rmdup_sd_paired_rreads = os.path.join(paired_reads_dir, os.path.basename(rmdup_sd_rreads))
 
 
     cmd = f"bash {shell_utils} quick_check_bam_validity {raw_masked_bam} && \
@@ -80,9 +82,9 @@ def process_masked_bam( rg_tag,
         
         cmd = f"cat {fc_sd_freads} {nfc_sd_freads} > {sd_freads} && \
                 cat {fc_sd_rreads} {nfc_sd_rreads} > {sd_rreads} && \
-                seqkit rmdup -n -o {sd_freads}.rmdup.fastq {sd_freads} && \
-                seqkit rmdup -n -o {sd_rreads}.rmdup.fastq {sd_rreads} && \
-                seqkit pair -1 {sd_freads}.rmdup.fastq -2 {sd_rreads}.rmdup.fastq -O {paired_reads_dir}"
+                seqkit rmdup -n -o {rmdup_sd_freads} {sd_freads} && \
+                seqkit rmdup -n -o {rmdup_sd_rreads} {sd_rreads} && \
+                seqkit pair -1 {rmdup_sd_freads} -2 {rmdup_sd_rreads} -O {paired_reads_dir}"
         executeCmd(cmd, logger=logger)
         
         # Now perform the mapping
@@ -90,8 +92,8 @@ def process_masked_bam( rg_tag,
                 independent_minimap2_masked \
                 -a {masked_genome} \
                 -s {sample_ID} \
-                -f {rmdup_sd_freads} \
-                -r {rmdup_sd_rreads} \
+                -f {rmdup_sd_paired_freads} \
+                -r {rmdup_sd_paired_rreads} \
                 -g {ref_genome} \
                 -o {raw_masked_bam} \
                 -t {threads} \
