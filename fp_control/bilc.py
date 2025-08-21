@@ -116,9 +116,10 @@ def lp_solve_remained_haplotypes(total_record_df,
         if included_hapids.size <= 2:
             continue
         rank_2_count = group[group["rank"] <= 2].shape[0]
+        rank_1_count = group[group["rank"] <= 1].shape[0]
         # Column index extraction
         hapid_indices = [hapid_to_index[hapid] for hapid in included_hapids]
-        lower_bound = included_hapids.size - rank_2_count
+        lower_bound = included_hapids.size - rank_2_count if group["total_depth"].mean() > 6 else included_hapids.size - rank_1_count
         upper_bound = max(included_hapids.size - 2, lower_bound)
         status = highs.addRow(0,
                               lower_bound,

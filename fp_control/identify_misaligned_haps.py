@@ -434,7 +434,19 @@ def record_haplotype_rank(haplotype_dict, mean_read_length = 150):
         seq, reads, span, _ = haplotype_dict[hid]
         starts[i] = span[0]
         ends[i] = span[1]
-        depth = len(reads) * mean_read_length/max(len(seq), mean_read_length)
+        # Calculate average depth over this span as:
+        # total number of reference-aligned bases contributed by all reads within the span
+        # divided by the span length (using the consensus sequence length for consistency).
+        region_start = span[0]
+        region_len = len(seq)
+        region_end_excl = region_start + region_len
+        cov_bases = 0
+        for r in reads:
+            s = max(r.reference_start, region_start)
+            e = min(r.reference_end, region_end_excl)
+            if e > s:
+                cov_bases += (e - s)
+        depth = int(cov_bases / region_len) if region_len > 0 else 0
         hap_depths[i] = depth
         hap_ids[i] = hid
         var_counts[i] = count_var(seq)
@@ -749,6 +761,8 @@ def stat_refseq_similarity(intrin_bam_ncls,
         else:
             shared_psv = 0
 
+        shared_psv += shared_indel_pos_abs.size
+
         logger.debug(f"For haplotype {hid}, within region {span}, comparing to the genomic sequence {homo_refseq_qname}. Variant count is {varcount}, alt-var count vs homologs is {alt_varcount}, shared PSV (ALT-consistent) count is {shared_psv}.")
         if homo_refseq_qname in varcounts_among_refseqs[hid]:
             varcounts_among_refseqs[hid][homo_refseq_qname].append((varcount, alt_varcount, shared_psv))
@@ -790,8 +804,8 @@ def cal_similarity_score(varcounts_among_refseqs):
             # pairs now contain tuples of (varcount, alt_varcount, shared_psv)
             total_shared_psv = np.sum([t[2] for t in pairs])
             alt_varcount = np.sum([t[1] for t in pairs])
-            shared_psv_ratio = total_shared_psv / np.sum([t[0] for t in pairs])
-            mixed_psv_metric = 4 * shared_psv_ratio + total_shared_psv - (alt_varcount - total_shared_psv)
+            shared_psv_ratio = total_shared_psv / np.sum([t[0] for t in pairs]) if np.sum([t[0] for t in pairs]) > 0 else min(1, total_shared_psv)
+            mixed_psv_metric = 3 * shared_psv_ratio + total_shared_psv - (alt_varcount - total_shared_psv)
             if mixed_psv_metric > max_psv:
                 max_psv = mixed_psv_metric
             if total_shared_psv > max_psv_c:
@@ -802,6 +816,42 @@ def cal_similarity_score(varcounts_among_refseqs):
 
     return hap_max_sim_scores, hap_max_psvs
 
+
+
+def select_regions_with_min_haplotypes_from_hapbeds(hid_cov_beds,
+                                                    output_bed=None,
+                                                    min_haplotypes=3,
+                                                    use_cli=True,
+                                                    logger=logger):
+    """
+    Select intervals covered by >= min_haplotypes distinct haplotypes.
+
+    hid_cov_beds: dict {hap_id: bed_path} for per-haplotype merged coverage.
+    """
+    if output_bed is None:
+        output_bed = prepare_tmp_file(suffix=".hap_overlap.bed").name
+
+    # Keep determinism
+    bed_list = [hid_cov_beds[hid] for hid in sorted(hid_cov_beds)]
+    if len(bed_list) < min_haplotypes:
+        logger.warning(f"Only {len(bed_list)} haplotypes have coverage; need at least {min_haplotypes}.")
+        return None
+
+    if use_cli:
+        cmd = (
+            f"bedtools multiinter -i {' '.join(bed_list)} | "
+            f"mawk -F '\\t' -v k={min_haplotypes} '$4 >= k{{printf \"%s\\t%s\\t%s\\n\", $1, $2, $3}}' | "
+            f"bedtools sort -i stdin > {output_bed}"
+        )
+        executeCmd(cmd, logger=logger)
+        bt = pb.BedTool(output_bed)
+        return bt if bt.count() > 0 else None
+    else:
+        multi = pb.BedTool().multi_intersect(i=bed_list)
+        # Keep only chrom,start,end; count in field 4
+        filt = multi.filter(lambda iv: int(iv[3]) >= min_haplotypes).cut([0, 1, 2]).sort().merge()
+        filt.saveas(output_bed)
+        return pb.BedTool(output_bed) if filt.count() > 0 else None
 
 
 def inspect_by_haplotypes(input_bam,
@@ -827,7 +877,7 @@ def inspect_by_haplotypes(input_bam,
     logger.info("All the haplotype IDs are :\n{}\n".format(list(hap_qname_info.keys())))
     varcounts_among_refseqs = defaultdict(dict)
     total_qnames = set()
-    # hid_cov_beds = {}
+    hid_cov_beds = {}
 
     # Iterate over all the haplotypes
     for hid, qnames in hap_qname_info.items():
@@ -847,13 +897,14 @@ def inspect_by_haplotypes(input_bam,
 
         # Extract all the continuous regions covered by the iterating haplotype
         conregion_dict = extract_continuous_regions_dict(reads)
-        # Write the continuous regions to the temporary file
+        # Write the continuous regions to a temporary bed file for this haplotype
         region_str = ""
         for span, reads in conregion_dict.items():
             region_str += f"{reads[0].reference_name}\t{span[0]}\t{span[1]}\n"
 
-        # pb.BedTool(region_str, from_string = True).sort().merge().saveas(hid_cov_bed)
-        # hid_cov_beds[hid] = hid_cov_bed
+        hid_cov_bed = prepare_tmp_file(suffix = f".haplotype_{hid}.cov.bed").name
+        pb.BedTool(region_str, from_string=True).sort().merge().saveas(hid_cov_bed)
+        hid_cov_beds[hid] = hid_cov_bed
 
         # Iterate over all the continuous regions covered by the iterating haplotype
         for span, reads in conregion_dict.items():
@@ -874,13 +925,13 @@ def inspect_by_haplotypes(input_bam,
 
             # Judge if the consensus sequence of the haplotype within the iterating continuous region contains extremely high variant density
             extreme_vard = judge_misalignment_by_extreme_vardensity(consensus_sequence)
-            logger.debug(f"For haplotype {hid}, within region {span}, the consensus sequence is {consensus_sequence.tolist()}. The extreme variant density is {extreme_vard}.")
 
             # Count the variant count of the consensus sequence
             var_count = count_var(consensus_sequence)
 
             # Update the variant count of the iterating haplotype
             hid_var_count[hid] += var_count
+            logger.info(f"For haplotype {hid}, within region {chrom}:{span[0]}-{span[1]}, the consensus sequence is {consensus_sequence.tolist()}. The extreme variant density is {extreme_vard}. The varcount is {var_count}, till now the total varcount is {hid_var_count[hid]}")
 
             # Log the extreme variant density and the variant count of the iterating haplotype
             # logger.debug(f"For haplotype {hid} at continuous region {span}, the consensus sequence is {consensus_sequence.tolist()}. The extreme variant density is {extreme_vard}.")
@@ -919,13 +970,14 @@ def inspect_by_haplotypes(input_bam,
     logger.info(f"Final ref sequence PSVs for all the haplotypes are {hap_max_psvs}")
 
     sweep_region_bed = input_bam.replace(".bam", ".sweep.bed")
-    # Remove the scattered haplotypes from the sweep regions
-    # hid_cov_beds = {hid:bed for hid, bed in hid_cov_beds.items() if hid not in scatter_hid_dict}
-    # if len(hid_cov_beds) == 0:
-    #     logger.warning(f"All haplotypes are scattered (only supported by 1 read pair). Meaning this bam covers a region with barely no reads covered. In total only {len(hap_qname_info)} haplotypes are involved. Directly discard this region for further analysis.")
-    #     return set([]), set([])
-    
-    sweep_regions = sweep_region_inspection(input_bam, sweep_region_bed, logger = logger)
+    # Select regions overlapped by at least 3 haplotypes from cached per-haplotype coverage
+    sweep_regions = select_regions_with_min_haplotypes_from_hapbeds(
+        hid_cov_beds,
+        output_bed=sweep_region_bed,
+        min_haplotypes=3,
+        use_cli=True,
+        logger=logger
+    )
     logger.info(f"Now the sweep regions are saved to {sweep_region_bed}.")
 
     '''
@@ -944,9 +996,9 @@ def inspect_by_haplotypes(input_bam,
     # Iterate over all the windows
     for interval in sweep_regions:
         region = (interval.chrom, interval.start, interval.end)
-        if interval.end - interval.start < 20:
-            logger.debug(f"The region {region} is too small (spanning only {interval.end - interval.start} bp) for calculating the coefficients of haplotype items in the binary integer linear programming model.")
-            continue
+        # if interval.end - interval.start < 20:
+        #     logger.debug(f"The region {region} is too small (spanning only {interval.end - interval.start} bp) for calculating the coefficients of haplotype items in the binary integer linear programming model.")
+        #     continue
         # logger.debug(f"Inspecting the region {region} to compose the binary integer linear programming model.")
         record_df, total_hap_vectors, total_err_vectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx, read_ref_pos_dict = identify_misalignment_per_region(region,
                                                                                                                                                                             bam_ncls,
@@ -1031,3 +1083,5 @@ def inspect_by_haplotypes(input_bam,
         total_qnames = set([qname for qnames in hap_qname_info.values() for qname in qnames])
         correct_map_qnames = total_qnames - mismap_qnames
         return correct_map_qnames, mismap_qnames
+
+
