@@ -177,7 +177,7 @@ def is_read_noisy(read, paired, mapq_filter, basequal_median_filter=15, filter_n
 			return True
 
 		num_low = numba_sum(q < basequal_median_filter)
-		if num_low >= 50:
+		if num_low >= 75:
 			logger.debug(f"is_read_noisy: {read.query_name} flagged noisy: #bases with Q<{basequal_median_filter} is {num_low} >= 50")
 			return True
 
@@ -185,7 +185,7 @@ def is_read_noisy(read, paired, mapq_filter, basequal_median_filter=15, filter_n
 		softclip = 0
 		if read.cigartuples is not None:
 			softclip = numba_sum(np.array([t[1] for t in read.cigartuples if t[0] == 4], dtype=np.uint16))
-		if softclip >= 20:
+		if softclip >= 75:
 			logger.debug(f"is_read_noisy: {read.query_name} flagged noisy: total soft-clip length {softclip} >= 20")
 			return True
 

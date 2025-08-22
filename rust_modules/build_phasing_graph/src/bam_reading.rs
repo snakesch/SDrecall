@@ -56,7 +56,7 @@ fn is_read_noisy(
     
     // New criterion: flag reads with >=3 mismatches having low base qualities (Phred <= 15)
     let lowq_mis = count_low_qual_mismatches_cigar_eqx(read, 15);
-    if lowq_mis > 3 {
+    if lowq_mis >= 3 {
         debug!("[is_read_noisy] low_qual_mismatch_check - {} flagged noisy: {} mismatches with baseQ <= 15", qname, lowq_mis);
         return true;
     }
@@ -96,7 +96,7 @@ fn is_read_noisy(
         }
         
         let low_qual_count = read.qual().iter().filter(|&&q| q < basequal_median_filter).count();
-        if low_qual_count >= 50 {
+        if low_qual_count >= 75 {
             debug!("[is_read_noisy] low_qual_count_check - {} flagged noisy: #bases with Q<{} is {} >= 50", qname, basequal_median_filter, low_qual_count);
             return true;
         }
@@ -107,7 +107,7 @@ fn is_read_noisy(
             .map(|c| c.len())
             .sum();
         
-        if soft_clip_bases >= 20 {
+        if soft_clip_bases >= 75 {
             debug!("[is_read_noisy] soft_clip_check - {} flagged noisy: total soft-clip length {} >= 20\n", qname, soft_clip_bases);
             return true;
         }
