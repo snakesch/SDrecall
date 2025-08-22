@@ -280,7 +280,7 @@ def build_phasing_graph_rust(
             True,                        # filter_noisy: bool
             True,                        # use_collate: bool
             int(max(1, threads)),        # threads: u8 (cap >=1)
-            python_log_level             # log_level: Option<&str>
+            log_level=python_log_level   # log_level: Option<&str>
         )
 
         if rust_result is None:

@@ -54,7 +54,10 @@ pub fn extract_query_seq(record: &Record) -> Result<(Vec<u8>, Vec<i64>), Box<dyn
 
 /// Slice query sequence to a specific genomic interval using reference positions
 /// 
-/// Returns the subsequence that aligns to the given genomic interval
+/// Returns the subsequence (encoded A=0,T=1,C=2,G=3,N=4) that aligns to the given genomic interval
+/// [interval_start, interval_end). Insertion bases (ref_positions == -1) are included if they are
+/// flanked by aligned positions (nearest prev and next non -1) whose reference coordinates both fall
+/// within the interval, indicating an insertion anchored inside the interval.
 pub fn slice_seq_to_interval(
     query_seq: &[u8], 
     ref_positions: &[i64],
@@ -62,15 +65,55 @@ pub fn slice_seq_to_interval(
     interval_end: i64
 ) -> Vec<u8> {
     let mut result = Vec::new();
-    
-    for (i, &ref_pos) in ref_positions.iter().enumerate() {
-        if ref_pos >= interval_start && ref_pos < interval_end {
+    let n = ref_positions.len();
+
+    for i in 0..n {
+        let rp = ref_positions[i];
+        if rp >= interval_start && rp < interval_end {
             if i < query_seq.len() {
                 result.push(query_seq[i]);
             }
+            continue;
+        }
+
+        if rp == -1 {
+            // Find nearest previous aligned reference position
+            let mut prev_ref: Option<i64> = None;
+            let mut j = i;
+            while j > 0 {
+                j -= 1;
+                let rpj = ref_positions[j];
+                if rpj != -1 {
+                    prev_ref = Some(rpj);
+                    break;
+                }
+            }
+            // Find nearest next aligned reference position
+            let mut next_ref: Option<i64> = None;
+            let mut k = i + 1;
+            while k < n {
+                let rpk = ref_positions[k];
+                if rpk != -1 {
+                    next_ref = Some(rpk);
+                    break;
+                }
+                k += 1;
+            }
+
+            // Include this insertion base only if both flanking aligned positions exist
+            // and both lie within the interval
+            if let (Some(pr), Some(nr)) = (prev_ref, next_ref) {
+                let prev_in = pr >= interval_start && pr < interval_end;
+                let next_in = nr >= interval_start && nr < interval_end;
+                if prev_in && next_in {
+                    if i < query_seq.len() {
+                        result.push(query_seq[i]);
+                    }
+                }
+            }
         }
     }
-    
+
     result
 }
 
@@ -821,6 +864,7 @@ pub fn determine_same_haplotype(
         
         debug!("[determine_same_haplotype] Sequences IDENTICAL between reads {} and {}", read1_id, read2_id);
         debug!("[determine_same_haplotype] Interval: {}:{}-{} (length={})", chrom, start, end, end - start);
+		debug!("[determine_same_haplotype] Within this interval, the query seq for {} is {:?}, the query seq for {} is {:?}", read1_id, interval_seq1, read2_id, interval_seq2);
         
         // Sequences are identical - likely same haplotype
         

@@ -32,6 +32,8 @@ fn configure_rust_logging(level_str: &str) {
     // Initialize pyo3-log once per process; safe to call multiple times
     let _ = pyo3_log::try_init();
     log::set_max_level(rust_level);
+	// Print the log level to stderr
+	println!("Rust logging configured with level: {:?} (from Python: {})", rust_level, level_str);
 
     info!("[configure_rust_logging] Rust logging configured with level: {:?} (from Python: {})", rust_level, level_str);
     debug!("[configure_rust_logging] pyo3-log forwarding active");
@@ -72,10 +74,11 @@ pub fn build_phasing_graph_rust(
     if let Some(level_str) = log_level {
         configure_rust_logging(level_str);
     } else {
+		println!("Rust logging configured with level: Debug (from Python: None), configure_rust_logging is not called");
         log::set_max_level(LevelFilter::Debug);
     }
     
-    info!("[build_phasing_graph_rust] Starting Rust graph building with mean_read_length={}", mean_read_length);
+    info!("[build_phasing_graph_rust] Starting Rust graph building with mean_read_length={}, the log level is {}", mean_read_length, log_level.unwrap_or("unknown"));
     info!("[build_phasing_graph_rust] Processing BAM file: {}", bam_file_path);
     
     // Read BAM file and build read pair map directly in Rust
