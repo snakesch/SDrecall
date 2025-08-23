@@ -805,7 +805,7 @@ def cal_similarity_score(varcounts_among_refseqs):
             total_shared_psv = np.sum([t[2] for t in pairs])
             alt_varcount = np.sum([t[1] for t in pairs])
             shared_psv_ratio = total_shared_psv / np.sum([t[0] for t in pairs]) if np.sum([t[0] for t in pairs]) > 0 else min(1, total_shared_psv)
-            mixed_psv_metric = 3 * shared_psv_ratio + total_shared_psv - (alt_varcount - total_shared_psv)
+            mixed_psv_metric = 2 * shared_psv_ratio + total_shared_psv - (alt_varcount - total_shared_psv)
             if mixed_psv_metric > max_psv:
                 max_psv = mixed_psv_metric
             if total_shared_psv > max_psv_c:
@@ -975,7 +975,7 @@ def inspect_by_haplotypes(input_bam,
                                               output_bed=sweep_region_bed,
                                               depth_cutoff=5,
                                               window_size=120,
-                                              step_size=30,
+                                              step_size=20,
                                               logger=logger )
     # sweep_regions = select_regions_with_min_haplotypes_from_hapbeds(
     #     hid_cov_beds,
