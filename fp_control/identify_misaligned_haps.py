@@ -209,7 +209,7 @@ def assemble_consensus(seq_arrays, qual_arrays, read_spans):
         # assert rel_end - rel_start == len(qual), f"Found the relative start and end positions (determined by {len(seq)}) of the current sequence are not equal to the quality vector size {len(qual)} for read {read} at position {start}"
         # qual here is actually err prob, so smaller the better
         mask = qual <= consensus_qual[rel_start:rel_end]
-        mask = mask & (qual < 0.033)
+        mask = mask & (qual < 0.031622777)
 
         # Update the consensus sequence and quality scores where the current sequence has higher quality
         consensus_seq[rel_start:rel_end][mask] = seq[mask]
@@ -805,7 +805,7 @@ def cal_similarity_score(varcounts_among_refseqs):
             total_shared_psv = np.sum([t[2] for t in pairs])
             alt_varcount = np.sum([t[1] for t in pairs])
             shared_psv_ratio = total_shared_psv / np.sum([t[0] for t in pairs]) if np.sum([t[0] for t in pairs]) > 0 else min(1, total_shared_psv)
-            mixed_psv_metric = 4 * shared_psv_ratio + total_shared_psv - (alt_varcount - total_shared_psv)
+            mixed_psv_metric = 3 * shared_psv_ratio + total_shared_psv - (alt_varcount - total_shared_psv)
             if mixed_psv_metric > max_psv:
                 max_psv = mixed_psv_metric
             if total_shared_psv > max_psv_c:
@@ -884,7 +884,7 @@ def inspect_by_haplotypes(input_bam,
         # If only one read pair is in the iterating haplotype, it is a scattered haplotype, it should not be considered since the poor coverage
         qnames = [ qn for qn in qnames if qn not in total_lowqual_qnames ]
         total_qnames.update(set(qnames))
-        if len(qnames) < 3:
+        if len(qnames) <= 3:
             scatter_hid_dict[hid] = True
             continue
 
@@ -971,13 +971,19 @@ def inspect_by_haplotypes(input_bam,
 
     sweep_region_bed = input_bam.replace(".bam", ".sweep.bed")
     # Select regions overlapped by at least 3 haplotypes from cached per-haplotype coverage
-    sweep_regions = select_regions_with_min_haplotypes_from_hapbeds(
-        hid_cov_beds,
-        output_bed=sweep_region_bed,
-        min_haplotypes=3,
-        use_cli=True,
-        logger=logger
-    )
+    sweep_regions = sweep_region_inspection(  input_bam,
+                                              output_bed=sweep_region_bed,
+                                              depth_cutoff=5,
+                                              window_size=120,
+                                              step_size=30,
+                                              logger=logger )
+    # sweep_regions = select_regions_with_min_haplotypes_from_hapbeds(
+    #     hid_cov_beds,
+    #     output_bed=sweep_region_bed,
+    #     min_haplotypes=3,
+    #     use_cli=True,
+    #     logger=logger
+    # )
     logger.info(f"Now the sweep regions are saved to {sweep_region_bed}.")
 
     '''

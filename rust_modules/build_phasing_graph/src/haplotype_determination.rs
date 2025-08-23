@@ -222,8 +222,8 @@ fn count_continuous_blocks(bool_array: &[bool]) -> usize {
 /// 
 /// Equivalent to Python's count_snv function
 fn count_snv_blocks(hap_vector: &[i16]) -> usize {
-    let snv_positions: Vec<bool> = hap_vector.iter().map(|&val| val == -4).collect();
-    count_continuous_blocks(&snv_positions)
+    // Count SNVs per site (val == -4), not contiguous blocks
+    hap_vector.iter().filter(|&&val| val == -4).count()
 }
 
 /// Count indel blocks in a haplotype vector  
