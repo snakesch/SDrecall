@@ -223,13 +223,13 @@ pub fn build_phasing_graph(
         result.node_read_ids.push((id1, id2));
 
         // Extract haplotype vector and error vector for both reads
-        let hap_vec1 = get_hap_vector(&rp.read1, &mut result.read_hap_vectors)?;
-        let hap_vec2 = match &rp.read2 {
+        let _hap_vec1 = get_hap_vector(&rp.read1, &mut result.read_hap_vectors)?;
+        let _hap_vec2 = match &rp.read2 {
             Some(r2) => get_hap_vector(r2, &mut result.read_hap_vectors)?,
             None => vec![],
         };
-        let error_vec1 = get_error_vector(&rp.read1, &mut result.read_error_vectors)?;
-        let error_vec2 = match &rp.read2 {
+        let _error_vec1 = get_error_vector(&rp.read1, &mut result.read_error_vectors)?;
+        let _error_vec2 = match &rp.read2 {
             Some(r2) => get_error_vector(r2, &mut result.read_error_vectors)?,
             None => vec![],
         };
