@@ -200,7 +200,8 @@ def realign_filter_per_cov(bam,
     '''
 
     # Import the auto-selection function that chooses between Rust and Python implementations
-    from fp_control.graph_build import build_phasing_graph_auto as build_phasing_graph, RUST_AVAILABLE
+    # Import the Rust implementation directly (no fallback)
+    from fp_control.graph_build import build_phasing_graph
     from fp_control.identify_misaligned_haps import inspect_by_haplotypes
     from fp_control.phasing import phasing_realigned_reads
 
@@ -241,54 +242,26 @@ def realign_filter_per_cov(bam,
     total_num = 0
 
     # Check if Rust implementation is available to decide the processing path
-    if RUST_AVAILABLE:
-        logger.info("Using Rust-accelerated processing - bypassing Python BAM preprocessing")
-        # Calculate mean read length directly for Rust implementation
-        mean_read_length = calculate_mean_read_length(bam)
-        logger.info(f"Average read length: {mean_read_length}")
-        
-        # Call Rust implementation directly - it handles BAM processing internally
-        phased_graph, weight_matrix, qname_to_node, total_readhap_vector, total_readerr_vector, read_ref_pos_dict, total_lowqual_qnames = build_phasing_graph(bam,
-                                                                                                                                                              intrinsic_bam,
-                                                                                                                                                              None,  # ncls_dict - not used by Rust
-                                                                                                                                                              None,  # read_dict - not used by Rust
-                                                                                                                                                              None,  # qname_dict - not used by Rust
-                                                                                                                                                              mean_read_length,
-                                                                                                                                                              set(),  # total_lowqual_qnames - empty initially
-                                                                                                                                                              ref_genome,
-                                                                                                                                                              threads=threads,
-                                                                                                                                                              logger = logger)
-        if phased_graph is None:
-            return None, None, None
-            
-        logger.info(f"Rust implementation: Graph built with {phased_graph.num_vertices()} vertices and {phased_graph.num_edges()} edges")
-        
-    else:
-        logger.info("Using Python implementation - performing BAM preprocessing")
+    # Always use Rust-accelerated processing - bypass Python BAM preprocessing
+    logger.info("Using Rust-accelerated processing - bypassing Python BAM preprocessing")
+    # Calculate mean read length directly for Rust implementation
+    mean_read_length = calculate_mean_read_length(bam)
+    logger.info(f"Average read length: {mean_read_length}")
+    
+    # Call Rust implementation directly - it handles BAM processing internally
+    phased_graph, weight_matrix, qname_to_node, total_readhap_vector, total_readerr_vector, read_ref_pos_dict, total_lowqual_qnames, node_read_ids = build_phasing_graph(
+                                                                                                                                                                            bam,
+                                                                                                                                                                            mean_read_length,
+                                                                                                                                                                            set(),  # total_lowqual_qnames - empty initially
+                                                                                                                                                                            ref_genome,
+                                                                                                                                                                            mapq_filter = recall_mq_cutoff,
+                                                                                                                                                                            basequal_median_filter = basequal_median_cutoff,
+                                                                                                                                                                            threads=threads,
+                                                                                                                                                                            logger = logger
+                                                                                                                                                                        )
 
-        # parse the results from the tuple returned by migrate_bam_to_ncls
-        ncls_dict, read_dict, qname_dict, qname_idx_dict, total_lowqual_qnames = bam_ncls
-        
-        logger.info(f"Successfully migrated the intrinsic BAM file {intrinsic_bam} to NCLS format\n")
-        logger.info(f"Intrinsic BAM contains {len(intrin_bam_ncls[1])} reads in total.\n\n")
-        
-        # Calculate the mean read length of the input bam file
-        mean_read_length = calculate_mean_read_length(bam)
-        logger.info(f"Average read length: {mean_read_length}")
-
-        # Create the read-pair graph using Python implementation
-        phased_graph, weight_matrix, qname_to_node, total_readhap_vector, total_readerr_vector, read_ref_pos_dict, total_lowqual_qnames = build_phasing_graph(bam,
-                                                                                                                                                              intrinsic_bam,
-                                                                                                                                                              ncls_dict,
-                                                                                                                                                              read_dict,
-                                                                                                                                                              qname_dict,
-                                                                                                                                                              mean_read_length,
-                                                                                                                                                              total_lowqual_qnames,
-                                                                                                                                                              ref_genome,
-                                                                                                                                                              threads=threads,
-                                                                                                                                                              logger = logger)
-        if phased_graph is None:
-            return None, None, None
+    if phased_graph is None:
+        return None, None, None
 
     # Common code for both implementations
     bam_graph = bam.replace(".bam", ".phased.graphml")
@@ -303,6 +276,9 @@ def realign_filter_per_cov(bam,
     qname_hap_info, hap_qname_info = phasing_realigned_reads(phased_graph,
                                                              weight_matrix,
                                                              edge_weight_cutoff,
+                                                             total_readhap_vector = total_readhap_vector,
+                                                             total_readerr_vector = total_readerr_vector,
+                                                             node_read_ids = node_read_ids,
                                                              logger = logger)
 
     # Inspect the raw BAM corresponding variants to get the high density regions

@@ -135,3 +135,38 @@ def numba_bool_indexing(arr, idx_arr):
 @numba.njit(types.bool_(types.int32[:], types.int32), fastmath=True)
 def numba_contain(arr, scalar):
     return (arr == scalar).any()
+
+
+@numba.njit(types.int32[:,:](types.boolean[:]), fastmath=True)
+def extract_true_stretches(bool_array):
+    n = len(bool_array)
+
+    # Pre-allocate maximum possible space (worst case: every element is True)
+    stretches = np.zeros((n, 2), dtype=np.int32)
+    count = 0
+
+    if n == 0:
+        return stretches[:count]
+
+    in_stretch = False
+    start_idx = 0
+
+    for i in range(n):
+        if bool_array[i]:
+            if not in_stretch:
+                in_stretch = True
+                start_idx = i
+        else:
+            if in_stretch:
+                stretches[count, 0] = start_idx
+                stretches[count, 1] = i - 1
+                count += 1
+                in_stretch = False
+
+    # Handle the case where the array ends with a True stretch
+    if in_stretch:
+        stretches[count, 0] = start_idx
+        stretches[count, 1] = n - 1
+        count += 1
+
+    return stretches[:count]

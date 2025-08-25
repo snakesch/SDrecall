@@ -454,7 +454,7 @@ fn get_error_vector(
 /// Generate unique read ID for caching purposes
 /// 
 /// Equivalent to Python's get_read_id function: f"{read.query_name}:{read.flag}"
-fn get_read_id(record: &Record) -> Result<String, Box<dyn std::error::Error>> {
+pub fn get_read_id(record: &Record) -> Result<String, Box<dyn std::error::Error>> {
     let qname = std::str::from_utf8(record.qname())?;
     Ok(format!("{}:{}", qname, record.flags()))
 }

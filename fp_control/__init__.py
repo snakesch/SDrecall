@@ -4,7 +4,7 @@ from .bam_ncls import (overlapping_reads_iterator, overlap_qname_idx_iterator,
                       calculate_mean_read_length, is_read_noisy, migrate_bam_to_ncls)
 from .bilc import lp_solve_remained_haplotypes
 from .gce_algorithm import gce_algorithm
-from .graph_build import build_phasing_graph, stat_ad_to_dict
+from .graph_build import build_phasing_graph
 from .pairwise_read_inspection import determine_same_haplotype
 from .phasing import phasing_realigned_reads, find_cliques_in_components, find_components_inside_filtered_cliques
 from .identify_misaligned_haps import inspect_by_haplotypes
@@ -33,7 +33,6 @@ __all__ = [
     
     # From graph_build
     'build_phasing_graph',
-    'stat_ad_to_dict',
     
     # From pairwise_read_inspection
     'determine_same_haplotype',

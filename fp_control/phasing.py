@@ -8,9 +8,9 @@ from collections import defaultdict
 from src.log import logger
 from fp_control.gce_algorithm import gce_algorithm
 from fp_control.numba_operators import numba_isin, \
-										numba_and, \
-										numba_sum, \
-										apply_index_mask
+                                        numba_and, \
+                                        numba_sum, \
+                                        apply_index_mask
 
 
 
@@ -49,7 +49,13 @@ def graph_vertex_iter(vertex_indices, graph):
 
 
 
-def find_cliques_in_components(graph, weight_matrix, ew_cutoff = 0.201, logger = logger):
+def find_cliques_in_components(graph, 
+                               weight_matrix, 
+                               ew_cutoff = 0.201, 
+                               total_readhap_vector = None, 
+                               total_readerr_vector = None, 
+                               node_read_ids = None, 
+                               logger = logger):
     '''
     This generator function is to find the largest cliques in each component of the graph
 
@@ -125,12 +131,48 @@ def find_cliques_in_components(graph, weight_matrix, ew_cutoff = 0.201, logger =
         small_row_mask = numba_isin(np.arange(weight_matrix.shape[0], dtype=np.int32), small_row_indices)
         selected_indices = apply_index_mask(weight_matrix.shape[0], small_row_mask)
         small_weight_matrix = weight_matrix[np.ix_(small_row_mask, small_row_mask)]
+        small_row_indices = set()
 
-        logger.info(f"Start to find the largest clique in the small weight matrix, which contains {numba_sum(small_row_mask)} rows and columns. Contiguous? {small_weight_matrix.flags['C_CONTIGUOUS']}")
+        logger.info(f"Second round: Start to find the largest clique in the small weight matrix, which contains {numba_sum(small_row_mask)} rows and columns. Contiguous? {small_weight_matrix.flags['C_CONTIGUOUS']}")
         cliques_iter = gce_algorithm(selected_indices, small_weight_matrix, cutoff = ew_cutoff/2, logger = logger)
         for clique in cliques_iter:
-            logger.info(f"Second round (edge weight cutoff = {ew_cutoff/2}): Receiving a clique containing {len(clique)} qnames in the small weight matrix")
-            yield "second_round", clique
+            if len(clique) > 5:
+                logger.info(f"Second round (edge weight cutoff = {ew_cutoff/2}): Receiving a clique containing {len(clique)} qnames in the small weight matrix")
+                yield "second_round", clique
+            else:
+                clique_member_read_ids = [rid for qid in clique for rid in node_read_ids[qid]]
+                logger.info(f"The clique contains {len(clique)} read pairs, the read ids are {clique_member_read_ids}")
+                reads_haps = [total_readhap_vector[rid] for rid in clique_member_read_ids]
+                reads_errs = [total_readerr_vector[rid] for rid in clique_member_read_ids]
+                i = 0
+                for read_hap, read_err in zip(reads_haps, reads_errs):
+                    rid = clique_member_read_ids[i]
+                    logger.info(f"The read id is {rid}, the read haplotype is {read_hap.tolist()}, the read error is {read_err.tolist()}")
+                    i += 1
+                    valid_qual_mask = read_err <= 0.03
+                    valid_qual_haps = read_hap[valid_qual_mask]
+                    logger.info(f"For read id {rid}, the valid quality haplotype is {valid_qual_haps.tolist()}")
+                    if not (valid_qual_haps == 1).all():
+                        logger.info(f"The clique contains {len(clique)} read pairs, it contains variant, it should be yielded now")
+                        logger.info(f"Second round (edge weight cutoff = {ew_cutoff/2}): Receiving a clique containing {len(clique)} qnames in the small weight matrix")
+                        yield "second_round", clique
+                        break
+
+                logger.info(f"The clique contains {len(clique)} read pairs, it does not contain variant, it should be added to the small row indices for next round phasing")
+                small_row_indices.update(clique)
+
+    # Now this is the third round of clique finding, assembling the remaining read pairs to increase the phasing sensitivity a little bit
+    if len(small_row_indices) > 0:
+        small_row_mask = numba_isin(np.arange(weight_matrix.shape[0], dtype=np.int32), small_row_indices)
+        selected_indices = apply_index_mask(weight_matrix.shape[0], small_row_mask)
+        small_weight_matrix = weight_matrix[np.ix_(small_row_mask, small_row_mask)]
+        small_row_indices = set()
+
+        logger.info(f"Third round: Start to find the largest clique in the small weight matrix, which contains {numba_sum(small_row_mask)} rows and columns. Contiguous? {small_weight_matrix.flags['C_CONTIGUOUS']}")
+        cliques_iter = gce_algorithm(selected_indices, small_weight_matrix, cutoff = ew_cutoff/20, logger = logger)
+        for clique in cliques_iter:
+            logger.info(f"Third round (edge weight cutoff = {ew_cutoff/20}): Receiving a clique containing {len(clique)} qnames in the small weight matrix")
+            yield "third_round", clique
 
 
 
@@ -187,12 +229,15 @@ def find_components_inside_filtered_cliques(final_cliques,
 
 
 
-def phasing_realigned_reads(phased_graph, weight_matrix, edge_weight_cutoff, logger = logger):
+def phasing_realigned_reads(phased_graph, weight_matrix, edge_weight_cutoff, total_readhap_vector = {}, total_readerr_vector = {}, node_read_ids = None, logger = logger):
     logger.info(f"Now start finding haplotypes in the setup weight matrix, the numba parallel threads are set to {get_num_threads()}")
     total_cliques = find_cliques_in_components( phased_graph,
-												weight_matrix,
-												ew_cutoff = edge_weight_cutoff,
-												logger = logger )
+                                                weight_matrix,
+                                                ew_cutoff = edge_weight_cutoff,
+                                                total_readhap_vector = total_readhap_vector,
+                                                total_readerr_vector = total_readerr_vector,
+                                                node_read_ids = node_read_ids,
+                                                logger = logger )
 
     total_cliques = list(total_cliques)
 

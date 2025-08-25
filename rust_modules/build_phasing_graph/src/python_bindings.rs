@@ -202,6 +202,21 @@ fn export_graph_result_to_python(
     
     let node_list = PyList::new_bound(py, node_names);
     dict.set_item("vertex_names", node_list)?;
+
+    // 2b. Export per-node read IDs as list of (id1, id2_or_None) tuples
+    let node_ids_py = PyList::empty_bound(py);
+    for (id1, id2_opt) in &result.node_read_ids {
+        let items = vec![
+            id1.clone().into_py(py),
+            match id2_opt {
+                Some(s) => s.clone().into_py(py),
+                None => py.None().into_py(py),
+            },
+        ];
+        let tuple = PyTuple::new_bound(py, &items);
+        node_ids_py.append(tuple)?;
+    }
+    dict.set_item("node_read_ids", node_ids_py)?;
     
     // 3. Export weight matrix as numpy array - direct f32 export
     match result.weight_matrix() {

@@ -348,6 +348,21 @@ def heuristic_find_largest_edge_weight_clique_sparse(matrix_data,
             trial_max_ind, trial_max_value = efficient_row_max(trial_data, 
                                                                trial_cols, 
                                                                index_mask)
+
+            if trial_max_value <= cutoff:
+                continue
+
+            # Find out whether the edge weight is largest for the trial_max_ind row (for the to-be-added clique member)
+            tobe_member_start = matrix_indptr[trial_max_ind]
+            tobe_member_end = matrix_indptr[trial_max_ind+1]
+            tobe_member_data = matrix_data[tobe_member_start: tobe_member_end]
+            tobe_member_cols = matrix_indices[tobe_member_start: tobe_member_end]
+            tobe_member_max_ind, tobe_member_max_value = efficient_row_max( tobe_member_data,
+                                                                            tobe_member_cols,
+                                                                            index_mask)
+            if tobe_member_max_value - trial_max_value > 1e-4:
+                # Now find out that the to-be-added clique member has a larger edge weight than the trial_max_value
+                continue
             
             # Update global maximum if this trial member has a better edge
             if trial_max_value > next_max_value:

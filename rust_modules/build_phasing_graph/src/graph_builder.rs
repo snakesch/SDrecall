@@ -6,9 +6,11 @@ use crate::structs::{
     ReadPairMap, AlleleDepthMap, PhasingGraphResult, HaplotypeConfig, 
     FastIntervals, OverlapInterval
 };
-use crate::haplotype_determination::{determine_same_haplotype, HaplotypeResult};
+use crate::haplotype_determination::{determine_same_haplotype, HaplotypeResult, get_read_id};
 use rust_htslib::bam::Record;
 use rust_htslib::bam::ext::BamRecordExtensions;
+
+
 
 /*
 ================================================================================
@@ -209,6 +211,16 @@ pub fn build_phasing_graph(
                 qname_idx, node.index()
             ).into());
         }
+    
+        // Record per-node read IDs (read1 id, optional read2 id) aligned by qname_idx
+        let rp = read_pair_map.readpair_dict.get(&qname_idx)
+            .ok_or_else(|| format!("Missing ReadPair for qname_idx {}", qname_idx))?;
+        let id1 = get_read_id(&rp.read1)?;
+        let id2 = match &rp.read2 {
+            Some(r2) => Some(get_read_id(r2)?),
+            None => None,
+        };
+        result.node_read_ids.push((id1, id2));
         
         debug!("[build_phasing_graph] Verified node correspondence: qname_idx {} = NodeIndex({})", qname_idx, node.index());
     }

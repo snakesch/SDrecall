@@ -409,6 +409,9 @@ pub struct PhasingGraphResult {
     
     /// Low quality/noisy qnames that were filtered out during BAM processing
     pub lowqual_qnames: HashSet<String>,
+
+    /// Per-node read IDs: (read1_id, read2_id or None), aligned to qname_idx = NodeIndex.index()
+    pub node_read_ids: Vec<(String, Option<String>)>,
 }
 
 impl PhasingGraphResult {
@@ -420,6 +423,7 @@ impl PhasingGraphResult {
             read_error_vectors: AHashMap::new(),
             read_ref_pos_dict: AHashMap::new(),
             lowqual_qnames: HashSet::new(),
+            node_read_ids: Vec::new(),
         }
     }
     

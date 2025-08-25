@@ -8,7 +8,7 @@ from numba import types, prange
 
 from fp_control.bam_ncls import overlapping_reads_iterator
 from fp_control.bilc import lp_solve_remained_haplotypes
-from fp_control.numba_operators import numba_sum
+from fp_control.numba_operators import numba_sum, extract_true_stretches
 from src.log import logger
 from src.utils import executeCmd, prepare_tmp_file
 from fp_control.pairwise_read_inspection import get_hapvector_from_cigar, \
@@ -43,7 +43,10 @@ def ref_genome_similarity(query_read_vector,
     return var_size, alt_var_size
 
 
-@numba.njit(types.Tuple((types.int32[:], types.int32[:]))(types.int16[:], types.int16[:], types.int32), fastmath=True)
+
+
+
+@numba.njit(types.Tuple((types.int32[:], types.int32[:], types.int32[:]))(types.int16[:], types.int16[:], types.int32), fastmath=True)
 def numba_shared_variant_positions(vec1,
                                    vec2,
                                    overlap_start):
@@ -64,9 +67,11 @@ def numba_shared_variant_positions(vec1,
     n = vec1.size
     # Preallocate with max possible and truncate
     snv_out = np.empty(n, dtype=np.int32)
-    indel_out = np.empty(n, dtype=np.int32)
+    ins_out = np.empty(n, dtype=np.int32)
+    del_out = np.empty(n, dtype=np.int32)
     snv_count = 0
-    indel_count = 0
+    ins_count = 0
+    del_count = 0
     for i in range(n):
         v1 = vec1[i]
         v2 = vec2[i]
@@ -76,12 +81,22 @@ def numba_shared_variant_positions(vec1,
             snv_count += 1
         # Shared indel: deletion (-6) or insertion marker (>1)
         # Note insertion is marked at a single index with positive value > 1
-        is_indel1 = (v1 == -6) or (v1 > 1)
-        is_indel2 = (v2 == -6) or (v2 > 1)
-        if is_indel1 and is_indel2:
-            indel_out[indel_count] = overlap_start + i
-            indel_count += 1
-    return snv_out[:snv_count], indel_out[:indel_count]
+        is_ins1 = (v1 > 1)
+        is_ins2 = (v2 > 1)
+        if is_ins1 and is_ins2 and v1 == v2:
+            ins_out[ins_count] = overlap_start + i
+            ins_count += 1
+
+    # We need to find the identical block of deletion span to determine that they share an deletion event, not 1 single base deviated in deletion span
+    vec1_del_spans = extract_true_stretches(vec1 == -6)
+    vec2_del_spans = extract_true_stretches(vec2 == -6)
+    for vec1_del_span in vec1_del_spans:
+        for vec2_del_span in vec2_del_spans:
+            if (vec1_del_span == vec2_del_span).all():
+                for i in range(vec1_del_span[0], vec1_del_span[1] + 1):
+                    del_out[del_count] = overlap_start + i
+                    del_count += 1
+    return snv_out[:snv_count], ins_out[:ins_count], del_out[:del_count]
 
 
 @numba.njit(types.void(types.int32[:], types.int32, types.int32[:], types.int8[:], types.int32[:, :]), fastmath=True)
@@ -239,39 +254,7 @@ def count_window_var_density(array, padding_size = 25):
     return density_arr
 
 
-@numba.njit(types.int32[:,:](types.boolean[:]), fastmath=True)
-def extract_true_stretches(bool_array):
-    n = len(bool_array)
 
-    # Pre-allocate maximum possible space (worst case: every element is True)
-    stretches = np.zeros((n, 2), dtype=np.int32)
-    count = 0
-
-    if n == 0:
-        return stretches[:count]
-
-    in_stretch = False
-    start_idx = 0
-
-    for i in range(n):
-        if bool_array[i]:
-            if not in_stretch:
-                in_stretch = True
-                start_idx = i
-        else:
-            if in_stretch:
-                stretches[count, 0] = start_idx
-                stretches[count, 1] = i - 1
-                count += 1
-                in_stretch = False
-
-    # Handle the case where the array ends with a True stretch
-    if in_stretch:
-        stretches[count, 0] = start_idx
-        stretches[count, 1] = n - 1
-        count += 1
-
-    return stretches[:count]
 
 
 
@@ -351,7 +334,7 @@ def sweep_region_inspection(input_bam,
 
 def calculate_coefficient_per_group(record_df, logger=logger):
     # Generate a rank for haplotypes
-    record_df["rank"] = rank_unique_values(record_df["hap_max_sim_scores"].to_numpy())
+    record_df["rank"] = rank_unique_values(record_df["psv_count"].to_numpy())
     # logger.info(f"Before calculating the coefficient for this region, the dataframe looks like :\n{record_df[:10].to_string(index=False)}\n")
     record_df["coefficient"] = calculate_coefficient(record_df.loc[:, ["start",
                                                                        "end",
@@ -360,6 +343,7 @@ def calculate_coefficient_per_group(record_df, logger=logger):
                                                                        "hap_depth",
                                                                        "var_count",
                                                                        "indel_count",
+                                                                       "psv_count",
                                                                        "rank"]].to_numpy(dtype=np.int32))
     # logger.info(f"After calculating the coefficient for this region, the dataframe looks like :\n{record_df[:10].to_string(index=False)}\n")
     return record_df
@@ -419,13 +403,14 @@ def group_by_dict_optimized(vprop, vertices):
 
 
 
-def record_haplotype_rank(haplotype_dict, mean_read_length = 150):
+def record_haplotype_rank(haplotype_dict, mean_read_length = 150, hap_max_psv_pos = {}):
     starts = np.empty(len(haplotype_dict), dtype=np.int32)
     ends = np.empty(len(haplotype_dict), dtype=np.int32)
     hap_depths = np.empty(len(haplotype_dict), dtype=np.int32)
     hap_ids = np.empty(len(haplotype_dict), dtype=np.int32)
     var_counts = np.empty(len(haplotype_dict), dtype=np.int32)
     indel_counts = np.empty(len(haplotype_dict), dtype=np.int32)
+    psv_counts = np.empty(len(haplotype_dict), dtype=np.int32)
     total_depth_col = np.empty(len(haplotype_dict), dtype=np.int32)
 
     i = 0
@@ -451,11 +436,13 @@ def record_haplotype_rank(haplotype_dict, mean_read_length = 150):
         hap_ids[i] = hid
         var_counts[i] = count_var(seq)
         indel_counts[i] = count_continuous_indel_blocks(seq)
+        # Count the number of PSV positions for this haplotype that falls within this region
+        psv_counts[i] = len(np.intersect1d(hap_max_psv_pos[hid], np.arange(region_start, region_end_excl)))
         total_depth += depth
         i += 1
 
     total_depth_col.fill(total_depth)
-    return np.column_stack((starts, ends, total_depth_col, hap_ids, hap_depths, var_counts, indel_counts))
+    return np.column_stack((starts, ends, total_depth_col, hap_ids, hap_depths, var_counts, indel_counts, psv_counts))
 
 
 
@@ -529,6 +516,7 @@ def identify_misalignment_per_region(region,
                                      qname_to_node,
                                      lowqual_qnames,
                                      clique_sep_component_idx,
+                                     hap_max_psv_pos = {},
                                      total_hapvectors = {},
                                      total_errvectors = {},
                                      total_genomic_haps = {},
@@ -613,12 +601,12 @@ def identify_misalignment_per_region(region,
         final_clusters[haplotype_idx] = (overlapping_con_seq, reads, overlapping_span, qnames)
 
     logger.debug(f"The Final haplotype dict looks like this \n{'\n'.join([f'{haplotype_idx}: encoded_consensus_sequence: {con_seq.tolist()}, reads: {reads}, span: {span}, qnames: {qnames}' for haplotype_idx, (con_seq, reads, span, qnames) in final_clusters.items()])}")
-    if len(final_clusters) <= 2:
+    if len(final_clusters) <= 0:
         logger.warning(f"Only {len(final_clusters)} haplotype clusters are found for region {region_str}. Do not need to choose 2 haplotypes, Skip this region.\n")
         return None, total_hapvectors, total_errvectors, total_genomic_haps, qname_hap_info, clique_sep_component_idx, read_ref_pos_dict
 
-    record_2d_arr = record_haplotype_rank( final_clusters, mean_read_length = mean_read_length )
-    record_df = pd.DataFrame(record_2d_arr, columns = ["start", "end", "total_depth", "hap_id", "hap_depth", "var_count", "indel_count"])
+    record_2d_arr = record_haplotype_rank( final_clusters, mean_read_length = mean_read_length, hap_max_psv_pos = hap_max_psv_pos )
+    record_df = pd.DataFrame(record_2d_arr, columns = ["start", "end", "total_depth", "hap_id", "hap_depth", "var_count", "indel_count", "psv_count"])
     record_df["chrom"] = chrom
 
     logger.debug(f"Found {len(final_clusters)} haplotype clusters for region {region_str}. The dataframe recording the haplotypes in this region looks like :\n{record_df.to_string(index=False)}\n")
@@ -728,9 +716,12 @@ def stat_refseq_similarity(intrin_bam_ncls,
         varcount, alt_varcount = ref_genome_similarity(interval_con_seq, interval_genomic_hap)
 
         # Compute positions with shared SNV and shared indel statuses in both vectors
-        shared_snv_pos_abs, shared_indel_pos_abs = numba_shared_variant_positions(interval_con_seq.astype(np.int16),
+        shared_snv_pos_abs, shared_ins_pos_abs, shared_del_pos_abs = numba_shared_variant_positions(interval_con_seq.astype(np.int16),
                                                                                   interval_genomic_hap.astype(np.int16),
-                                                                                  np.int32(span[0]))
+                                                                                  np.int32(overlap_span[0]))
+        # Default: empty verified SNV list; indels are directly verified as positions where both indicate indel
+        verified_shared_snv_pos_abs = np.empty(0, dtype=np.int32)
+
         if shared_snv_pos_abs.size > 0:
             # Tally consensus ALT codes at shared positions from member reads
             num_pos = shared_snv_pos_abs.size
@@ -757,17 +748,47 @@ def stat_refseq_similarity(intrin_bam_ncls,
                                             h_ref_positions,
                                             h_qseq_encoded)
 
-            shared_psv = count_equal_alt(cons_codes.astype(np.int8), h_base)
-        else:
-            shared_psv = 0
+            # Verified shared PSV SNV positions: both defined and equal ALT
+            eq_mask = (cons_codes >= 0) & (h_base >= 0) & (cons_codes == h_base)
+            verified_shared_snv_pos_abs = shared_snv_pos_abs[eq_mask]
 
-        shared_psv += shared_indel_pos_abs.size
+        # Shared PSV count for scoring: verified SNVs + shared indels
+        shared_psv_ins_effect_size = 0
+        for ins_pos in shared_ins_pos_abs:
+            # Retrieve the encoded alignment status at the position of indels
+            ins_encode_event = interval_genomic_hap[ins_pos - overlap_span[0]]
+            if ins_encode_event > 0:
+                logger.info(f"The homologous genomic sequence aligned at interval {chrom}:{overlap_span[0]}-{overlap_span[1]} shared an insertion at position {ins_pos}. The encoded event is {interval_genomic_hap[ins_pos - overlap_span[0]]}, the alignment status on consensus sequence is {interval_con_seq[ins_pos - overlap_span[0]]}")
+                shared_psv_ins_effect_size += np.ceil(ins_encode_event/4)
+            elif ins_encode_event < 0:
+                logger.warning(f"The homologous genomic sequence aligned at interval {chrom}:{overlap_span[0]}-{overlap_span[1]} shared an insertion at position {ins_pos}. The encoded event is {interval_genomic_hap[ins_pos - overlap_span[0]]}, the alignment status on consensus sequence is {interval_con_seq[ins_pos - overlap_span[0]]}")
+
+        shared_psv_del_effect_size = 0
+        for del_pos in shared_del_pos_abs:
+            # Retrieve the encoded alignment status at the position of indels
+            del_encode_event = interval_genomic_hap[del_pos - overlap_span[0]]
+            if del_encode_event < 0:
+                logger.info(f"The homologous genomic sequence aligned at interval {chrom}:{overlap_span[0]}-{overlap_span[1]} shared a deletion at position {del_pos}. The encoded event is {interval_genomic_hap[del_pos - overlap_span[0]]}, the alignment status on consensus sequence is {interval_con_seq[del_pos - overlap_span[0]]}")
+                shared_psv_del_effect_size += 1
+            elif del_encode_event >= 0:
+                logger.warning(f"The homologous genomic sequence aligned at interval {chrom}:{overlap_span[0]}-{overlap_span[1]} shared a deletion at position {del_pos}. The encoded event is {interval_genomic_hap[del_pos - overlap_span[0]]}, the alignment status on consensus sequence is {interval_con_seq[del_pos - overlap_span[0]]}")
+
+        shared_psv = verified_shared_snv_pos_abs.size + shared_psv_ins_effect_size + shared_psv_del_effect_size
+        verified_shared_indel_pos_abs = np.unique(np.concatenate([shared_ins_pos_abs, shared_del_pos_abs]))
 
         logger.debug(f"For haplotype {hid}, within region {span}, comparing to the genomic sequence {homo_refseq_qname}. Variant count is {varcount}, alt-var count vs homologs is {alt_varcount}, shared PSV (ALT-consistent) count is {shared_psv}.")
         if homo_refseq_qname in varcounts_among_refseqs[hid]:
-            varcounts_among_refseqs[hid][homo_refseq_qname].append((varcount, alt_varcount, shared_psv))
+            varcounts_among_refseqs[hid][homo_refseq_qname].append((varcount,
+                                                                    alt_varcount,
+                                                                    shared_psv,
+                                                                    verified_shared_snv_pos_abs,
+                                                                    verified_shared_indel_pos_abs))
         else:
-            varcounts_among_refseqs[hid][homo_refseq_qname] = [(varcount, alt_varcount, shared_psv)]
+            varcounts_among_refseqs[hid][homo_refseq_qname] = [(varcount,
+                                                                alt_varcount,
+                                                                shared_psv,
+                                                                verified_shared_snv_pos_abs,
+                                                                verified_shared_indel_pos_abs)]
 
     return varcounts_among_refseqs, read_ref_pos_dict
 
@@ -794,27 +815,39 @@ def cal_similarity_score(varcounts_among_refseqs):
     # Initialize a dictionary to store the maximum similarity between the haplotype and the reference sequence from homologous counterparts
     hap_max_sim_scores = {}
     hap_max_psvs = {}
+    hap_max_psv_pos = {}
     # For each haplotype, find the maximum similarity delta.
 
     # Iterate over all the reference genome similarities for all the haplotypes
     for hid, gdict in varcounts_among_refseqs.items():
         max_psv = -100
         max_psv_c = 0
-        for _, pairs in gdict.items():
-            # pairs now contain tuples of (varcount, alt_varcount, shared_psv)
+        max_psv_pos = np.empty(0, dtype=np.int32)
+        for homo_refseq_qname, pairs in gdict.items():
+            # pairs now contain tuples of (varcount, alt_varcount, shared_psv, verified_shared_snv_pos_abs, verified_shared_indel_pos_abs)
             total_shared_psv = np.sum([t[2] for t in pairs])
             alt_varcount = np.sum([t[1] for t in pairs])
-            shared_psv_ratio = total_shared_psv / np.sum([t[0] for t in pairs]) if np.sum([t[0] for t in pairs]) > 0 else min(1, total_shared_psv)
-            mixed_psv_metric = 2 * shared_psv_ratio + total_shared_psv - (alt_varcount - total_shared_psv)
+            total_varcount = np.sum([t[0] for t in pairs])
+            # Concat the verified shared SNV positions and indel positions
+            verified_shared_snv_pos_abs = np.concatenate([t[3] for t in pairs])
+            verified_shared_indel_pos_abs = np.concatenate([t[4] for t in pairs])
+            # Unique the positions and sort them and conat snv and indel to a single array of abs genomic positions, sort in ascending order
+            unique_psv_pos_abs = np.unique(np.concatenate([verified_shared_snv_pos_abs, verified_shared_indel_pos_abs]))
+            psv_pos_abs = np.sort(unique_psv_pos_abs)
+            # Count the number of unique positions
+            shared_psv_ratio = total_shared_psv / total_varcount if total_varcount > 0 else min(1, total_shared_psv)
+            mixed_psv_metric = 4 * shared_psv_ratio + total_shared_psv - (alt_varcount - total_shared_psv)
+
             if mixed_psv_metric > max_psv:
-                max_psv = mixed_psv_metric
-            if total_shared_psv > max_psv_c:
                 max_psv_c = total_shared_psv
+                max_psv = mixed_psv_metric
+                max_psv_pos = psv_pos_abs
 
         hap_max_sim_scores[hid] = max_psv
         hap_max_psvs[hid] = max_psv_c
+        hap_max_psv_pos[hid] = max_psv_pos  
 
-    return hap_max_sim_scores, hap_max_psvs
+    return hap_max_sim_scores, hap_max_psvs, hap_max_psv_pos
 
 
 
@@ -838,10 +871,20 @@ def select_regions_with_min_haplotypes_from_hapbeds(hid_cov_beds,
         return None
 
     if use_cli:
+        # Build a small mapping file once
+        map_file = prepare_tmp_file(suffix=".hid_beds.tsv").name
+        with open(map_file, "w") as f:
+            for hid in sorted(hid_cov_beds):
+                f.write(f"{hid}\t{hid_cov_beds[hid]}\n")
+
+        # Stream: append hid as col4, sort, merge counting distinct hids, filter by k
         cmd = (
-            f"bedtools multiinter -i {' '.join(bed_list)} | "
-            f"mawk -F '\\t' -v k={min_haplotypes} '$4 >= k{{printf \"%s\\t%s\\t%s\\n\", $1, $2, $3}}' | "
-            f"bedtools sort -i stdin > {output_bed}"
+            f"while IFS=$'\\t' read -r hid bed; do "
+            f"  awk -v id=\"$hid\" 'BEGIN{{OFS=\"\\t\"}}{{print $1,$2,$3,id}}' \"$bed\"; "
+            f"done < {map_file} | "
+            "sort -k1,1 -k2,2n | "
+            "bedtools merge -i stdin -c 4 -o distinct,count | "
+            f"mawk -F '\\t' -v k={min_haplotypes} '$5>=k{{print $1\"\\t\"$2\"\\t\"$3}}' > {output_bed}"
         )
         executeCmd(cmd, logger=logger)
         bt = pb.BedTool(output_bed)
@@ -886,7 +929,6 @@ def inspect_by_haplotypes(input_bam,
         total_qnames.update(set(qnames))
         if len(qnames) <= 3:
             scatter_hid_dict[hid] = True
-            continue
 
         logger.debug(f"The haplotype {hid} contains {len(qnames)} read pairs in total. And the qnames are: \n{qnames}\n")
         # hid_cov_bed = prepare_tmp_file(suffix = f".haplotype_{hid}.cov.bed", tmp_dir = tmp_dir).name
@@ -964,7 +1006,10 @@ def inspect_by_haplotypes(input_bam,
 
     # Calculate the maximum similarity score for all the haplotypes
     # Detailed explanation of the similarity score is in the docstring of the function cal_similarity_score
-    hap_max_sim_scores, hap_max_psvs = cal_similarity_score(varcounts_among_refseqs)
+    hap_max_sim_scores, hap_max_psvs, hap_max_psv_pos = cal_similarity_score(varcounts_among_refseqs)
+    for hid in hap_qname_info.keys():
+        if hid not in hap_max_sim_scores:
+            hap_max_psv_pos[hid] = np.empty(0, dtype=np.int32)
     # Log the final reference sequence similarities for all the haplotypes
     logger.info(f"Final ref sequence similarities for all the haplotypes are {hap_max_sim_scores}")
     logger.info(f"Final ref sequence PSVs for all the haplotypes are {hap_max_psvs}")
@@ -974,8 +1019,8 @@ def inspect_by_haplotypes(input_bam,
     sweep_regions = sweep_region_inspection(  input_bam,
                                               output_bed=sweep_region_bed,
                                               depth_cutoff=5,
-                                              window_size=120,
-                                              step_size=20,
+                                              window_size=100,
+                                              step_size=10,
                                               logger=logger )
     # sweep_regions = select_regions_with_min_haplotypes_from_hapbeds(
     #     hid_cov_beds,
@@ -1012,6 +1057,7 @@ def inspect_by_haplotypes(input_bam,
                                                                                                                                                                             qname_to_node,
                                                                                                                                                                             total_lowqual_qnames,
                                                                                                                                                                             clique_sep_component_idx,
+                                                                                                                                                                            hap_max_psv_pos = hap_max_psv_pos,
                                                                                                                                                                             total_errvectors = total_err_vectors,
                                                                                                                                                                             total_genomic_haps = total_genomic_haps,
                                                                                                                                                                             read_ref_pos_dict = read_ref_pos_dict,
@@ -1041,11 +1087,15 @@ def inspect_by_haplotypes(input_bam,
         # total_record_df.loc[:, "coefficient"] = total_record_df["coefficient"] * 100 + total_record_df.loc[:, "var_count"]
         total_record_df.to_csv(compare_haplotype_meta_tab.replace(".tsv", ".raw.tsv"), sep = "\t", index = False)
         logger.info(f"Successfully saved the raw haplotype comparison meta table to {compare_haplotype_meta_tab.replace('.tsv', '.raw.tsv')}. And it looks like \n{total_record_df[:10].to_string(index=False)}\n")
-        total_record_df = total_record_df.loc[np.logical_not(total_record_df["extreme_vard"]) & \
-                                              np.logical_not(total_record_df["scatter_hap"]) & \
-                                              (total_record_df["total_depth"] >= 5) & \
-                                              (total_record_df["hap_max_sim_scores"] <= 10), :]
-        # total_record_df.loc[:, "coefficient"] = np.clip(total_record_df["coefficient"] + total_record_df["hap_max_sim_scores"], 10e-3, None)
+        remove_hids = total_record_df.loc[(total_record_df["scatter_hap"]) | \
+                                          (total_record_df["hap_max_sim_scores"] > 10) | \
+                                          (total_record_df["extreme_vard"]) | \
+                                          (total_record_df["total_depth"] < 5), "hap_id"].unique()
+
+        kept_scatter_hids = total_record_df.loc[(total_record_df["var_count"] > 1) & (total_record_df["scatter_hap"]), "hap_id"].unique()
+        remove_hids = set(remove_hids) - set(kept_scatter_hids)
+
+        total_record_df = total_record_df.loc[np.logical_not(total_record_df["hap_id"].isin(remove_hids)), :]
         if total_record_df.shape[0] == 0:
             failed_lp = True
 
