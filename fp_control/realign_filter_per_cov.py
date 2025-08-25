@@ -249,7 +249,7 @@ def realign_filter_per_cov(bam,
     logger.info(f"Average read length: {mean_read_length}")
     
     # Call Rust implementation directly - it handles BAM processing internally
-    phased_graph, weight_matrix, qname_to_node, total_readhap_vector, total_readerr_vector, read_ref_pos_dict, total_lowqual_qnames, node_read_ids = build_phasing_graph(
+    phased_graph, weight_matrix, qname_to_node, total_readhap_vector, total_readerr_vector, read_ref_pos_dict, total_lowqual_qnames, node_read_ids, read_id_read_dict = build_phasing_graph(
                                                                                                                                                                             bam,
                                                                                                                                                                             mean_read_length,
                                                                                                                                                                             set(),  # total_lowqual_qnames - empty initially
@@ -301,7 +301,8 @@ def realign_filter_per_cov(bam,
         correct_qnames, mismap_qnames = inspect_by_haplotypes(bam,
                                                               hap_qname_info,
                                                               qname_hap_info,
-                                                              bam_ncls,
+                                                              read_id_read_dict,
+                                                              node_read_ids,
                                                               intrin_bam_ncls,
                                                               qname_to_node,
                                                               total_lowqual_qnames,

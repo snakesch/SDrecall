@@ -1,6 +1,7 @@
 import graph_tool.all as gt
 import numpy as np
 import logging
+import pysam
 
 from typing import Optional, Set, Dict as TypeDict, Tuple
 
@@ -79,7 +80,7 @@ def build_phasing_graph(
 
     if rust_result is None:
         logger.warning("Rust returned None. Skipping this region.")
-        return None, None, None, None, None, None, total_lowqual_qnames
+        return None, None, None, None, None, None, total_lowqual_qnames, set(), {}
     
     # Convert Rust results back to graph-tool format
     edges = rust_result['edges']
@@ -94,10 +95,10 @@ def build_phasing_graph(
     # Early exit for empty result
     if vertex_names is None:
         logger.warning(f"Rust returned no vertices. Skipping this region.")
-        return None, None, None, None, None, None, updated_lowqual_qnames
+        return None, None, None, None, None, None, updated_lowqual_qnames, set(), {}
     if len(vertex_names) <= 2:
         logger.warning(f"Rust returned {len(vertex_names)} vertices. Skipping this region.")
-        return None, None, None, None, None, None, updated_lowqual_qnames
+        return None, None, None, None, None, None, updated_lowqual_qnames, set(), {}
 
     logger.info(f"There are {len(updated_lowqual_qnames)} low quality qnames, which is a {type(updated_lowqual_qnames)} of qnames")
     logger.info(f"There are {len(read_hap_vectors)} read haplotype vectors, which is a {type(read_hap_vectors)} of dict")
@@ -124,12 +125,12 @@ def build_phasing_graph(
     wm_obj = rust_result.get('weight_matrix', None)
     if wm_obj is None:
         logger.warning("Rust returned no weight matrix (None). Skipping this region.")
-        return None, None, None, None, None, None, updated_lowqual_qnames
+        return None, None, None, None, None, None, updated_lowqual_qnames, set(), {}
         
     weight_matrix = wm_obj.astype(np.float32)
     if weight_matrix.size == 0 or weight_matrix.shape[0] == 0:
         logger.warning(f"Rust returned empty weight matrix with shape {weight_matrix.shape}. Skipping this region.")
-        return None, None, None, None, None, None, updated_lowqual_qnames
+        return None, None, None, None, None, None, updated_lowqual_qnames, set(), {}
     logger.info(f"Using Rust weight matrix with shape {weight_matrix.shape}")
 
     # Count negative weights (incompatible pairs)
@@ -161,7 +162,13 @@ def build_phasing_graph(
     g.edge_properties["weight"] = weight_prop
     
     logger.info(f"Rust implementation: Built graph with {g.num_vertices()} vertices and {g.num_edges()} edges")
+
+    read_id_read_dict = {}
+    with pysam.AlignmentFile(bam_file) as bam:
+        for read in bam.fetch():
+            read_id = f"{read.query_name}:{read.flag}"
+            read_id_read_dict[read_id] = read
     
-    return g, weight_matrix, qname_to_node, read_hap_vectors, read_error_vectors, read_ref_pos_dict, updated_lowqual_qnames, node_read_ids
+    return g, weight_matrix, qname_to_node, read_hap_vectors, read_error_vectors, read_ref_pos_dict, updated_lowqual_qnames, node_read_ids, read_id_read_dict
 
 

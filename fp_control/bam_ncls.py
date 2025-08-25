@@ -286,11 +286,11 @@ def _process_qname_group(qname, reads, read_dict, qname_interval_dict,
 
 
 def migrate_bam_to_ncls(bam_file,
-				mapq_filter = 25,
-				basequal_median_filter = 20,
-				paired = True,
-				filter_noisy = True,
-				logger = logger):
+						mapq_filter = 10,
+						basequal_median_filter = 15,
+						paired = True,
+						filter_noisy = True,
+						logger = logger):
 	"""
 	Migrate BAM file data to NCLS (Nested Containment List) format for efficient interval querying.
 

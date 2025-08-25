@@ -900,7 +900,8 @@ def select_regions_with_min_haplotypes_from_hapbeds(hid_cov_beds,
 def inspect_by_haplotypes(input_bam,
                           hap_qname_info,
                           qname_hap_info,
-                          bam_ncls,
+                          read_dict,
+                          node_read_ids,
                           intrin_bam_ncls,
                           qname_to_node,
                           total_lowqual_qnames,
@@ -911,7 +912,6 @@ def inspect_by_haplotypes(input_bam,
                           compare_haplotype_meta_tab = "",
                           mean_read_length = 148,
                           logger = logger):
-    _, read_dict, _, qname_idx_dict, _ = bam_ncls
     record_dfs = []
     clique_sep_component_idx = 0
     hid_extreme_vard = defaultdict(bool) # Initialize a dictionary to store if the haplotype has extreme variant density
@@ -934,8 +934,9 @@ def inspect_by_haplotypes(input_bam,
         # hid_cov_bed = prepare_tmp_file(suffix = f".haplotype_{hid}.cov.bed", tmp_dir = tmp_dir).name
 
         # Extract all the qname indices and all the reads belonged to the iterating haplotype
-        qname_indices = [qname_idx_dict[qname] for qname in qnames]
-        reads = [read for qname_idx in qname_indices for read in read_dict[qname_idx]]
+        qname_indices = [qname_to_node[qname] for qname in qnames]
+        read_ids = [rid for qname_idx in qname_indices for rid in node_read_ids[qname_idx]]
+        reads = [read_dict[rid] for rid in read_ids]
 
         # Extract all the continuous regions covered by the iterating haplotype
         conregion_dict = extract_continuous_regions_dict(reads)
