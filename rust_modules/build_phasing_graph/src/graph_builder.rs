@@ -6,7 +6,7 @@ use crate::structs::{
     ReadPairMap, AlleleDepthMap, PhasingGraphResult, HaplotypeConfig, 
     FastIntervals, OverlapInterval
 };
-use crate::haplotype_determination::{determine_same_haplotype, HaplotypeResult, get_read_id};
+use crate::haplotype_determination::{determine_same_haplotype, HaplotypeResult, get_read_id, get_hap_vector, get_error_vector};
 use rust_htslib::bam::Record;
 use rust_htslib::bam::ext::BamRecordExtensions;
 
@@ -221,7 +221,19 @@ pub fn build_phasing_graph(
             None => None,
         };
         result.node_read_ids.push((id1, id2));
-        
+
+        // Extract haplotype vector and error vector for both reads
+        let hap_vec1 = get_hap_vector(&rp.read1, &mut result.read_hap_vectors)?;
+        let hap_vec2 = match &rp.read2 {
+            Some(r2) => get_hap_vector(r2, &mut result.read_hap_vectors)?,
+            None => vec![],
+        };
+        let error_vec1 = get_error_vector(&rp.read1, &mut result.read_error_vectors)?;
+        let error_vec2 = match &rp.read2 {
+            Some(r2) => get_error_vector(r2, &mut result.read_error_vectors)?,
+            None => vec![],
+        };
+
         debug!("[build_phasing_graph] Verified node correspondence: qname_idx {} = NodeIndex({})", qname_idx, node.index());
     }
     

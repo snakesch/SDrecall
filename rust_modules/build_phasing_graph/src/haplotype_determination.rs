@@ -433,7 +433,7 @@ pub fn extract_error_vector(record: &Record) -> Vec<f32> {
 /// Vector of error probabilities for this read (cached or newly computed)
 /// 
 /// Checks cache first, computes and stores if not found
-fn get_error_vector(
+pub fn get_error_vector(
     record: &Record,
     read_error_vectors: &mut AHashMap<String, ReadErrorVector>,
 ) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
@@ -462,7 +462,7 @@ pub fn get_read_id(record: &Record) -> Result<String, Box<dyn std::error::Error>
 /// Get or compute haplotype vector for a read (with caching)
 /// 
 /// Checks cache first, computes and stores if not found
-fn get_hap_vector(
+pub fn get_hap_vector(
     record: &Record,
     read_hap_vectors: &mut AHashMap<String, ReadHaplotypeVector>,
 ) -> Result<Vec<i16>, Box<dyn std::error::Error>> {
