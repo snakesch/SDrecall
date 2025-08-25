@@ -145,6 +145,7 @@ def find_cliques_in_components(graph,
                 reads_haps = [total_readhap_vector[rid] for rid in clique_member_read_ids]
                 reads_errs = [total_readerr_vector[rid] for rid in clique_member_read_ids]
                 i = 0
+                no_variant = True
                 for read_hap, read_err in zip(reads_haps, reads_errs):
                     rid = clique_member_read_ids[i]
                     logger.info(f"The read id is {rid}, the read haplotype is {read_hap.tolist()}, the read error is {read_err.tolist()}")
@@ -156,10 +157,11 @@ def find_cliques_in_components(graph,
                         logger.info(f"The clique contains {len(clique)} read pairs, it contains variant, it should be yielded now")
                         logger.info(f"Second round (edge weight cutoff = {ew_cutoff/2}): Receiving a clique containing {len(clique)} qnames in the small weight matrix")
                         yield "second_round", clique
+                        no_variant = False
                         break
-
-                logger.info(f"The clique contains {len(clique)} read pairs, it does not contain variant, it should be added to the small row indices for next round phasing")
-                small_row_indices.update(clique)
+                if no_variant:     
+                    logger.info(f"The clique contains {len(clique)} read pairs, it does not contain variant, it should be added to the small row indices for next round phasing")
+                    small_row_indices.update(clique)
 
     # Now this is the third round of clique finding, assembling the remaining read pairs to increase the phasing sensitivity a little bit
     if len(small_row_indices) > 0:
