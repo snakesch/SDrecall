@@ -898,6 +898,7 @@ def select_regions_with_min_haplotypes_from_hapbeds(hid_cov_beds,
 
 
 def inspect_by_haplotypes(input_bam,
+                          bam_ncls,
                           hap_qname_info,
                           qname_hap_info,
                           read_dict,
@@ -1090,22 +1091,15 @@ def inspect_by_haplotypes(input_bam,
         logger.info(f"Successfully saved the raw haplotype comparison meta table to {compare_haplotype_meta_tab.replace('.tsv', '.raw.tsv')}. And it looks like \n{total_record_df[:10].to_string(index=False)}\n")
         remove_hids = total_record_df.loc[(total_record_df["scatter_hap"]) | \
                                           (total_record_df["hap_max_sim_scores"] > 10) | \
-                                          (total_record_df["extreme_vard"]) | \
-                                          (total_record_df["total_depth"] < 5), "hap_id"].unique()
+                                          (total_record_df["extreme_vard"]), "hap_id"].unique()
 
-        kept_scatter_hids = total_record_df.loc[(total_record_df["var_count"] > 1) & (total_record_df["scatter_hap"]), "hap_id"].unique()
+        kept_scatter_hids = total_record_df.loc[(total_record_df["hap_var_count"] > 1) & (total_record_df["scatter_hap"]), "hap_id"].unique()
         remove_hids = set(remove_hids) - set(kept_scatter_hids)
 
         total_record_df = total_record_df.loc[np.logical_not(total_record_df["hap_id"].isin(remove_hids)), :]
+        total_record_df = total_record_df.loc[total_record_df["total_depth"] > 5, :]
         if total_record_df.shape[0] == 0:
             failed_lp = True
-
-        if not failed_lp:
-            total_record_df.loc[total_record_df["hap_var_count"] == 0, "coefficient"] = -1
-            total_record_df = total_record_df.groupby(["chrom", "start", "end"]).filter(lambda x: len(x) >= 3)
-
-            if total_record_df.shape[0] == 0:
-                failed_lp = True
     else:
         failed_lp = True
 

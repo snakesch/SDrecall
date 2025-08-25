@@ -299,6 +299,7 @@ def realign_filter_per_cov(bam,
         correct_qnames, mismap_qnames = set([qn for hs in list(hap_qname_info.values()) for qn in hs]), set([])
     else:
         correct_qnames, mismap_qnames = inspect_by_haplotypes(bam,
+                                                              bam_ncls,
                                                               hap_qname_info,
                                                               qname_hap_info,
                                                               read_id_read_dict,

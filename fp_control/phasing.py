@@ -171,9 +171,9 @@ def find_cliques_in_components(graph,
         small_row_indices = set()
 
         logger.info(f"Third round: Start to find the largest clique in the small weight matrix, which contains {numba_sum(small_row_mask)} rows and columns. Contiguous? {small_weight_matrix.flags['C_CONTIGUOUS']}")
-        cliques_iter = gce_algorithm(selected_indices, small_weight_matrix, cutoff = ew_cutoff/20, logger = logger)
+        cliques_iter = gce_algorithm(selected_indices, small_weight_matrix, cutoff = ew_cutoff/5, logger = logger)
         for clique in cliques_iter:
-            logger.info(f"Third round (edge weight cutoff = {ew_cutoff/20}): Receiving a clique containing {len(clique)} qnames in the small weight matrix")
+            logger.info(f"Third round (edge weight cutoff = {ew_cutoff/5}): Receiving a clique containing {len(clique)} qnames in the small weight matrix")
             yield "third_round", clique
 
 
