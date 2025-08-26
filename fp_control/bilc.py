@@ -110,6 +110,7 @@ def lp_solve_remained_haplotypes(total_record_df,
 
     # Adding rows
     for name, group in by_region:
+        region_str = f"{name[0]}:{name[1]}-{name[2]}"
         included_hapids = group["hap_id"].unique()
         if included_hapids.size <= 1:
             continue
@@ -123,7 +124,7 @@ def lp_solve_remained_haplotypes(total_record_df,
                               included_hapids.size,
                               np.array(hapid_indices, dtype=np.int32),
                               np.ones(included_hapids.size, dtype=np.double))
-        logger.info(f"The addrow status is {status}, the group included hap_ids are {included_hapids.tolist()}, the corresponding hap_id indices are {hapid_indices} the lower bound is {lower_bound}, the upper bound is 0.")
+        logger.info(f"For region {region_str}, the addrow status is {status}, the group included hap_ids are {included_hapids.tolist()}, the corresponding hap_id indices are {hapid_indices} the lower bound is {lower_bound}, the upper bound is 0.")
 
     # Run solver
     highs.run()

@@ -334,7 +334,7 @@ def sweep_region_inspection(input_bam,
 
 def calculate_coefficient_per_group(record_df, logger=logger):
     # Generate a rank for haplotypes
-    record_df["rank"] = rank_unique_values(record_df["psv_count"].to_numpy())
+    record_df["rank"] = rank_unique_values(record_df["hap_max_sim_scores"].to_numpy())
     # logger.info(f"Before calculating the coefficient for this region, the dataframe looks like :\n{record_df[:10].to_string(index=False)}\n")
     record_df["coefficient"] = calculate_coefficient(record_df.loc[:, ["start",
                                                                        "end",
@@ -501,7 +501,7 @@ def summarize_enclosing_haps(hap_subgraphs, qname_to_node, region, logger = logg
         for t in recover_results:
             hap_id, qnames, span, sreads, _ = t
             region_haplotype_info[span] = (sreads, set([qname_to_node[r.query_name] for r in sreads]), hap_id, qnames)
-        if len(region_haplotype_info) <= 2:
+        if len(region_haplotype_info) <= 1:
             logger.info(f"At region {region}, only found {len(region_haplotype_info)} haplotype clusters enwrapping the whole region even after the recover trial.\n")
             return None, None
 
@@ -877,16 +877,33 @@ def select_regions_with_min_haplotypes_from_hapbeds(hid_cov_beds,
             for hid in sorted(hid_cov_beds):
                 f.write(f"{hid}\t{hid_cov_beds[hid]}\n")
 
-        # Stream: append hid as col4, sort, merge counting distinct hids, filter by k
-        cmd = (
+        # Use BEDOPS to avoid argv limits and reproduce multiinter semantics:
+        # 1) Tag each BED with haplotype ID in col4, then sort with sort-bed
+        # 2) Partition the genome at all interval breakpoints
+        # 3) Map partitioned intervals to tagged inputs, count distinct IDs, threshold by k
+        # 4) Sort and merge
+        tagged_bed = prepare_tmp_file(suffix=".tagged.bed").name
+        parts_bed = prepare_tmp_file(suffix=".parts.bed").name
+
+        cmd_tag_sort = (
             f"while IFS=$'\\t' read -r hid bed; do "
-            f"  awk -v id=\"$hid\" 'BEGIN{{OFS=\"\\t\"}}{{print $1,$2,$3,id}}' \"$bed\"; "
-            f"done < {map_file} | "
-            "sort -k1,1 -k2,2n | "
-            "bedtools merge -i stdin -c 4 -o distinct,count | "
-            f"mawk -F '\\t' -v k={min_haplotypes} '$5>=k{{print $1\"\\t\"$2\"\\t\"$3}}' > {output_bed}"
+            f"  mawk -v id=\"$hid\" 'BEGIN{{FS=OFS=\"\\t\"}}{{print $1,$2,$3,id}}' \"$bed\"; "
+            f"done < {map_file} | sort-bed - > "
+            f"{tagged_bed}"
         )
-        executeCmd(cmd, logger=logger)
+        executeCmd(cmd_tag_sort, logger=logger)
+
+        executeCmd(f"bedops --partition {tagged_bed} > {parts_bed}", logger=logger)
+
+        cmd_map_filter = (
+            "bedmap --ec --delim $'\\t' --echo --echo-map-id-uniq "
+            f"{parts_bed} {tagged_bed} | "
+            f"mawk -F '\\t' -v k={min_haplotypes} "
+            "'{ ids=$NF; n=(ids==\"N/A\")?0:split(ids,a,\";\"); if (n>=k) print $1\"\\t\"$2\"\\t\"$3 }' | "
+            f"sort-bed - > {output_bed}"
+        )
+        executeCmd(cmd_map_filter, logger=logger)
+
         bt = pb.BedTool(output_bed)
         return bt if bt.count() > 0 else None
     else:
@@ -1018,19 +1035,19 @@ def inspect_by_haplotypes(input_bam,
 
     sweep_region_bed = input_bam.replace(".bam", ".sweep.bed")
     # Select regions overlapped by at least 3 haplotypes from cached per-haplotype coverage
-    sweep_regions = sweep_region_inspection(  input_bam,
-                                              output_bed=sweep_region_bed,
-                                              depth_cutoff=5,
-                                              window_size=100,
-                                              step_size=10,
-                                              logger=logger )
-    # sweep_regions = select_regions_with_min_haplotypes_from_hapbeds(
-    #     hid_cov_beds,
-    #     output_bed=sweep_region_bed,
-    #     min_haplotypes=3,
-    #     use_cli=True,
-    #     logger=logger
-    # )
+    # sweep_regions = sweep_region_inspection(  input_bam,
+    #                                           output_bed=sweep_region_bed,
+    #                                           depth_cutoff=5,
+    #                                           window_size=100,
+    #                                           step_size=10,
+    #                                           logger=logger )
+    sweep_regions = select_regions_with_min_haplotypes_from_hapbeds(
+        hid_cov_beds,
+        output_bed=sweep_region_bed,
+        min_haplotypes=1,
+        use_cli=True,
+        logger=logger
+    )
     logger.info(f"Now the sweep regions are saved to {sweep_region_bed}.")
 
     '''
@@ -1067,6 +1084,8 @@ def inspect_by_haplotypes(input_bam,
                                                                                                                                                                             logger = logger )
         if record_df is not None:
             record_dfs.append(record_df)
+        else:
+            logger.warning(f"No valid haplotypes covered by region {region} for downstream BILC")
 
     # Below we need to consider the cases BILC failed to converge.
     failed_lp = False
@@ -1099,8 +1118,10 @@ def inspect_by_haplotypes(input_bam,
         total_record_df = total_record_df.loc[np.logical_not(total_record_df["hap_id"].isin(remove_hids)), :]
         total_record_df = total_record_df.loc[total_record_df["total_depth"] > 5, :]
         if total_record_df.shape[0] == 0:
+            logger.warning(f"No regions are left for BILC after filtering out the scattered haplotypes and the haplotypes with extreme variant density.")
             failed_lp = True
     else:
+        logger.warning(f"No regions are left for BILC after filtering out the scattered haplotypes and the haplotypes with extreme variant density.")
         failed_lp = True
 
     if not failed_lp:
@@ -1110,12 +1131,13 @@ def inspect_by_haplotypes(input_bam,
         logger.info(f"Successfully saved the haplotype comparison meta table to {compare_haplotype_meta_tab}. And it looks like \n{total_record_df[:10].to_string(index=False)}\n")
         correct_map_hids, mismap_hids, model_status = lp_solve_remained_haplotypes(total_record_df, logger = logger)
         if model_status == "Infeasible":
+            logger.warning(f"The BINARY INTEGER LINEAR PROGRAMMING failed to converge. So we need to filter out the haplotypes with extreme variant density and the haplotypes with high similarity with the reference genomic sequence.")
             failed_lp = True
 
     if not failed_lp:
         mismap_hids.update(set([hid for hid in hid_extreme_vard if hid_extreme_vard[hid]]))
-        mismap_hids.update(set([hid for hid in hap_max_sim_scores if hap_max_sim_scores[hid] > 5]))
-        mismap_hids.update(set([hid for hid in scatter_hid_dict if scatter_hid_dict[hid] and hid_var_count[hid] > 1]))
+        mismap_hids.update(set([hid for hid in hap_max_sim_scores if hap_max_sim_scores[hid] > 10]))
+        mismap_hids.update(set([hid for hid in scatter_hid_dict if scatter_hid_dict[hid] and hid_var_count[hid] <= 1]))
         correct_map_hids = correct_map_hids - mismap_hids
 
         mismap_qnames = set([qname for hid in mismap_hids for qname in hap_qname_info[hid]])
@@ -1128,8 +1150,8 @@ def inspect_by_haplotypes(input_bam,
 
     if failed_lp:
         mismap_hids = set([hid for hid in hid_extreme_vard if hid_extreme_vard[hid]])
-        mismap_hids.update(set([hid for hid in scatter_hid_dict if scatter_hid_dict[hid] and hid_var_count[hid] > 1]))
-        mismap_hids.update(set([hid for hid in hap_max_sim_scores if hap_max_sim_scores[hid] > 5]))
+        mismap_hids.update(set([hid for hid in scatter_hid_dict if scatter_hid_dict[hid] and hid_var_count[hid] <= 1]))
+        mismap_hids.update(set([hid for hid in hap_max_sim_scores if hap_max_sim_scores[hid] >= 8]))
         mismap_qnames = set([qname for hid in mismap_hids for qname in hap_qname_info[hid]])
         total_qnames = set([qname for qnames in hap_qname_info.values() for qname in qnames])
         correct_map_qnames = total_qnames - mismap_qnames
