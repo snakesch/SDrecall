@@ -845,7 +845,7 @@ def cal_similarity_score(varcounts_among_refseqs, hid_var_count, logger = logger
             psv_pos_abs = np.sort(unique_psv_pos_abs)
             # Count the number of unique positions
             shared_psv_ratio = total_shared_psv / total_varcount if total_varcount > 0 else min(1, total_shared_psv)
-            mixed_psv_metric = 5 * shared_psv_ratio + total_shared_psv - (alt_varcount - total_shared_psv) + 0.1 * total_varcount
+            mixed_psv_metric = 4 * shared_psv_ratio + total_shared_psv - (alt_varcount - total_shared_psv) + 0.1 * total_varcount
             logger.info(f"For haplotype {hid}, comparing to the reference sequence {homo_refseq_qname}, the similarity score is 4*{shared_psv_ratio} + {total_shared_psv} - ({alt_varcount} - {total_shared_psv}) + 0.1*{total_varcount} = {mixed_psv_metric}")
 
             if mixed_psv_metric > max_psv:
