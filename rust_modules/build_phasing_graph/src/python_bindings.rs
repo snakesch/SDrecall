@@ -33,7 +33,6 @@ fn configure_rust_logging(level_str: &str) {
     let _ = pyo3_log::try_init();
     log::set_max_level(rust_level);
 	// Print the log level to stderr
-	println!("Rust logging configured with level: {:?} (from Python: {})", rust_level, level_str);
 
     info!("[configure_rust_logging] Rust logging configured with level: {:?} (from Python: {})", rust_level, level_str);
     debug!("[configure_rust_logging] pyo3-log forwarding active");

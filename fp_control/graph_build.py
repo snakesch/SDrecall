@@ -16,7 +16,7 @@ def build_phasing_graph(
     reference_genome: str,
     mapq_filter: int = 10,
     basequal_median_filter: int = 15,
-    edge_weight_cutoff: float = 0.201,
+    edge_weight_cutoff: float = 0.301,
     threads: int = 8,
     logger = logger
 ) -> Tuple[Optional[gt.Graph], Optional[np.ndarray], Optional[TypeDict], Optional[TypeDict], Optional[TypeDict], Optional[TypeDict], Set[str]]:

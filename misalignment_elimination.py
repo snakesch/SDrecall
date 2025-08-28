@@ -58,7 +58,7 @@ def eliminate_misalignments(input_bam,
                             numba_threads = 2,
                             recall_mq_cutoff = 10,
                             basequal_median_cutoff = 15,
-                            edge_weight_cutoff = 0.250,
+                            edge_weight_cutoff = 0.301,
                             cache_dir = "/tmp",
                             logger = logger):
 

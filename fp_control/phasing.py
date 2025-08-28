@@ -134,10 +134,10 @@ def find_cliques_in_components(graph,
         small_row_indices = set()
 
         logger.info(f"Second round: Start to find the largest clique in the small weight matrix, which contains {numba_sum(small_row_mask)} rows and columns. Contiguous? {small_weight_matrix.flags['C_CONTIGUOUS']}")
-        cliques_iter = gce_algorithm(selected_indices, small_weight_matrix, cutoff = ew_cutoff/2, logger = logger)
+        cliques_iter = gce_algorithm(selected_indices, small_weight_matrix, cutoff = ew_cutoff*2/3, logger = logger)
         for clique in cliques_iter:
             if len(clique) > 5:
-                logger.info(f"Second round (edge weight cutoff = {ew_cutoff/2}): Receiving a clique containing {len(clique)} qnames in the small weight matrix")
+                logger.info(f"Second round (edge weight cutoff = {ew_cutoff*2/3}): Receiving a clique containing {len(clique)} qnames in the small weight matrix")
                 yield "second_round", clique
             else:
                 clique_member_read_ids = [rid for qid in clique for rid in node_read_ids[qid]]
@@ -155,7 +155,7 @@ def find_cliques_in_components(graph,
                     logger.info(f"For read id {rid}, the valid quality haplotype is {valid_qual_haps.tolist()}")
                     if not (valid_qual_haps == 1).all():
                         logger.info(f"The clique contains {len(clique)} read pairs, it contains variant, it should be yielded now")
-                        logger.info(f"Second round (edge weight cutoff = {ew_cutoff/2}): Receiving a clique containing {len(clique)} qnames in the small weight matrix")
+                        logger.info(f"Second round (edge weight cutoff = {ew_cutoff*2/3}): Receiving a clique containing {len(clique)} qnames in the small weight matrix")
                         yield "second_round", clique
                         no_variant = False
                         break

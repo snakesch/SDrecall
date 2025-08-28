@@ -81,12 +81,22 @@ def modify_gt_based_on_ad_gq(record, rrecord):
 			logger.info(f"Setting the GT to (1, 1) due to the alt/dp ratio {ralt/(ralt + rref)} for the variant {record.chrom}:{record.pos}:{record.ref} -> {record.alts}")
 			continue
 
-		if num_hps >= 2 and ralt/(ralt + rref) >= 0.7:
+		if num_hps >= 2 and ralt/(ralt + rref) >= 0.4:
 			rrecord.samples[sample_name]['GT'] = (1, 1)
 			logger.info(f"Setting the GT to (1, 1) due to the num_hps {num_hps} and alt/dp ratio {ralt/(ralt + rref)} for the variant {record.chrom}:{record.pos}:{record.ref} -> {record.alts}")
 			continue
 
-		if rgq < 5 and ralt/(ralt + rref) >= 0.7 and (ralt + rref) > 5:
+		if num_hps >= 3 and ralt/(ralt + rref) >= 0.35:
+			rrecord.samples[sample_name]['GT'] = (1, 1)
+			logger.info(f"Setting the GT to (1, 1) due to the num_hps {num_hps} and alt/dp ratio {ralt/(ralt + rref)} for the variant {record.chrom}:{record.pos}:{record.ref} -> {record.alts}")
+			continue
+
+		if num_hps >= 4 and ralt/(ralt + rref) >= 0.3:
+			rrecord.samples[sample_name]['GT'] = (1, 1)
+			logger.info(f"Setting the GT to (1, 1) due to the num_hps {num_hps} and alt/dp ratio {ralt/(ralt + rref)} for the variant {record.chrom}:{record.pos}:{record.ref} -> {record.alts}")
+			continue
+
+		if rgq < 5 and ralt/(ralt + rref) >= 0.5 and (ralt + rref) > 5:
 			rrecord.samples[sample_name]['GT'] = (1, 1)
 			logger.info(f"Setting the GT to (1, 1) due to the gq {rgq} and alt/dp ratio {ralt/(ralt + rref)} for the variant {record.chrom}:{record.pos}:{record.ref} -> {record.alts}")
 			continue

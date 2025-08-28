@@ -4,16 +4,17 @@ from collections import defaultdict
 from src.utils import prepare_tmp_file, executeCmd
 from src.log import logger
 
-
 def get_supporting_tags(bam_file, chrom, pos, ref, alts, tag, min_mapq=10, min_bq=15):
     supporting_tags = defaultdict(set)
     with pysam.AlignmentFile(bam_file, "rb") as samfile:
-        for pileup_column in samfile.pileup(chrom, pos-1, pos, truncate=True, min_base_quality=min_bq):
+        for pileup_column in samfile.pileup(chrom, pos-1, pos, truncate=True, min_base_quality=min_bq, ignore_orphans=False):
             for pileup_read in pileup_column.pileups:
                 if pileup_read.alignment.mapping_quality < min_mapq:
+                    logger.debug(f"Skipping read {pileup_read.alignment.query_name}:{pileup_read.alignment.flag} with mapping quality {pileup_read.alignment.mapping_quality}")
                     continue
 
                 if pileup_read.is_del:
+                    logger.debug(f"Found deletion at {chrom}:{pos} on read {pileup_read.alignment.query_name}:{pileup_read.alignment.flag}")
                     # Deletion
                     if len(ref) > 1 and ref[1:] in alts:
                         alt = ref[1:]
@@ -21,6 +22,7 @@ def get_supporting_tags(bam_file, chrom, pos, ref, alts, tag, min_mapq=10, min_b
                             tag_value = pileup_read.alignment.get_tag(tag)
                             supporting_tags[alt].add(tag_value)
                 elif pileup_read.indel > 0:
+                    logger.debug(f"Found insertion at {chrom}:{pos} on read {pileup_read.alignment.query_name}:{pileup_read.alignment.flag}")
                     # Insertion
                     ins_seq = pileup_read.alignment.query_sequence[pileup_read.query_position:pileup_read.query_position + pileup_read.indel]
                     for alt in alts:
@@ -32,10 +34,13 @@ def get_supporting_tags(bam_file, chrom, pos, ref, alts, tag, min_mapq=10, min_b
                 elif not pileup_read.is_refskip:
                     # SNV
                     read_base = pileup_read.alignment.query_sequence[pileup_read.query_position]
+                    logger.debug(f"Found SNV at {chrom}:{pos} with ALT base {read_base} on read {pileup_read.alignment.query_name}:{pileup_read.alignment.flag}")
                     if read_base in alts:
                         if pileup_read.alignment.has_tag(tag):
                             tag_value = pileup_read.alignment.get_tag(tag)
                             supporting_tags[read_base].add(tag_value)
+                else:
+                    logger.debug(f"Skipping read {pileup_read.alignment.query_name}:{pileup_read.alignment.flag} at {chrom}:{pos} due to is_refskip")
 
     return supporting_tags
 

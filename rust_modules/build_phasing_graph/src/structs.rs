@@ -495,12 +495,12 @@ impl HaplotypeConfig {
     pub fn new(mean_read_length: f32) -> Self {
         // Create score array equivalent to Python: [mean_read_length + mean_read_length * i for i in range(50)]
         let score_array: Vec<f32> = (0..50)
-            .map(|i| mean_read_length + mean_read_length * i as f32)
+            .map(|i| mean_read_length + mean_read_length * (i as f32 + 1.0))
             .collect();
             
         Self {
             mean_read_length,
-            edge_weight_cutoff: 0.201,  // Default heuristic cutoff from Python
+            edge_weight_cutoff: 0.301,  // Default heuristic cutoff from Python
             score_array,
         }
     }
