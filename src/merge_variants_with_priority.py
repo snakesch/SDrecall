@@ -535,7 +535,9 @@ def merge_with_priority(query_vcf = "",
 						ref_dp, alt_dp = ad[0], ad[1]
 					else:
 						ref_dp, alt_dp = ad
+					
 					gq = [t[1] for t in values if t[0] == "GQ"][0] # Default to 0 if GQ is not present
+					gq = 0 if gq is None else gq
 					ref_dp = 0 if ref_dp is None else ref_dp
 					alt_dp = 0 if alt_dp is None else alt_dp
 					for key, value in values:
@@ -576,6 +578,7 @@ def merge_with_priority(query_vcf = "",
 					else:
 						ref_dp, alt_dp = ad
 					gq = [t[1] for t in values if t[0] == "GQ"][0] # Default to 0 if GQ is not present
+					gq = 0 if gq is None else gq
 					ref_dp = 0 if ref_dp is None else ref_dp
 					alt_dp = 0 if alt_dp is None else alt_dp
 					for key, value in values:
@@ -585,7 +588,7 @@ def merge_with_priority(query_vcf = "",
 						try:
 							rrec.samples[sample][key] = value
 						except TypeError as te:
-							logger.error(f"Failed to write value {value} to FORMAT field {key} at variant {chrom}:{pos}:{ref} -> {alts}")
+							logger.error(f"Failed to write value {value} to FORMAT field {key} at variant {chrom}:{pos}:{ref} -> {alts}. The error message is {te}")
 							continue
 				bcf_output.write(rrec)
 			print(f"Successfully processed the variant records in one chromosome. The log info are:\n{log_contents}\n", file=sys.stderr)

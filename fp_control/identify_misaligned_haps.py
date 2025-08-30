@@ -864,7 +864,7 @@ def cal_similarity_score(varcounts_among_refseqs, hid_var_count, logger = logger
 
 def select_regions_with_min_haplotypes_from_hapbeds(hid_cov_beds,
                                                     output_bed=None,
-                                                    min_haplotypes=3,
+                                                    min_haplotypes=2,
                                                     use_cli=True,
                                                     logger=logger):
     """
