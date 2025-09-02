@@ -110,8 +110,8 @@ function check_bam_validity {
         return 1
     fi
     # log "Now try to check qname format of ${input}."
-
-    local line_num=$( samtools view -c ${input} 2>&1 | awk '{print;}' - )
+    [[ ${expected_lines} -gt 10 ]] && local vis_lines=${expected_lines} || local vis_lines=10
+    local line_num=$( samtools view ${input} | head -n ${vis_lines} - | wc -l )
 
     if [[ ${line_num} -lt ${expected_lines} ]]; then
         log "found ${input} only has ${line_num} lines where we expect it to have ${expected_lines} lines."
@@ -464,10 +464,10 @@ function independent_minimap2_masked () {
         ls -lh ${ref_genome}.fai
     fi
 
-    log "Running minimap2 --eqx --MD -F 1000 -ax ${mode} --end-bonus 10 --no-end-flt -t ${threads} \
+    log "Running minimap2 --eqx --MD -F 1000 -ax ${mode} --no-end-flt -t ${threads} \
     -R \"@RG\tID:${samp_ID}\tLB:SureSelectXT Library Prep Kit\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}\" \
     ${masked_genome/.fasta/.mmi} ${forward_reads} ${reverse_reads}" && \
-    minimap2 -ax ${mode} --eqx --MD -F 1000 --end-bonus 10 --no-end-flt -t ${threads} ${kwargs} -R "@RG\tID:${samp_ID}\tLB:SureSelectXT\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}" \
+    minimap2 -ax ${mode} --eqx --MD -F 1000 -t ${threads} ${kwargs} -R "@RG\tID:${samp_ID}\tLB:SureSelectXT\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}" \
     ${masked_genome/.fasta/.mmi} ${forward_reads} ${reverse_reads} > ${mid_align} && \
     log "Modify the bam header with modify_bam_sq_lines ${mid_align} ${ref_genome} ${output_align/.bam/.header}" && \
     modify_bam_sq_lines ${mid_align} ${ref_genome} ${output_align/.bam/.header} && \

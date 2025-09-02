@@ -1032,7 +1032,7 @@ pub fn determine_same_haplotype(
             for i in 0..shared_snvs.min(config.score_array.len()) {
                 weight += config.score_array[i];
             }
-            weight += shared_indels as f32 * config.mean_read_length * 3.0;
+            weight += shared_indels as f32 * config.mean_read_length * 5.0;
             
             debug!("[determine_same_haplotype] Weight before penalty: {:.2} (overlap={}, variant_bonus={:.2}, indel_bonus={:.2})", 
                    weight, overlap_length, 

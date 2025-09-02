@@ -6,7 +6,9 @@ def getRawseq(bedf_path: str, fastq_path: str, ref_genome: str, tmp_dir = "/tmp"
     if padding > 0:
         with NamedTemporaryFile(dir = tmp_dir, suffix = ".bed") as tmp_bedf:
             tmp_bedf_path = tmp_bedf.name
-            cmd = f"bedtools slop -i {bedf_path} -g {ref_genome}.fai -b {padding} > {tmp_bedf_path}"
+            cmd = f"bedtools slop -i {bedf_path} -g {ref_genome}.fai -b {int(padding)} > {tmp_bedf_path}"
+            executeCmd(cmd)
+            cmd = f"bedtools makewindows -b {bedf_path} -w 1000 -s {min(int(padding), 500)} >> {tmp_bedf_path}"
             executeCmd(cmd)
             cmd = f"seqtk subseq -s {ref_genome} {tmp_bedf_path} | \
                     seqtk seq -F 'F' - | \

@@ -61,21 +61,14 @@ def find_indices(hap_ids, included_hapids):
 
 def lp_solve_remained_haplotypes(total_record_df,
                                  logger = logger):
-    # total_record_df = total_record_df.loc[np.logical_not(total_record_df["extreme_vard"]), :]
-    hap_id_coefficients = total_record_df.groupby(["hap_id"])["coefficient"].mean().reset_index()
-    hap_id_coefficients = hap_id_coefficients.merge(total_record_df.loc[:, ["hap_id", "hap_max_sim_scores"]], how="left", on="hap_id")
-    hap_id_coefficients.loc[:, "coefficient"] = hap_id_coefficients["coefficient"] + hap_id_coefficients["hap_max_sim_scores"]
-    hap_id_coefficients.drop_duplicates(inplace=True)
 
-    logger.info(f"The hap_id_coefficients looks like \n{hap_id_coefficients.to_string(index=False)}\n")
-    hap_no = hap_id_coefficients.shape[0]
     '''
     Note that here the hap_id_coefficient table is a dataframe with columns ["hap_id", "coefficient"]
     The row index is used to represent the hap_id in the constraint matrix below, but the the value does not necessarily equal to hap_id
     Therefore, we need two dicts to map from row_index to hap_id and from hap_id to row_index
     '''
-
-    assert len(hap_id_coefficients["hap_id"].unique()) == hap_no, f"The hap_id_coefficients table has {hap_no} rows, but the hap_id column has {len(hap_id_coefficients['hap_id'].unique())} unique values."
+    hap_id_coefficients = total_record_df.loc[:, ["hap_id", "coefficient"]].drop_duplicates()
+    hap_no = hap_id_coefficients.shape[0]
     index_to_hapid = dict(zip(range(hap_no), hap_id_coefficients["hap_id"].to_numpy()))
     hapid_to_index = dict(zip(hap_id_coefficients["hap_id"].to_numpy(), range(hap_no)))
 
@@ -96,7 +89,10 @@ def lp_solve_remained_haplotypes(total_record_df,
     lower_bounds = np.zeros(hap_no, dtype=np.int32)
     upper_bounds = np.ones(hap_no, dtype=np.int32)
 
-    col_costs = - hap_id_coefficients["coefficient"].to_numpy().astype(np.double)
+    col_costs = - hap_id_coefficients["coefficient"].to_numpy(dtype=np.double)
+    assert col_costs.shape[0] == hap_no
+    for i in range(min(10, hap_no)):
+        logger.info(f"var {i} hap_id={index_to_hapid[i]} cost={col_costs[i]}")
 
     # Add Vars
     highs.addVars(hap_no, lower_bounds, upper_bounds)
@@ -112,19 +108,19 @@ def lp_solve_remained_haplotypes(total_record_df,
     for name, group in by_region:
         region_str = f"{name[0]}:{name[1]}-{name[2]}"
         included_hapids = group["hap_id"].unique()
-        if included_hapids.size <= 1:
-            continue
         rank_2_count = group.loc[group["rank"] <= 2, "hap_id"].nunique()
         rank_1_count = group.loc[group["rank"] <= 1, "hap_id"].nunique()
         # Column index extraction
         hapid_indices = [hapid_to_index[hapid] for hapid in included_hapids]
-        lower_bound = included_hapids.size - rank_2_count if group["total_depth"].mean() >= 5 else included_hapids.size - rank_1_count
-        status = highs.addRow(0,
+        lower_bound = included_hapids.size - rank_2_count if included_hapids.size > 3 else included_hapids.size - rank_1_count
+        lower_bound = included_hapids.size if included_hapids.size <= 1 else lower_bound
+        upper_bound = 0
+        status = highs.addRow(upper_bound,
                               lower_bound,
                               included_hapids.size,
                               np.array(hapid_indices, dtype=np.int32),
                               np.ones(included_hapids.size, dtype=np.double))
-        logger.info(f"For region {region_str}, the addrow status is {status}, the group included hap_ids are {included_hapids.tolist()}, the corresponding hap_id indices are {hapid_indices} the lower bound is {lower_bound}, the upper bound is 0.")
+        logger.info(f"For region {region_str}, the addrow status is {status}, the group included hap_ids are {included_hapids.tolist()}, the corresponding hap_id indices are {hapid_indices} the lower bound is {lower_bound}, the upper bound is {upper_bound}.")
 
     # Run solver
     highs.run()

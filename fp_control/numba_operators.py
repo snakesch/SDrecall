@@ -170,3 +170,40 @@ def extract_true_stretches(bool_array):
         count += 1
 
     return stretches[:count]
+
+
+@numba.njit(types.int64(types.int32[:], types.int32), fastmath=True, cache=True)
+def padded_union_coverage_numba(positions, pad):
+    n = positions.size
+    if n == 0:
+        return np.int64(0)
+    starts = np.empty(n, dtype=np.int64)
+    ends = np.empty(n, dtype=np.int64)
+    for i in range(n):
+        pi = np.int64(positions[i])
+        s = pi - np.int64(pad)
+        if s < 0:
+            s = 0
+        e = pi + np.int64(pad) + 1  # half-open [s, e)
+        starts[i] = s
+        ends[i] = e
+
+    order = np.argsort(starts)
+    starts = starts[order]
+    ends = ends[order]
+
+    cov = np.int64(0)
+    cur_s = starts[0]
+    cur_e = ends[0]
+    for i in range(1, n):
+        s = starts[i]
+        e = ends[i]
+        if s <= cur_e:
+            if e > cur_e:
+                cur_e = e
+        else:
+            cov += (cur_e - cur_s)
+            cur_s = s
+            cur_e = e
+    cov += (cur_e - cur_s)
+    return cov
