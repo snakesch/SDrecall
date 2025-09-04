@@ -4,11 +4,13 @@ import multiprocessing
 import subprocess
 import logging
 import uuid
-from io import StringIO
 import inspect
 import time
 import traceback
 import sys
+import os
+
+from io import StringIO
 
 from src.log import logger, log_command
 from src.const import shell_utils
@@ -444,7 +446,14 @@ def merge_with_priority(query_vcf = "",
 						rv_tag = None, 
 						ref_genome = "",
 						modify_gt = True,
-						threads = 4):
+						threads = 4,
+						force = False):
+
+	if not force:
+		if os.path.exists(output_vcf) and os.path.getmtime(output_vcf) > os.path.getmtime(query_vcf) and os.path.getmtime(output_vcf) > os.path.getmtime(reference_vcf):
+			logger.warning(f"The output VCF file {output_vcf} already exists and is up to date. Skip the merge.")
+			return
+
 	# Sort the query VCF file
 	sorted_query_vcf = sort_vcf(query_vcf, ref_genome, logger = logger)
 
@@ -625,6 +634,7 @@ if __name__ == '__main__':
 	parser.add_argument("-rg", "--ref_genome", type=str, help="The reference genome file", required=False, default="")
 	parser.add_argument("-mg", "--modify_gt", action="store_false", help="Whether to modify the GT field", required=False, default=True)
 	parser.add_argument('--threads', type=int, default=4, help='Number of threads for parallel processing', required=False)
+	parser.add_argument('--force', action="store_true", help="Whether to force the merge", required=False, default=False)
 
 	args = parser.parse_args()
 
@@ -636,4 +646,5 @@ if __name__ == '__main__':
 						rv_tag = args.reference_tag,
 						ref_genome = args.ref_genome,
 						modify_gt = args.modify_gt,
-						threads = args.threads)
+						threads = args.threads,
+						force = args.force)
