@@ -580,7 +580,12 @@ def merge_with_priority(query_vcf = "",
 											 filter=filters, 
 											 info=dict(info))
 				for sample, values in samples:
-					ad = [t[1] for t in values if t[0] == "AD"][0] # Default to [0, 0] if AD is not present
+					ad_field = [t[1] for t in values if t[0] == "AD"]
+					if len(ad_field) == 0:
+						logger.error(f"This record does not have AD field, take a look at the record: {chrom}:{pos}:{ref} -> {alts}, and we currently cannot merge this record into the output")
+						continue
+					ad = ad_field[0]
+					# Default to [0, 0] if AD is not present
 					if len(ad) > 2:
 						logger.warning(f"This record is not biallelic, take a look at the record: {chrom}:{pos}:{ref} -> {alts}")
 						ref_dp, alt_dp = ad[0], ad[1]
