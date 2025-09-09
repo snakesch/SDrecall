@@ -450,7 +450,10 @@ def merge_with_priority(query_vcf = "",
 						force = False):
 
 	if not force:
-		if os.path.exists(output_vcf) and os.path.getmtime(output_vcf) > os.path.getmtime(query_vcf) and os.path.getmtime(output_vcf) > os.path.getmtime(reference_vcf):
+		if os.path.exists(output_vcf) and \
+		   os.path.getmtime(output_vcf) > os.path.getmtime(query_vcf) and \
+		   os.path.getmtime(output_vcf) > os.path.getmtime(reference_vcf) and \
+		   os.path.getsize(output_vcf) > 2.3*1024:
 			logger.warning(f"The output VCF file {output_vcf} already exists and is up to date. Skip the merge.")
 			return
 
@@ -538,15 +541,24 @@ def merge_with_priority(query_vcf = "",
 					hps = [t[1] for t in values if t[0] == "HPSUP"]
 					logger.debug(f"The hps returned by get is {hps} and its type is {type(hps)}")
 					num_hps = len(hps[0][0].split(";")) if len(hps) > 0 else 0
-					ad = [t[1] for t in values if t[0] == "AD"][0] # Default to [0, 0] if AD is not present
-					if len(ad) > 2:
-						logger.warning(f"This record is not biallelic, take a look at the record: {chrom}:{pos}:{ref} -> {alts}")
-						ref_dp, alt_dp = ad[0], ad[1]
+					ad_fields = [t[1] for t in values if t[0] == "AD"] # Default to [0, 0] if AD is not present
+					if len(ad_fields) == 0:
+						logger.warning(f"This record does not have AD field, take a look at the record: {chrom}:{pos}:{ref} -> {alts}, the format field looks like this: {values}")
+						ref_dp, alt_dp = 0, 0
 					else:
-						ref_dp, alt_dp = ad
+						ad = ad_fields[0]
+						if len(ad) > 2:
+							logger.warning(f"This record is not biallelic, take a look at the record: {chrom}:{pos}:{ref} -> {alts}")
+							ref_dp, alt_dp = ad[0], ad[1]
+						else:
+							ref_dp, alt_dp = ad
 					
-					gq = [t[1] for t in values if t[0] == "GQ"][0] # Default to 0 if GQ is not present
-					gq = 0 if gq is None else gq
+					gq_fields = [t[1] for t in values if t[0] == "GQ"] # Default to 0 if GQ is not present
+					if len(gq_fields) == 0:
+						logger.warning(f"This record does not have GQ field, take a look at the record: {chrom}:{pos}:{ref} -> {alts}, the format field looks like this: {values}")
+						gq = 0
+					else:
+						gq = gq_fields[0]
 					ref_dp = 0 if ref_dp is None else ref_dp
 					alt_dp = 0 if alt_dp is None else alt_dp
 					for key, value in values:
@@ -582,7 +594,7 @@ def merge_with_priority(query_vcf = "",
 				for sample, values in samples:
 					ad_field = [t[1] for t in values if t[0] == "AD"]
 					if len(ad_field) == 0:
-						logger.error(f"This record does not have AD field, take a look at the record: {chrom}:{pos}:{ref} -> {alts}, and we currently cannot merge this record into the output")
+						logger.error(f"This record does not have AD field, take a look at the record: {chrom}:{pos}:{ref} -> {alts}, and we currently cannot merge this record into the output. The format field looks like this: {values}")
 						continue
 					ad = ad_field[0]
 					# Default to [0, 0] if AD is not present
@@ -591,8 +603,12 @@ def merge_with_priority(query_vcf = "",
 						ref_dp, alt_dp = ad[0], ad[1]
 					else:
 						ref_dp, alt_dp = ad
-					gq = [t[1] for t in values if t[0] == "GQ"][0] # Default to 0 if GQ is not present
-					gq = 0 if gq is None else gq
+					gq_fields = [t[1] for t in values if t[0] == "GQ"] # Default to 0 if GQ is not present
+					if len(gq_fields) == 0:
+						logger.warning(f"This record does not have GQ field, take a look at the record: {chrom}:{pos}:{ref} -> {alts}, the format field looks like this: {values}")
+						gq = 0
+					else:
+						gq = gq_fields[0]
 					ref_dp = 0 if ref_dp is None else ref_dp
 					alt_dp = 0 if alt_dp is None else alt_dp
 					for key, value in values:

@@ -183,19 +183,25 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
 
     target_region = sdrecall_paths.multi_align_bed_path()
     pooled_filtered_vcf = sdrecall_paths.recall_filtered_vcf_path()
-    deduped_raw_bam, pooled_filtered_bam, pooled_filtered_vcf = eliminate_misalignments(deduped_raw_bam,
-                                                                                        pooled_filtered_bam,
-                                                                                        pooled_filtered_vcf,
-                                                                                        total_intrinsic_bam,
-                                                                                        ref_genome,
-                                                                                        sdrecall_paths.sample_id,
-                                                                                        target_regions = target_region,
-                                                                                        avg_frag_size=avg_frag_size,
-                                                                                        threads=threads,
-                                                                                        numba_threads=numba_threads,
-                                                                                        recall_mq_cutoff=recall_mq_cutoff,
-                                                                                        cache_dir=sdrecall_paths.tmp_dir,
-                                                                                        logger=logger)
+    if os.path.exists(pooled_filtered_vcf) and \
+       os.path.getmtime(pooled_filtered_vcf) > os.path.getmtime(deduped_raw_bam) and \
+       os.path.getmtime(pooled_filtered_vcf) > os.path.getmtime(pooled_filtered_bam) and \
+       os.path.getmtime(pooled_filtered_vcf) > os.path.getmtime(pooled_raw_vcf):
+        logger.info(f"The pooled filtered vcf {pooled_filtered_vcf} already exists and is up to date. Skip the misalignment elimination.")
+    else:
+        deduped_raw_bam, pooled_filtered_bam, pooled_filtered_vcf = eliminate_misalignments(deduped_raw_bam,
+                                                                                            pooled_filtered_bam,
+                                                                                            pooled_filtered_vcf,
+                                                                                            total_intrinsic_bam,
+                                                                                            ref_genome,
+                                                                                            sdrecall_paths.sample_id,
+                                                                                            target_regions = target_region,
+                                                                                            avg_frag_size=avg_frag_size,
+                                                                                            threads=threads,
+                                                                                            numba_threads=numba_threads,
+                                                                                            recall_mq_cutoff=recall_mq_cutoff,
+                                                                                            cache_dir=sdrecall_paths.tmp_dir,
+                                                                                            logger=logger)
     
     tmp_merged_vcf = prepare_tmp_file(suffix=".vcf.gz", tmp_dir=sdrecall_paths.tmp_dir).name
     merge_with_priority(query_vcf = pooled_raw_vcf, 
