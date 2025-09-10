@@ -609,6 +609,7 @@ def merge_with_priority(query_vcf = "",
 						gq = 0
 					else:
 						gq = gq_fields[0]
+						gq = 0 if gq is None else gq
 					ref_dp = 0 if ref_dp is None else ref_dp
 					alt_dp = 0 if alt_dp is None else alt_dp
 					for key, value in values:

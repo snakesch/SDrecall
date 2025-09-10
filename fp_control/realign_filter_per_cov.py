@@ -25,7 +25,7 @@ def imap_filter_out(args):
     log_file = os.path.join(log_dir, f"subprocess_{job_id}_{os.path.basename(raw_bam)}.log")
     
     # Configure file logger
-    file_handler = logging.FileHandler(log_file)
+    file_handler = logging.FileHandler(log_file, mode='w')
     # Try to get formatter from existing handlers
     parent_formatter = None
     if logger.handlers:
