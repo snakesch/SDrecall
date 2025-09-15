@@ -120,7 +120,7 @@ def process_masked_bam( rg_tag,
                 executeCmd(cmd, logger=logger)
             except RuntimeError:
                 logger.error(f"Failed to generate {raw_masked_vcf}, running log in {sub_running_log}")
-                cmd = f"bash {shell_utils} check_vcf_validity {raw_masked_vcf} 1 && [[ {raw_masked_vcf} -nt {script_path} ]]"
+                cmd = f"bash {shell_utils} check_vcf_validity {raw_masked_vcf} 1 && [[ {raw_masked_vcf} -nt {shell_utils} ]]"
                 try:
                     executeCmd(cmd, logger=logger)
                 except RuntimeError:

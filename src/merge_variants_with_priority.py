@@ -69,6 +69,8 @@ def modify_gt_based_on_ad_gq(record, rrecord):
 		gq = sample_info.get('GQ', 0) # Default to 0 if GQ is not present
 
 		rref, ralt = rsample_info.get('AD', [0, 0]) # Default to [0, 0] if AD is not present
+		rref = 0 if rref is None else rref
+		ralt = 0 if ralt is None else ralt
 		rgq = rsample_info.get('GQ', 0) # Default to 0 if GQ is not present
 
 		hps = rsample_info.get('HPSUP', ".") # Default to "." if HPSUP is not present
@@ -612,9 +614,10 @@ def merge_with_priority(query_vcf = "",
 						gq = 0 if gq is None else gq
 					ref_dp = 0 if ref_dp is None else ref_dp
 					alt_dp = 0 if alt_dp is None else alt_dp
+					total_dp = 1 if ref_dp + alt_dp == 0 else ref_dp + alt_dp
 					for key, value in values:
 						if key == "GT":
-							if gq < 5 and alt_dp/(alt_dp + ref_dp) >= 0.7 and modify_gt:
+							if gq < 5 and alt_dp/total_dp >= 0.7 and modify_gt:
 								value = (1, 1)
 						try:
 							rrec.samples[sample][key] = value
