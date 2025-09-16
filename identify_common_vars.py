@@ -99,7 +99,7 @@ class VariantRecordWrapper:
 
 def process_target_records( qrecord, 
                             crecord,
-							added_filter="INHOUSE_COMMON",
+                            added_filter="INHOUSE_COMMON",
                             **kwargs ):
     qrecord = qrecord.record
     crecord = crecord.record
@@ -243,8 +243,10 @@ def process_region(region,
 
     # Process edge cases when eighter of the iterator returns no records
     if check_empty_iterator(query_iterator):
+        logger.warning(f"No records found in the query VCF for region {region}. All records from the cohort VCF will be returned as non-overlapping.")
         return (frozenset([]), frozenset([]), frozenset([ VariantRecordWrapper(r).pickable() for r in cohort_iterator ]))
     if check_empty_iterator(cohort_iterator):
+        logger.warning(f"No records found in the cohort VCF for region {region}. All records from the query VCF will be returned as non-overlapping.")
         query_iterator = query_vcf.fetch(region)
         return (frozenset([]), frozenset([ VariantRecordWrapper(r).pickable() for r in query_iterator ]), frozenset([]))
     
@@ -317,7 +319,7 @@ def process_region(region,
                                                                                                                                 merged_records,
                                                                                                                                 process_target_records,
                                                                                                                                 logger = logger,
-																																added_filter=added_filter,
+                                                                                                                                added_filter=added_filter,
                                                                                                                                 inhouse_common_cutoff=inhouse_common_cutoff,
                                                                                                                                 conf_level=conf_level)
                 cohort_record = None
@@ -358,7 +360,7 @@ def process_region(region,
                                                                                                                                         merged_records, 
                                                                                                                                         process_target_records,
                                                                                                                                         logger = logger,
-																																		added_filter=added_filter,
+                                                                                                                                        added_filter=added_filter,
                                                                                                                                         inhouse_common_cutoff=inhouse_common_cutoff,
                                                                                                                                         conf_level=conf_level)
                         cohort_record = None

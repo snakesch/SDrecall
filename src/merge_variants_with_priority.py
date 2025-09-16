@@ -398,7 +398,7 @@ def sort_vcf(vcf_file, ref_genome, output_vcf = None, logger = logger):
 	
 	cmd = f'''bcftools norm -m -both -f {ref_genome} --multi-overlaps 0 -a -Ou {vcf_file} | \
 			  bcftools norm -d exact -Ou - | \
-			  bcftools filter -e 'ALT[0] == "*" || GT = "mis" || GT = "ref"' -Ou - | \
+			  bcftools filter -e 'ALT[0] == "*" || COUNT(GT="mis" || GT="ref")==N_SAMPLES' -Ou - | \
 			  bcftools sort -Oz -o {output_vcf} - && \
 			  bcftools index -f -t {output_vcf}'''
 	executeCmd(cmd, logger=logger)
