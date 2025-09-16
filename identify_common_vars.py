@@ -99,13 +99,14 @@ class VariantRecordWrapper:
 
 def process_target_records( qrecord, 
                             crecord,
+							added_filter="INHOUSE_COMMON",
                             **kwargs ):
     qrecord = qrecord.record
     crecord = crecord.record
 
     is_common = determine_common_per_pysam_record(crecord, **kwargs)
-    if is_common:
-        qrecord.filter.add("INHOUSE_COMMON")
+    if is_common and "SDrecall" in qrecord.filter:
+        qrecord.filter.add(added_filter)
 
     return VariantRecordWrapper(qrecord)
 
@@ -316,6 +317,7 @@ def process_region(region,
                                                                                                                                 merged_records,
                                                                                                                                 process_target_records,
                                                                                                                                 logger = logger,
+																																added_filter=added_filter,
                                                                                                                                 inhouse_common_cutoff=inhouse_common_cutoff,
                                                                                                                                 conf_level=conf_level)
                 cohort_record = None
@@ -356,6 +358,7 @@ def process_region(region,
                                                                                                                                         merged_records, 
                                                                                                                                         process_target_records,
                                                                                                                                         logger = logger,
+																																		added_filter=added_filter,
                                                                                                                                         inhouse_common_cutoff=inhouse_common_cutoff,
                                                                                                                                         conf_level=conf_level)
                         cohort_record = None
