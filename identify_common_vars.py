@@ -439,7 +439,13 @@ def annotate_inhouse_common(query_vcf = "",
                                                     info=dict(info) )
                         for sample, values in samples:
                             for key, value in values:
-                                rec.samples[sample][key] = value
+                                # logger.info(f"Setting sample {sample} field {key} to value {value}")
+                                try:
+                                    rec.samples[sample][key] = value
+                                except TypeError as te:
+                                    # logger.warning(f"TypeError encountered when setting sample {sample} field {key} to value {value}: {te}.")
+                                    continue
+
                         bcf_output.write(rec)
                     for qrec_tup in non_overlap_qrecs:
                         chrom, pos, ref, alts, vid, qual, filters, info, samples = qrec_tup
@@ -454,7 +460,12 @@ def annotate_inhouse_common(query_vcf = "",
                                                      info=dict(info))
                         for sample, values in samples:
                             for key, value in values:
-                                qrec.samples[sample][key] = value
+                                # logger.info(f"Setting sample {sample} field {key} to value {value}")
+                                try:
+                                    qrec.samples[sample][key] = value
+                                except TypeError as te:
+                                    # logger.warning(f"TypeError encountered when setting sample {sample} field {key} to value {value}: {te}.")
+                                    continue
                         bcf_output.write(qrec)
                     
                     print(f"Successfully processed the variant records in one chromosome. The log info are:\n{log_contents}\n", file=sys.stderr)
