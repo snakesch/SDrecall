@@ -28,7 +28,7 @@ mamba activate SDrecall
 ```
 
 #### Build the Rust phasing graph module
-
+Upon the conda env establishment via our provided SDrecall.yml file, a separate rust-based python extension is required to install via pip
 The default phasing workflow now calls a Rust implementation for graph construction. After activating the SDrecall environment, install the Python bindings by running either:
 
 ```bash
