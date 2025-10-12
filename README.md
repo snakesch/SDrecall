@@ -1,5 +1,7 @@
 # SDrecall
 
+## Note: BIG UPDATE on the branch rust-impl. Dramatic speed-up with phasing graph building migrated to Rust extension. Also significant improvement on misalignment filtration after realignment. Please redirect to the rust-impl branch for updated performance. 
+
 ## Key Notes before implementing SDrecall to your pipeline
 1. SDrecall is the first tool offer sensitive and scalable variant detection within SDs based on NGS data alone. 
 
