@@ -500,6 +500,9 @@ def merge_with_priority(query_vcf = "",
 
     # Get the list of regions to process
     regions = list(dict.fromkeys(list(bcf_query.header.contigs.keys()) + list(bcf_reference.header.contigs.keys())))
+    # Filter out the regions to only contain main contigs
+    main_contigs = set([f'chr{i}' for i in range(1, 23)] + ['chrX', 'chrY', 'chrM'] + [f'{i}' for i in range(1, 23)] + ['X', 'Y', 'MT'])
+    regions = [r for r in regions if r in main_contigs]
     
     logger.info(f"Whether modify the GT field: {modify_gt}")
     logger.info(f"The query VCF file has records across {len(regions)} chromosomes, they are: {regions}")
@@ -619,8 +622,10 @@ def merge_with_priority(query_vcf = "",
                     if len(ad) > 2:
                         logger.warning(f"This record is not biallelic, take a look at the record: {chrom}:{pos}:{ref} -> {alts}")
                         ref_dp, alt_dp = ad[0], ad[1]
-                    else:
+                    elif len(ad) == 2:
                         ref_dp, alt_dp = ad
+                    else:
+                        ref_dp, alt_dp = 0, 0
                     gq_fields = [t[1] for t in values if t[0] == "GQ"] # Default to 0 if GQ is not present
                     if len(gq_fields) == 0:
                         logger.warning(f"This record does not have GQ field, take a look at the record: {chrom}:{pos}:{ref} -> {alts}, the format field looks like this: {values}")
