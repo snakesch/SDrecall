@@ -27,6 +27,24 @@ mamba env create -f ./SDrecall.yml --channel-priority flexible
 mamba activate SDrecall
 ```
 
+#### Build the Rust phasing graph module
+
+The default phasing workflow now calls a Rust implementation for graph construction. After activating the SDrecall environment, install the Python bindings by running either:
+
+```bash
+# Option 1: install the prebuilt wheel (recommended)
+pip install build-phasing-graph
+
+# Option 2: build from source with maturin (requires Rust toolchain)
+maturin develop --manifest-path rust_modules/build_phasing_graph/Cargo.toml
+```
+
+Option 1 works without a local Rust toolchain. Option 2 requires Rust (`rustup`, `cargo`) and `maturin>=1.6`; rebuild the extension whenever you pull new changes.
+
+#### Phasing and haplotype optimization updates
+
+The BILC stage now weights paralogous sequence variants (PSVs) more heavily when scoring haplotypes, which significantly improves misalignment filtering.
+
 ### Using docker/singularity
 Given the long list of dependencies of SDrecall, we are still working on a docker file / singularity recipe. Any contributions are most welcome.
 
