@@ -16,7 +16,7 @@
 6. The targeting regions is important to the output and efficiency of SDrecall. We recommend targeting the known causal genes/regions for the patients with relevant phenotypes. If phenotype diagnosis is vague to indicate a range of causal genes, then targeting Challenging Medical Relevant Genes from Genome In A Bottle is a cost-effective strategy. 
 
 
-For molecular diagnosis of Mendelian disease patients, SDrecall provides comprehensive inspection of SD regions that would otherwise be missed by traditional NGS analysis pipelines, while introducing marginal noise that could interfere with causal variant identification downstream. Please cite the following paper if you use SDrecall in your research: https://www.researchgate.net/publication/386155530_SDrecall_A_Scalable_Approach_for_Sensitive_Variant_Detection_in_Segmental_Duplications (under review)
+For molecular diagnosis of Mendelian disease patients, SDrecall provides comprehensive inspection of SD regions that would otherwise be missed by traditional NGS analysis pipelines, while introducing marginal noise that could interfere with causal variant identification downstream. Please cite the following paper if you use SDrecall in your research: https://www.researchgate.net/publication/386155530_SDrecall_A_Scalable_Approach_for_Sensitive_Variant_Detection_in_Segmental_Duplications (under review). We have tested SDrecall on hg19,hg38,chm13, and achieved 95% recall at all 3 assemblies.
 
 ## Installation
 
