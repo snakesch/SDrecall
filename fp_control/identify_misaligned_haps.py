@@ -349,8 +349,7 @@ def calculate_coefficient_per_group(record_df, logger=logger):
                                                                                 "var_count",
                                                                                 "indel_count",
                                                                                 "psv_count",
-                                                                                "varc_rank",
-                                                                                "hap_max_sim_scores"]].to_numpy(dtype=np.int32))
+                                                                                "varc_rank"]].to_numpy(dtype=np.int32))
     # logger.info(f"After calculating the coefficient for this region, the dataframe looks like :\n{record_df[:10].to_string(index=False)}\n")
     return record_df
 
@@ -1173,6 +1172,7 @@ def inspect_by_haplotypes(input_bam,
         correct_map_hids = correct_map_hids - mismap_hids
 
         mismap_qnames = set([qname for hid in mismap_hids for qname in hap_qname_info[hid]])
+        total_qnames = set([qname for qnames in hap_qname_info.values() for qname in qnames])
         correct_map_qnames = total_qnames - mismap_qnames
         total_record_df["mismap"] = total_record_df["hap_id"].isin(mismap_hids)
         total_record_df["correct_map"] = total_record_df["hap_id"].isin(correct_map_hids)
@@ -1191,5 +1191,3 @@ def inspect_by_haplotypes(input_bam,
         total_qnames = set([qname for qnames in hap_qname_info.values() for qname in qnames])
         correct_map_qnames = total_qnames - mismap_qnames
         return correct_map_qnames, mismap_qnames
-
-

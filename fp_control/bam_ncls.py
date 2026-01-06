@@ -178,7 +178,7 @@ def is_read_noisy(read, paired, mapq_filter, basequal_median_filter=15, filter_n
 
 		num_low = numba_sum(q < basequal_median_filter)
 		if num_low >= 75:
-			logger.debug(f"is_read_noisy: {read.query_name} flagged noisy: #bases with Q<{basequal_median_filter} is {num_low} >= 50")
+			logger.debug(f"is_read_noisy: {read.query_name} flagged noisy: #bases with Q<{basequal_median_filter} is {num_low} >= 75")
 			return True
 
 		# Soft-clip length from CIGAR (op 4)
