@@ -2,15 +2,26 @@
 name = "rust_read_extraction"
 version = "0.1.0"
 edition = "2021"
+description = "Fast BAM to FASTQ conversion with region filtering for SDrecall"
+license = "MIT"
+authors = ["Xingtian Yang <yangyxt@hku.hk>"]
+repository = "https://github.com/snakesch/SDrecall"
 
 [lib]
 name = "rust_read_extraction"
 crate-type = ["cdylib"]
 
+# Optimize for release builds
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+
 [dependencies]
-pyo3 = { workspace = true }
-rust-htslib = { workspace = true }
-rayon = { workspace = true }
-thiserror = { workspace = true }
-anyhow = { workspace = true }
-flate2 = "1.0"  # Module-specific dependency 
+pyo3 = { version = "0.21", features = ["extension-module", "abi3-py38"] }
+rust-htslib = "0.47"
+rayon = "1.8"
+thiserror = "1.0"
+anyhow = "1.0"
+flate2 = "1.0"

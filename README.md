@@ -19,31 +19,61 @@ For molecular diagnosis of Mendelian disease patients, SDrecall provides compreh
 ## Installation
 
 ### Using conda/mamba
-Users should first clone this repository to a local directory.
 
-For mamba/conda users, create an environment from YAML:
+#### Step 1: Clone the repository with Git LFS
+
+SDrecall uses Git LFS to store large data files (reference BAM files). Make sure Git LFS is installed and pull the data files:
+
+```bash
+# Clone the repository
+git clone https://github.com/snakesch/SDrecall.git
+cd SDrecall
+
+# Pull LFS-tracked data files (required for the reference intrinsic alignments)
+git lfs pull
+```
+
+#### Step 2: Create the conda environment
+
 ```bash
 mamba env create -f ./SDrecall.yml --channel-priority flexible
 mamba activate SDrecall
 ```
 
-#### Build the Rust phasing graph module
+#### Step 3: Install the Rust modules
 
-The default phasing workflow now calls a Rust implementation for graph construction. After activating the SDrecall environment, install the Python bindings by running either:
+SDrecall uses two Rust modules for performance-critical operations. After activating the SDrecall environment, install both modules:
 
 ```bash
-# Option 1: install the prebuilt wheel (recommended)
-pip install build-phasing-graph
-
-# Option 2: build from source with maturin (requires Rust toolchain)
-maturin develop --manifest-path rust_modules/build_phasing_graph/Cargo.toml
+# Install prebuilt wheels from PyPI (recommended)
+pip install build-phasing-graph rust-read-extraction
 ```
 
-Option 1 works without a local Rust toolchain. Option 2 requires Rust (`rustup`, `cargo`) and `maturin>=1.6`; rebuild the extension whenever you pull new changes.
+Alternatively, build from source (requires Rust toolchain already included in conda env):
 
-#### Phasing and haplotype optimization updates
+```bash
+# Build phasing graph module
+maturin develop --manifest-path rust_modules/build_phasing_graph/Cargo.toml
 
-The BILC stage now weights paralogous sequence variants (PSVs) more heavily when scoring haplotypes, which significantly improves misalignment filtering.
+# Build read extraction module
+maturin develop --manifest-path rust_modules/read_extraction/Cargo.toml
+```
+
+#### Step 4: Verify installation (optional)
+
+```bash
+# Test that SDrecall runs
+./SDrecall --help
+
+# Optional: Add to PATH for convenience
+export PATH="$(pwd):$PATH"
+```
+
+#### Notes
+
+- **build-phasing-graph**: Rust implementation for graph-based phasing (required)
+- **rust-read-extraction**: Fast BAM to FASTQ conversion with region filtering (optional, falls back to shell commands if not installed)
+- The BILC stage now weights paralogous sequence variants (PSVs) more heavily when scoring haplotypes, which significantly improves misalignment filtering.
 
 ### Using docker/singularity
 Given the long list of dependencies of SDrecall, we are still working on a docker file / singularity recipe. Any contributions are most welcome.
