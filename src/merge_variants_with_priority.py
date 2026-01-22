@@ -400,14 +400,23 @@ def sort_vcf(vcf_file, ref_genome, output_vcf = None, tmp_dir = "/tmp", threads 
     if output_vcf is None:
         output_vcf = vcf_file.replace('.vcf', '.sorted.vcf')
     
+    # DEFENSIVE FIX: Ensure tmp_dir is never just "/tmp" to avoid bcftools path concatenation bug
+    # bcftools may incorrectly concatenate paths (e.g., /tmp + XXXX -> /tmpXXXX instead of /tmp/XXXX)
+    # By using a subdirectory like /tmp/sdrecall_abc123, even buggy concatenation yields valid paths
+    if tmp_dir is None or tmp_dir.strip() == "" or tmp_dir == "/tmp":
+        tmp_dir = os.path.join("/tmp", f"sdrecall_{uuid.uuid4().hex[:8]}")
+        logger.debug(f"Using safe temporary directory: {tmp_dir}")
+    
     # Specify the temporary directory for bcftools
     if not os.path.exists(tmp_dir):
         try:
             os.makedirs(tmp_dir)
         except Exception as e:
             logger.error(f"Failed to create temporary directory {tmp_dir} for bcftools: {e}")
-            tmp_dir = "/tmp"
-            logger.warning(f"Use /tmp as the temporary directory for bcftools")
+            # Fallback with a random subdirectory instead of bare /tmp
+            tmp_dir = os.path.join("/tmp", f"sdrecall_fallback_{uuid.uuid4().hex[:8]}")
+            os.makedirs(tmp_dir, exist_ok=True)
+            logger.warning(f"Using fallback temporary directory: {tmp_dir}")
 
     # Setup the TMPDIR to the specified tmp_dir
     os.environ['TMPDIR'] = tmp_dir
