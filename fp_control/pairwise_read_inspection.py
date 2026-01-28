@@ -43,8 +43,12 @@ def count_continuous_blocks(arr):
 
 @numba.njit(types.int32(types.int16[:]), fastmath=True)
 def count_snv(array):
+    """
+    Count individual SNV positions (encoded as -4) in the haplotype array.
+    Each SNV is counted separately, even if consecutive.
+    """
     snv_bools = array == -4
-    return count_continuous_blocks(snv_bools)
+    return numba_sum(snv_bools)
 
 
 @numba.njit(types.float32[:](types.float32[:], types.int16[:]), fastmath=True, parallel=True)

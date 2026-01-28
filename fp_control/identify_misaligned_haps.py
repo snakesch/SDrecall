@@ -280,7 +280,7 @@ def judge_misalignment_by_extreme_vardensity(seq):
             five_seq = seq[start:end]
             indel_count = count_continuous_indel_blocks(five_seq)
             max_indel_count = max(max_indel_count, indel_count)
-        if max_indel_count > 1:
+        if max_indel_count >= 1:
             return True
 
     if numba_sum(six_vard >= 6/131) > 0:
@@ -294,10 +294,10 @@ def judge_misalignment_by_extreme_vardensity(seq):
             five_seq = seq[start:end]
             indel_count = count_continuous_indel_blocks(five_seq)
             max_indel_count = max(max_indel_count, indel_count)
-        if max_indel_count > 1:
+        if max_indel_count >= 1:
             return True
     
-    if numba_sum(read_vard >= 12/148) > 0:
+    if numba_sum(read_vard >= 11/148) > 0:
         return True
     
     return False
@@ -957,7 +957,7 @@ def inspect_by_haplotypes(input_bam,
         # If only one read pair is in the iterating haplotype, it is a scattered haplotype, it should not be considered since the poor coverage
         qnames = [ qn for qn in qnames if qn not in total_lowqual_qnames ]
         total_qnames.update(set(qnames))
-        if len(qnames) < 2:
+        if len(qnames) < 3:
             scatter_hid_dict[hid] = True
 
         logger.debug(f"The haplotype {hid} contains {len(qnames)} read pairs in total. And the qnames are: \n{qnames}\n")
@@ -1123,10 +1123,10 @@ def inspect_by_haplotypes(input_bam,
         total_record_df.to_csv(compare_haplotype_meta_tab.replace(".tsv", ".raw.tsv"), sep = "\t", index = False)
         logger.info(f"Successfully saved the raw haplotype comparison meta table to {compare_haplotype_meta_tab.replace('.tsv', '.raw.tsv')}. And it looks like \n{total_record_df[:10].to_string(index=False)}\n")
         remove_hids = total_record_df.loc[(total_record_df["scatter_hap"]) | \
-                                          (total_record_df["hap_max_sim_scores"] > 15) | \
+                                          (total_record_df["hap_max_sim_scores"] > 10) | \
                                           (total_record_df["extreme_vard"]), "hap_id"].unique()
 
-        kept_scatter_hids = total_record_df.loc[(total_record_df["hap_var_count"] > 1) & (total_record_df["scatter_hap"]), "hap_id"].unique()
+        kept_scatter_hids = total_record_df.loc[(total_record_df["hap_var_count"] > 2) & (total_record_df["scatter_hap"]), "hap_id"].unique()
         remove_hids = set(remove_hids) - set(kept_scatter_hids)
         logger.info(f"The haplotypes that have been removed are {remove_hids}.")
 
@@ -1167,7 +1167,7 @@ def inspect_by_haplotypes(input_bam,
     if not failed_lp:
         mismap_hids.update(set([hid for hid in hid_extreme_vard if hid_extreme_vard[hid]]))
         mismap_hids.update(set([hid for hid in hap_max_sim_scores if hap_max_sim_scores[hid] > 15]))
-        mismap_hids.update(set([hid for hid in scatter_hid_dict if scatter_hid_dict[hid] and hid_var_count[hid] <= 1]))
+        mismap_hids.update(set([hid for hid in scatter_hid_dict if scatter_hid_dict[hid] and hid_var_count[hid] <= 2]))
         mismap_hids.update(set(remove_hids))
         correct_map_hids = correct_map_hids - mismap_hids
 
