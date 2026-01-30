@@ -192,7 +192,7 @@ def assemble_consensus(seq_arrays, qual_arrays, read_spans):
 
     # Initialize the consensus sequence and quality scores with zeros
     consensus_seq = np.ones(end_pos - start_pos, dtype=np.int16)
-    consensus_qual = np.full(end_pos - start_pos, 0.031622777, dtype=np.float32)
+    consensus_qual = np.full(end_pos - start_pos, 0.2, dtype=np.float32)
 
     for i in prange(len(seq_arrays)):
         '''
@@ -228,7 +228,7 @@ def assemble_consensus(seq_arrays, qual_arrays, read_spans):
         # assert rel_end - rel_start == len(qual), f"Found the relative start and end positions (determined by {len(seq)}) of the current sequence are not equal to the quality vector size {len(qual)} for read {read} at position {start}"
         # qual here is actually err prob, so smaller the better
         mask = qual <= consensus_qual[rel_start:rel_end]
-        mask = mask & (qual < 0.031622777)
+        mask = mask & (qual <= 0.2)
 
         # Update the consensus sequence and quality scores where the current sequence has higher quality
         consensus_seq[rel_start:rel_end][mask] = seq[mask]
@@ -297,7 +297,7 @@ def judge_misalignment_by_extreme_vardensity(seq):
         if max_indel_count >= 1:
             return True
     
-    if numba_sum(read_vard >= 11/148) > 0:
+    if numba_sum(read_vard >= 10/148) > 0:
         return True
     
     return False
@@ -1167,7 +1167,7 @@ def inspect_by_haplotypes(input_bam,
     if not failed_lp:
         mismap_hids.update(set([hid for hid in hid_extreme_vard if hid_extreme_vard[hid]]))
         mismap_hids.update(set([hid for hid in hap_max_sim_scores if hap_max_sim_scores[hid] > 15]))
-        mismap_hids.update(set([hid for hid in scatter_hid_dict if scatter_hid_dict[hid] and hid_var_count[hid] <= 2]))
+        mismap_hids.update(set([hid for hid in scatter_hid_dict if scatter_hid_dict[hid] and hid_var_count[hid] <= 3]))
         mismap_hids.update(set(remove_hids))
         correct_map_hids = correct_map_hids - mismap_hids
 

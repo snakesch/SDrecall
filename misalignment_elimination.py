@@ -72,23 +72,40 @@ def eliminate_misalignments(input_bam,
         executeCmd(cmd, logger=logger)
     except RuntimeError:
         logger.info(f"Start to post process the bam file {input_bam}")
-        splitted_bams, splitted_beds = split_bam_by_cov(input_bam, 
+        splitted_bams, actual_cov_beds = split_bam_by_cov(input_bam, 
                                                         target_bed = target_regions,
                                                         delimiter_size=int(np.ceil(avg_frag_size * 1.5)), 
                                                         logger = logger, 
                                                         threads = threads,
                                                         ref_genome = ref_genome,
                                                         tmp_dir = cache_dir)
-        # Pad the beds by 1000 bp on both sides, each interval follows the format of "chrom:start-end"
-        interval_regex = re.compile(r"^(\S+):(\d+)-(\d+)$")
-        splitted_beds = [interval_regex.sub(lambda m: f"{m.group(1)}:{int(m.group(2)) - 1000}-{int(m.group(3)) + 1000}", bed) for bed in splitted_beds]
+        # Pad the actual coverage beds by 1000 bp on both sides
+        # actual_cov_beds are now BED file paths that include ALL read positions (including distant mates)
+        padded_beds = []
+        for actual_cov_bed in actual_cov_beds:
+            if actual_cov_bed == "NaN" or not os.path.exists(actual_cov_bed):
+                padded_beds.append(actual_cov_bed)
+                continue
+            padded_bed = actual_cov_bed.replace(".actual_cov.bed", ".padded_cov.bed")
+            try:
+                # Use bedtools slop to pad the bed file, then merge overlapping intervals
+                cmd_pad = f"bedtools slop -i {actual_cov_bed} -g {ref_genome}.fai -b 1000 | bedtools sort | bedtools merge > {padded_bed}"
+                executeCmd(cmd_pad, logger=logger)
+                padded_beds.append(padded_bed)
+                logger.info(f"Padded actual coverage bed {actual_cov_bed} -> {padded_bed}")
+            except RuntimeError:
+                logger.warning(f"Failed to pad bed {actual_cov_bed}, using original")
+                padded_beds.append(actual_cov_bed)
+        
         splitted_intrin_bams, _ = split_bam_by_cov( intrinsic_bam, 
                                                     target_bed = target_regions,
-                                                    beds = splitted_beds, 
+                                                    beds = padded_beds, 
                                                     logger = logger, 
                                                     threads = threads,
                                                     ref_genome = ref_genome,
                                                     tmp_dir = cache_dir)
+        # Keep splitted_beds for compatibility with downstream code (using padded beds)
+        splitted_beds = padded_beds
         
         # There is a possiblity that the splitted_intrin_bams might be empty, so we need to check it
         # Sort the list for load balancing

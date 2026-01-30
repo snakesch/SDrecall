@@ -848,6 +848,16 @@ pub fn determine_same_haplotype(
     let interval_seq1 = slice_seq_to_interval(&seq1, &ref_pos1, start, end);
     let interval_seq2 = slice_seq_to_interval(&seq2, &ref_pos2, start, end);
     
+    // CRITICAL: Check for empty sequences BEFORE comparison
+    // Empty sequences can occur when the overlap interval falls in soft-clipped regions
+    // Two empty sequences would incorrectly be treated as "identical" by compare_sequences
+    if interval_seq1.is_empty() || interval_seq2.is_empty() {
+        warn!("[determine_same_haplotype] Empty sliced sequence(s) detected: read1_len={}, read2_len={} for interval {}:{}-{}. \
+               This may indicate the overlap interval falls in soft-clipped regions. Returning UNKNOWN.",
+               interval_seq1.len(), interval_seq2.len(), chrom, start, end);
+        return Ok((HaplotypeResult::Unknown, None));
+    }
+    
     // Step 3: Get haplotype vectors (needed for weight calculation in both paths)
     // OPTIMIZATION: Compute once, use in both identical and tolerable mismatch cases
     let hap_vec1 = get_hap_vector(read1, read_hap_vectors)?;
@@ -927,12 +937,8 @@ pub fn determine_same_haplotype(
             return Ok((HaplotypeResult::Different, None));
         }
         
-        // Check if either sequence is empty
-        if interval_seq1.is_empty() || interval_seq2.is_empty() {
-            warn!("[determine_same_haplotype] Empty sequence(s): read1_len={}, read2_len={} -> UNKNOWN", 
-                   interval_seq1.len(), interval_seq2.len());
-            return Ok((HaplotypeResult::Unknown, None));
-        }
+        // Note: Empty sequence check is now done before compare_sequences() call
+        // This branch is only reached when both sequences are non-empty but differ
         
         // Slice haplotype vectors to the interval for mismatch analysis
         let interval_hap1 = slice_hap_vector(&hap_vec1, read1.pos(), start, end);

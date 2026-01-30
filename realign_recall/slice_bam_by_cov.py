@@ -21,6 +21,7 @@ def slice_bam_per_bed(bed, bam, ref_genome, chunk_id, threads = 4, tmp_dir = "/t
     cov_bam = bam.replace(".bam", f".{chunk_id}.bam")
     cov_sam = cov_bam.replace(".bam", ".sam")
     cov_bam_header = cov_bam.replace(".bam", ".header")
+    actual_cov_bed = cov_bam.replace(".bam", ".actual_cov.bed")  # NEW: actual coverage bed
     bam_index = bam + ".bai"
     if not os.path.exists(bam_index):
         execute = True
@@ -60,9 +61,32 @@ def slice_bam_per_bed(bed, bam, ref_genome, chunk_id, threads = 4, tmp_dir = "/t
         executeCmd(cmd, logger = logger)
     except RuntimeError:
         logger.warning(f"Failed to slice the bam file {bam} by bed {bed} and generate a {cov_bam}")
-        return "NaN"
-    else:
-        return cov_bam
+        return "NaN", "NaN"
+    
+    # NEW: After slicing, get actual coverage regions from the sliced BAM
+    # This captures ALL read positions including distant mates
+    try:
+        cmd_cov = f"bedtools bamtobed -i {cov_bam} | sort -k1,1 -k2,2n | bedtools merge -d 100 > {actual_cov_bed}"
+        executeCmd(cmd_cov, logger=logger)
+        logger.info(f"Generated actual coverage bed {actual_cov_bed} for sliced BAM {cov_bam}")
+    except RuntimeError:
+        logger.warning(f"Failed to generate actual coverage bed for {cov_bam}, using original bed region")
+        # Fallback: write the original bed region to actual_cov_bed
+        if os.path.exists(bed):
+            cmd_fallback = f"cp {bed} {actual_cov_bed}"
+        else:
+            # bed is a region string like "chr1:1000-2000", convert to BED format
+            match = re.match(r"^(\S+):(\d+)-(\d+)$", bed)
+            if match:
+                chrom, start, end = match.groups()
+                cmd_fallback = f"echo -e '{chrom}\\t{int(start)-1}\\t{end}' > {actual_cov_bed}"
+            else:
+                actual_cov_bed = "NaN"
+                cmd_fallback = None
+        if cmd_fallback:
+            executeCmd(cmd_fallback, logger=logger)
+    
+    return cov_bam, actual_cov_bed
 
 
 def extract_depth_blocks(depth_file, min_depth=5, output_file=None):
@@ -296,12 +320,15 @@ def split_bam_by_cov(bam,
             repeat(tmp_dir)))
 
         splitted_bams = []
+        actual_cov_beds = []  # NEW: collect actual coverage beds
         i = 0
         for success, result, log_contents in result_records:
             i += 1
             print(f"\n************************************{i}_subprocess_start_for_slice_bam************************************\n", file=sys.stderr)
             if success:
-                splitted_bams.append(result)
+                sliced_bam, sliced_actual_cov_bed = result  # NEW: unpack tuple
+                splitted_bams.append(sliced_bam)
+                actual_cov_beds.append(sliced_actual_cov_bed)  # NEW: collect actual coverage bed
                 print(f"Successfully slice the bam file {bam}. The log info are:\n{log_contents}\n", file=sys.stderr)
             else:
                 error_mes, tb_str = result
@@ -310,4 +337,4 @@ def split_bam_by_cov(bam,
             print(f"\n************************************{i}_subprocess_end_for_slice_bam************************************\n", file=sys.stderr)
      
     logger.info(f"Successfully split the BAM file {bam} into {len(splitted_bams)} parts")
-    return splitted_bams, beds
+    return splitted_bams, actual_cov_beds  # NEW: return actual_cov_beds instead of beds
