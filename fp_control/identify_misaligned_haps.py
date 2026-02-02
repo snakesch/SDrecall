@@ -304,14 +304,14 @@ def judge_misalignment_by_extreme_vardensity(seq):
 
 
 
-@numba.njit(types.float32[:](types.int32[:, :]), fastmath=True)
+@numba.njit(types.float32[:](types.float32[:,:]), fastmath=True)
 def calculate_coefficient(arr2d):
     # Span size is the weight for later mean value calculation
-    rank_f = arr2d[:, 8].astype(np.float32)
+    psv_metric = arr2d[:, 9].astype(np.float32)
     span = (arr2d[:, 1].astype(np.float32) - arr2d[:, 0].astype(np.float32)) / np.float32(100.0)
     depth_frac = (np.float32(1.0) - (arr2d[:, 4].astype(np.float32) / arr2d[:, 2].astype(np.float32)))
 
-    res = rank_f * span * depth_frac
+    res = psv_metric * np.sqrt(span) * depth_frac
     return res
 
 
@@ -349,7 +349,8 @@ def calculate_coefficient_per_group(record_df, logger=logger):
                                                                                 "var_count",
                                                                                 "indel_count",
                                                                                 "psv_count",
-                                                                                "varc_rank"]].to_numpy(dtype=np.int32))
+                                                                                "varc_rank",
+                                                                                "hap_max_sim_scores"]].to_numpy(dtype=np.float32))
     # logger.info(f"After calculating the coefficient for this region, the dataframe looks like :\n{record_df[:10].to_string(index=False)}\n")
     return record_df
 
@@ -845,7 +846,7 @@ def cal_similarity_score(varcounts_among_refseqs, hid_var_count, logger = logger
             psv_pos_abs = np.sort(unique_psv_pos_abs).astype(np.int32)
             # Count the number of unique positions
             shared_psv_ratio = total_shared_psv / total_varcount if total_varcount > 0 else min(1, total_shared_psv)
-            mixed_psv_metric = 0.65 * shared_psv_ratio * total_shared_psv - (alt_snv_count + alt_indel_count - total_shared_psv)
+            mixed_psv_metric = 0.5 * shared_psv_ratio * total_shared_psv - 0.5 * (alt_snv_count + alt_indel_count - total_shared_psv)
             logger.info(f"For haplotype {hid}, comparing to the reference sequence {homo_refseq_qname}, the similarity score is {shared_psv_ratio} x {total_shared_psv} - ({alt_snv_count + alt_indel_count} - {total_shared_psv}) = {mixed_psv_metric}, while the total_shared_psv is {total_shared_psv}, the alt_snv_count is {alt_snv_count}, the alt_indel_count is {alt_indel_count}")
 
             if mixed_psv_metric > max_psv:
@@ -1118,15 +1119,23 @@ def inspect_by_haplotypes(input_bam,
         total_record_df["scatter_hap"] = total_record_df["hap_id"].map(scatter_hid_dict).fillna(False)
         total_record_df["hap_var_count"] = total_record_df["hap_id"].map(hid_var_count)
         total_record_df["hap_max_sim_scores"] = total_record_df["hap_id"].map(hap_max_sim_scores).fillna(0)
+        # Normalize the hap_max_sim_scores by minus the minimum value
+        total_record_df["hap_max_sim_scores"] = total_record_df["hap_max_sim_scores"] - total_record_df["hap_max_sim_scores"].min()
+
         total_record_df["hap_max_psvs"] = total_record_df["hap_id"].map(hap_max_psvs).fillna(0)
         # total_record_df.loc[:, "coefficient"] = total_record_df["coefficient"] * 100 + total_record_df.loc[:, "var_count"]
         total_record_df.to_csv(compare_haplotype_meta_tab.replace(".tsv", ".raw.tsv"), sep = "\t", index = False)
         logger.info(f"Successfully saved the raw haplotype comparison meta table to {compare_haplotype_meta_tab.replace('.tsv', '.raw.tsv')}. And it looks like \n{total_record_df[:10].to_string(index=False)}\n")
         remove_hids = total_record_df.loc[(total_record_df["scatter_hap"]) | \
-                                          (total_record_df["hap_max_sim_scores"] > 10) | \
+                                          (total_record_df["hap_max_sim_scores"] > 8) | \
+                                          (total_record_df["hap_max_psvs"] >= 12) | \
                                           (total_record_df["extreme_vard"]), "hap_id"].unique()
 
-        kept_scatter_hids = total_record_df.loc[(total_record_df["hap_var_count"] > 2) & (total_record_df["scatter_hap"]), "hap_id"].unique()
+        kept_scatter_hids = total_record_df.loc[(total_record_df["hap_var_count"] >= 1) & \
+                                                (total_record_df["scatter_hap"]) & \
+                                                (total_record_df["hap_max_psvs"] < 12) & \
+                                                (total_record_df["hap_max_sim_scores"] <= 8) & \
+                                                (total_record_df["extreme_vard"] == False), "hap_id"].unique()
         remove_hids = set(remove_hids) - set(kept_scatter_hids)
         logger.info(f"The haplotypes that have been removed are {remove_hids}.")
 
