@@ -1050,19 +1050,19 @@ def inspect_by_haplotypes(input_bam,
 
     sweep_region_bed = input_bam.replace(".bam", ".sweep.bed")
     # Select regions overlapped by at least 3 haplotypes from cached per-haplotype coverage
-    # sweep_regions = sweep_region_inspection(  input_bam,
-    #                                           output_bed=sweep_region_bed,
-    #                                           depth_cutoff=5,
-    #                                           window_size=120,
-    #                                           step_size=10,
-    #                                           logger=logger )
-    sweep_regions = select_regions_with_min_haplotypes_from_hapbeds(
-        hid_cov_beds,
-        output_bed=sweep_region_bed,
-        min_haplotypes=1,
-        use_cli=True,
-        logger=logger
-    )
+    sweep_regions = sweep_region_inspection(  input_bam,
+                                              output_bed=sweep_region_bed,
+                                              depth_cutoff=5,
+                                              window_size=120,
+                                              step_size=10,
+                                              logger=logger )
+    # sweep_regions = select_regions_with_min_haplotypes_from_hapbeds(
+    #     hid_cov_beds,
+    #     output_bed=sweep_region_bed,
+    #     min_haplotypes=1,
+    #     use_cli=True,
+    #     logger=logger
+    # )
     logger.info(f"Now the sweep regions are saved to {sweep_region_bed}.")
 
     '''
