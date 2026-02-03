@@ -108,19 +108,19 @@ def lp_solve_remained_haplotypes(total_record_df,
     for name, group in by_region:
         region_str = f"{name[0]}:{name[1]}-{name[2]}"
         included_hapids = group["hap_id"].unique()
-        rank_2_count = group.loc[group["rank"] <= 2, "hap_id"].nunique()
-        rank_1_count = group.loc[group["rank"] <= 1, "hap_id"].nunique()
+        total_var_count = group["var_count"].sum()
+        rank_2_count = group.loc[group["varc_rank"] <= 2, "hap_id"].nunique()
+        rank_1_count = group.loc[group["varc_rank"] <= 1, "hap_id"].nunique()
         # Column index extraction
         hapid_indices = [hapid_to_index[hapid] for hapid in included_hapids]
-        lower_bound = included_hapids.size - rank_2_count if included_hapids.size > 3 else included_hapids.size - rank_1_count
-        lower_bound = included_hapids.size if included_hapids.size <= 1 else lower_bound
-        upper_bound = 0
-        status = highs.addRow(upper_bound,
-                              lower_bound,
+        upper_bound = included_hapids.size - rank_2_count if included_hapids.size > 3 or total_var_count >= 1 else included_hapids.size - rank_1_count
+        upper_bound = included_hapids.size if included_hapids.size <= 1 else upper_bound
+        status = highs.addRow(0,
+                              upper_bound,
                               included_hapids.size,
                               np.array(hapid_indices, dtype=np.int32),
                               np.ones(included_hapids.size, dtype=np.double))
-        logger.info(f"For region {region_str}, the addrow status is {status}, the group included hap_ids are {included_hapids.tolist()}, the corresponding hap_id indices are {hapid_indices} the lower bound is {lower_bound}, the upper bound is {upper_bound}.")
+        logger.info(f"For region {region_str}, the addrow status is {status}, the group included hap_ids are {included_hapids.tolist()}, the corresponding hap_id indices are {hapid_indices} the lower bound is 0, the upper bound is {upper_bound}.")
 
     # Run solver
     highs.run()

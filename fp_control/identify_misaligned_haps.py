@@ -846,7 +846,7 @@ def cal_similarity_score(varcounts_among_refseqs, hid_var_count, logger = logger
             psv_pos_abs = np.sort(unique_psv_pos_abs).astype(np.int32)
             # Count the number of unique positions
             shared_psv_ratio = total_shared_psv / total_varcount if total_varcount > 0 else min(1, total_shared_psv)
-            mixed_psv_metric = 0.5 * shared_psv_ratio * total_shared_psv - 0.5 * (alt_snv_count + alt_indel_count - total_shared_psv)
+            mixed_psv_metric = shared_psv_ratio * np.sqrt(total_shared_psv) - np.sqrt(alt_snv_count + alt_indel_count - total_shared_psv)
             logger.info(f"For haplotype {hid}, comparing to the reference sequence {homo_refseq_qname}, the similarity score is {shared_psv_ratio} x {total_shared_psv} - ({alt_snv_count + alt_indel_count} - {total_shared_psv}) = {mixed_psv_metric}, while the total_shared_psv is {total_shared_psv}, the alt_snv_count is {alt_snv_count}, the alt_indel_count is {alt_indel_count}")
 
             if mixed_psv_metric > max_psv:
@@ -1119,8 +1119,10 @@ def inspect_by_haplotypes(input_bam,
         total_record_df["scatter_hap"] = total_record_df["hap_id"].map(scatter_hid_dict).fillna(False)
         total_record_df["hap_var_count"] = total_record_df["hap_id"].map(hid_var_count)
         total_record_df["hap_max_sim_scores"] = total_record_df["hap_id"].map(hap_max_sim_scores).fillna(0)
+        # Round the hap_max_sim_scores to 1 decimal places
+        total_record_df["hap_max_sim_scores"] = total_record_df["hap_max_sim_scores"].round(1)
         # Normalize the hap_max_sim_scores by minus the minimum value
-        total_record_df["hap_max_sim_scores"] = total_record_df["hap_max_sim_scores"] - total_record_df["hap_max_sim_scores"].min()
+        # total_record_df["hap_max_sim_scores"] = total_record_df["hap_max_sim_scores"] - total_record_df["hap_max_sim_scores"].min()
 
         total_record_df["hap_max_psvs"] = total_record_df["hap_id"].map(hap_max_psvs).fillna(0)
         # total_record_df.loc[:, "coefficient"] = total_record_df["coefficient"] * 100 + total_record_df.loc[:, "var_count"]
