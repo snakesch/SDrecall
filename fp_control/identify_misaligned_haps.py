@@ -620,6 +620,7 @@ def identify_misalignment_per_region(region,
 
 
 
+
 def record_hap_err_vectors_per_region(reads, 
                                       total_hap_vectors, 
                                       total_err_vectors, 
