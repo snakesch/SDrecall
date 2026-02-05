@@ -830,7 +830,7 @@ def cal_similarity_score(varcounts_among_refseqs, hid_var_count, logger = logger
 
     # Iterate over all the reference genome similarities for all the haplotypes
     for hid, gdict in varcounts_among_refseqs.items():
-        max_psv = -100
+        max_psv = -1
         max_psv_c = 0
         max_psv_pos = np.empty(0, dtype=np.int32)
         for homo_refseq_qname, pairs in gdict.items():
@@ -850,7 +850,7 @@ def cal_similarity_score(varcounts_among_refseqs, hid_var_count, logger = logger
             non_psv_count = total_varcount - total_shared_psv
             total_psv_count = alt_snv_count + alt_indel_count
             psv_sharing_ratio = total_shared_psv / total_psv_count # Measure how different to homologous sequence than the total PSV count
-            mixed_psv_metric = psv_var_ratio * np.sqrt(total_shared_psv) * np.sqrt(non_psv_count) * psv_sharing_ratio - (1 - psv_var_ratio)
+            mixed_psv_metric = np.sqrt(psv_var_ratio) * total_shared_psv * np.sqrt(psv_sharing_ratio) + np.sqrt(non_psv_count) - (1 - psv_var_ratio)
             logger.info(f"For haplotype {hid}, comparing to the reference sequence {homo_refseq_qname}, the similarity score is {psv_var_ratio} x {total_shared_psv} - ({alt_snv_count + alt_indel_count} - {total_shared_psv}) = {mixed_psv_metric}, while the total_shared_psv is {total_shared_psv}, the alt_snv_count is {alt_snv_count}, the alt_indel_count is {alt_indel_count}")
 
             if mixed_psv_metric > max_psv:
@@ -1158,7 +1158,17 @@ def inspect_by_haplotypes(input_bam,
         by_region = total_record_df.groupby(["chrom", "start", "end"], group_keys=False)
         total_record_df = by_region.apply(calculate_coefficient_per_group, logger = logger).reset_index(drop=True)
 
-        interval_coefficients = total_record_df.groupby(["hap_id"])["interval_coefficient"].mean().reset_index().rename(columns={"interval_coefficient": "coefficient"})
+        # Calculate span-weighted average coefficient for each haplotype
+        total_record_df["span"] = total_record_df["end"] - total_record_df["start"]
+        interval_coefficients = (
+            total_record_df
+            .groupby(["hap_id"])
+            .apply(lambda g: pd.Series({
+                "coefficient": (g["interval_coefficient"]).sum() / g["span"].sum()
+            }))
+            .reset_index()
+        )
+
         total_record_df = total_record_df.merge(interval_coefficients, how="left", on="hap_id")
         logger.info(f"Each haplotype gets an weighted avg coefficient from all its interval coefficients and now the table looks like \n{total_record_df[:10].to_string(index=False)}\n")
 
