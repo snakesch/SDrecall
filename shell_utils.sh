@@ -467,7 +467,7 @@ function independent_minimap2_masked () {
     log "Running minimap2 --eqx --MD -F 1000 -ax ${mode} --no-end-flt -t ${threads} \
     -R \"@RG\tID:${samp_ID}\tLB:SureSelectXT Library Prep Kit\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}\" \
     ${masked_genome/.fasta/.mmi} ${forward_reads} ${reverse_reads}" && \
-    minimap2 -ax ${mode} --eqx --MD -F 1000 -t ${threads} ${kwargs} -R "@RG\tID:${samp_ID}\tLB:SureSelectXT\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}" \
+    minimap2 -ax ${mode} --eqx --MD -F 1000 --end-bonus 10 -t ${threads} ${kwargs} -R "@RG\tID:${samp_ID}\tLB:SureSelectXT\tPL:ILLUMINA\tPU:1064\tSM:${samp_ID}" \
     ${masked_genome/.fasta/.mmi} ${forward_reads} ${reverse_reads} > ${mid_align} && \
     log "Modify the bam header with modify_bam_sq_lines ${mid_align} ${ref_genome} ${output_align/.bam/.header}" && \
     modify_bam_sq_lines ${mid_align} ${ref_genome} ${output_align/.bam/.header} && \
