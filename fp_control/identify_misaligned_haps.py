@@ -325,7 +325,7 @@ def calculate_coefficient(arr2d):
     span = (arr2d[:, 1].astype(np.float32) - arr2d[:, 0].astype(np.float32)) / np.float32(100.0)
     depth_frac = (np.float32(1.0) - (arr2d[:, 4].astype(np.float32) / arr2d[:, 2].astype(np.float32)))
 
-    res = psv_metric * np.sqrt(span) * depth_frac
+    res = psv_metric * np.sqrt(span) * np.sqrt(depth_frac)
     return res
 
 
