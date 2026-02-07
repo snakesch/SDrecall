@@ -11,10 +11,12 @@ realign_recall/__pycache__/
 fp_control/__pycache__/
 realign_recall/.ipynb_checkpoints/
 fp_control/.ipynb_checkpoints/
+fp_control/vis_bilc_diagnostic.py
 rust_modules/target/*
 rust_modules/target
 .vscode/
 .vscode/*
 *.log
+*.png
 */*.log
 CLAUDE.md

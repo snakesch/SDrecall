@@ -262,12 +262,26 @@ def count_window_var_density(array, padding_size = 25):
 
 
 
-@numba.njit(types.boolean(types.int16[:]), fastmath=True)
+@numba.njit(types.Tuple((types.boolean, types.float32))(types.int16[:]), fastmath=True)
 def judge_misalignment_by_extreme_vardensity(seq):
-    five_vard = count_window_var_density(seq, padding_size = 42)
-    six_vard = count_window_var_density(seq, padding_size = 65)
-    read_vard = count_window_var_density(seq, padding_size = 74)
-    # logger.debug(f"For the sequence {seq.tolist()}, the five_vard is {five_vard.tolist()}, the six_vard is {six_vard.tolist()}, the read_vard is {read_vard.tolist()}")
+    five_vard = count_window_var_density(seq, padding_size=42)
+    six_vard = count_window_var_density(seq, padding_size=65)
+    read_vard = count_window_var_density(seq, padding_size=74)
+
+    # Track the overall max local density across all three window sizes
+    max_density = np.float32(0.0)
+    if five_vard.size > 0:
+        d = five_vard.max()
+        if d > max_density:
+            max_density = d
+    if six_vard.size > 0:
+        d = six_vard.max()
+        if d > max_density:
+            max_density = d
+    if read_vard.size > 0:
+        d = read_vard.max()
+        if d > max_density:
+            max_density = d
 
     if numba_sum(five_vard >= 5/85) > 0:
         select_bool = five_vard >= 5/85
@@ -281,7 +295,7 @@ def judge_misalignment_by_extreme_vardensity(seq):
             indel_count = count_continuous_indel_blocks(five_seq)
             max_indel_count = max(max_indel_count, indel_count)
         if max_indel_count >= 1:
-            return True
+            return True, max_density
 
     if numba_sum(six_vard >= 6/131) > 0:
         select_bool = six_vard >= 6/131
@@ -295,12 +309,12 @@ def judge_misalignment_by_extreme_vardensity(seq):
             indel_count = count_continuous_indel_blocks(five_seq)
             max_indel_count = max(max_indel_count, indel_count)
         if max_indel_count >= 1:
-            return True
-    
+            return True, max_density
+
     if numba_sum(read_vard >= 10/148) > 0:
-        return True
-    
-    return False
+        return True, max_density
+
+    return False, max_density
 
 
 
@@ -804,7 +818,9 @@ def stat_refseq_similarity(intrin_bam_ncls,
 
 
 
-def cal_similarity_score(varcounts_among_refseqs, hid_var_count, logger = logger):
+def cal_similarity_score(varcounts_among_refseqs, hid_var_count, hid_max_local_density=None, logger = logger):
+    if hid_max_local_density is None:
+        hid_max_local_density = defaultdict(float)
     '''
     Input is a dictionary with two layers of keys:
     haplotype_id --> reference_sequence_id --> (variant_count, alt_variant_count) where:
@@ -850,7 +866,9 @@ def cal_similarity_score(varcounts_among_refseqs, hid_var_count, logger = logger
             non_psv_count = total_varcount - total_shared_psv
             total_psv_count = alt_snv_count + alt_indel_count
             psv_sharing_ratio = total_shared_psv / total_psv_count # Measure how different to homologous sequence than the total PSV count
-            mixed_psv_metric = np.sqrt(psv_var_ratio) * total_shared_psv * np.sqrt(psv_sharing_ratio) + np.sqrt(non_psv_count) - (1 - psv_var_ratio)
+            max_density = hid_max_local_density.get(hid, 0.0)
+            non_psv_density_100bp = max_density * 100.0
+            mixed_psv_metric = np.sqrt(psv_var_ratio) * total_shared_psv * np.sqrt(psv_sharing_ratio) + np.sqrt(non_psv_density_100bp) - (3 - psv_var_ratio)
             logger.info(f"For haplotype {hid}, comparing to the reference sequence {homo_refseq_qname}, the similarity score is {psv_var_ratio} x {total_shared_psv} - ({alt_snv_count + alt_indel_count} - {total_shared_psv}) = {mixed_psv_metric}, while the total_shared_psv is {total_shared_psv}, the alt_snv_count is {alt_snv_count}, the alt_indel_count is {alt_indel_count}")
 
             if mixed_psv_metric > max_psv:
@@ -952,6 +970,7 @@ def inspect_by_haplotypes(input_bam,
     hid_extreme_vard = defaultdict(bool) # Initialize a dictionary to store if the haplotype has extreme variant density
     hid_var_count = defaultdict(int) # Initialize a dictionary to store the variant count of the haplotype
     scatter_hid_dict = defaultdict(bool) # Initialize a dictionary to store if the haplotype is scattered
+    hid_max_local_density = defaultdict(float) # Initialize a dictionary to track max local density per haplotype
     logger.info("All the haplotype IDs are :\n{}\n".format(list(hap_qname_info.keys())))
     varcounts_among_refseqs = defaultdict(dict)
     total_qnames = set()
@@ -1002,7 +1021,10 @@ def inspect_by_haplotypes(input_bam,
             consensus_sequence = assemble_consensus(hap_vectors, err_vectors, read_spans)
 
             # Judge if the consensus sequence of the haplotype within the iterating continuous region contains extremely high variant density
-            extreme_vard = judge_misalignment_by_extreme_vardensity(consensus_sequence)
+            extreme_vard, region_max_density = judge_misalignment_by_extreme_vardensity(consensus_sequence)
+
+            # Track the maximum local variant density across all continuous regions for this haplotype
+            hid_max_local_density[hid] = max(hid_max_local_density[hid], float(region_max_density))
 
             # Count the variant count of the consensus sequence
             var_count = count_var(consensus_sequence)
@@ -1042,7 +1064,7 @@ def inspect_by_haplotypes(input_bam,
 
     # Calculate the maximum similarity score for all the haplotypes
     # Detailed explanation of the similarity score is in the docstring of the function cal_similarity_score
-    hap_max_sim_scores, hap_max_psvs, hap_max_psv_pos = cal_similarity_score(varcounts_among_refseqs, hid_var_count, logger = logger)
+    hap_max_sim_scores, hap_max_psvs, hap_max_psv_pos = cal_similarity_score(varcounts_among_refseqs, hid_var_count, hid_max_local_density=hid_max_local_density, logger = logger)
     for hid in hap_qname_info.keys():
         if hid not in hap_max_sim_scores:
             logger.warning(f"The haplotype {hid} does not have any reference sequence similarity score. So we set the similarity score to 0.")
