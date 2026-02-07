@@ -1155,14 +1155,14 @@ def inspect_by_haplotypes(input_bam,
         total_record_df.to_csv(compare_haplotype_meta_tab.replace(".tsv", ".raw.tsv"), sep = "\t", index = False)
         logger.info(f"Successfully saved the raw haplotype comparison meta table to {compare_haplotype_meta_tab.replace('.tsv', '.raw.tsv')}. And it looks like \n{total_record_df[:10].to_string(index=False)}\n")
         remove_hids = total_record_df.loc[(total_record_df["scatter_hap"]) | \
-                                          (total_record_df["hap_max_sim_scores"] > 8) | \
+                                          (total_record_df["hap_max_sim_scores"] > 10) | \
                                           (total_record_df["hap_max_psvs"] >= 12) | \
                                           (total_record_df["extreme_vard"]), "hap_id"].unique()
 
         kept_scatter_hids = total_record_df.loc[(total_record_df["hap_var_count"] >= 1) & \
                                                 (total_record_df["scatter_hap"]) & \
                                                 (total_record_df["hap_max_psvs"] < 12) & \
-                                                (total_record_df["hap_max_sim_scores"] <= 8) & \
+                                                (total_record_df["hap_max_sim_scores"] <= 10) & \
                                                 (total_record_df["extreme_vard"] == False), "hap_id"].unique()
         remove_hids = set(remove_hids) - set(kept_scatter_hids)
         logger.info(f"The haplotypes that have been removed are {remove_hids}.")
