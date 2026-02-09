@@ -39,7 +39,7 @@ class Genome:
         pd.read_csv(self.fai_index, sep="\t", header=None).iloc[:, [0, 1]].to_csv(contig_genome_fn, sep="\t", index=False, header=False)
         return contig_genome_fn
 
-    def mask(self, bedf: str, avg_frag_size=400, std_frag_size=130, genome="hg19", logger=None, path=""):
+    def mask(self, bedf: str, avg_frag_size=400, std_frag_size=130, genome="hg19", logger=None, path="", merge_gap=10_000_000):
         if not os.path.exists(bedf):
             raise FileNotFoundError(f"Invalid BED file: {bedf}")
         if path == "":
@@ -50,6 +50,13 @@ class Genome:
 
         ref_genome_seq = Fasta(self.path)
         masked_genome_contigs = self._mask_intervals(target_bed, ref_genome_seq, logger)
+
+        # Merge nearby same-chromosome contigs with N-bridging so that
+        # minimap2 can use paired-end insert-size scoring across SD paralog
+        # regions within the same RG (contigs on separate sequences break
+        # minimap2's paired-end rescue).
+        if merge_gap > 0:
+            masked_genome_contigs = self._merge_nearby_contigs(masked_genome_contigs, merge_gap, logger)
 
         self._write_masked_genome(masked_genome_contigs, region, path)
 
@@ -78,6 +85,71 @@ class Genome:
                 logger.error("Sequence already contains N at both ends, SDrecall was unable to add N. ")
                 sys.exit(1)
         return Seq(masked_seq)
+
+    def _merge_nearby_contigs(self, contigs, max_gap, logger):
+        """
+        Merge same-chromosome contigs within max_gap bp by inserting an
+        exact-length N-bridge between them.
+
+        The bridge length equals:
+            next_genomic_start - (current_genomic_start + len(current_seq))
+
+        This preserves the coordinate mapping used by modify_masked_genome_coords
+        in shell_utils.sh: for a merged contig named '{chrom}:{start}', a read
+        at local position P maps to genomic position start + P.
+        """
+        # Group contigs by chromosome (parsed from ID format "{chrom}:{start}")
+        by_chrom = {}
+        for contig in contigs:
+            chrom, start_str = contig.id.rsplit(":", 1)
+            start = int(start_str)
+            by_chrom.setdefault(chrom, []).append((start, contig))
+
+        merged = []
+        for chrom in sorted(by_chrom.keys()):
+            group = by_chrom[chrom]
+            group.sort(key=lambda x: x[0])  # sort by genomic start
+
+            current_start = group[0][0]
+            current_seq = str(group[0][1].seq)
+
+            for i in range(1, len(group)):
+                next_start = group[i][0]
+                next_seq = str(group[i][1].seq)
+
+                # How many N's are needed to bridge from end of current to start of next
+                current_end = current_start + len(current_seq)
+                bridge_n = next_start - current_end
+
+                if bridge_n < 0:
+                    # Contigs overlap -- should not happen after BED sort+merge+slop,
+                    # but guard against it: emit current, start fresh
+                    logger.warning(
+                        f"Contigs {chrom}:{current_start} and {chrom}:{next_start} "
+                        f"overlap by {-bridge_n}bp -- emitting separately")
+                    merged.append(SeqRecord(Seq(current_seq),
+                                  id=f"{chrom}:{current_start}", description=""))
+                    current_start, current_seq = next_start, next_seq
+                elif bridge_n <= max_gap:
+                    current_seq += "N" * bridge_n + next_seq
+                    logger.debug(
+                        f"Merged {chrom}:{next_start} (len={len(next_seq):,}) "
+                        f"into {chrom}:{current_start} with {bridge_n:,}bp N-bridge, "
+                        f"merged length now {len(current_seq):,}bp")
+                else:
+                    # Gap too large -- emit current, start fresh
+                    merged.append(SeqRecord(Seq(current_seq),
+                                  id=f"{chrom}:{current_start}", description=""))
+                    current_start, current_seq = next_start, next_seq
+
+            # Emit the last accumulated contig
+            merged.append(SeqRecord(Seq(current_seq),
+                          id=f"{chrom}:{current_start}", description=""))
+
+        logger.info(
+            f"Contig merging (max_gap={max_gap:,}bp): "
+            f"{len(contigs)} contigs -> {len(merged)} merged contigs")
+        return merged
 
     def _write_masked_genome(self, masked_genome_contigs, region, path):
         tmp_tag = str(uuid.uuid4())
