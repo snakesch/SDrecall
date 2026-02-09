@@ -155,8 +155,7 @@ def extract_SD_paralog_pairs_from_graph(query_nodes,
 
     unfiltered_graph = directed_graph.copy()
     # Filter out small SDs
-    # cutoff = max(mean_read_length, avg_frag_size - 1 * std_frag_size)
-    cutoff = 140  # Use fixed read-length cutoff to catch small SDs causing single-read mapping ambiguity
+    cutoff = max(mean_read_length, avg_frag_size - 1 * std_frag_size)
     tobe_removed_nodes = []
     for node in directed_graph.nodes(data=True):
         size = float(node[0][2]) - float(node[0][1])

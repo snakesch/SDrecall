@@ -122,11 +122,8 @@ def prepare_recall_regions( paths: SDrecallPaths,
     logger.info("Total coverage of reference SD map: {}bp".format(ref_bed_obj.total_coverage()))
 
     ## Filter out SD regions smaller than average insert size.
-    # big_ref_bed_obj = ref_bed_obj.filter(lambda x: len(x) > avg_frag_size).saveas() ## .saveas makes the BedTool object persistent in memory
-    # logger.info(f"After excluding paired reference SDs with fragment size < {avg_frag_size:.1f}bp, the reference SD map covers {big_ref_bed_obj.total_coverage()}bp. ")
-    ## Use read-length (140bp) cutoff instead of insert-size to catch small SDs that cause single-read mapping ambiguity
-    big_ref_bed_obj = ref_bed_obj.filter(lambda x: len(x) > 140).saveas()
-    logger.info(f"After excluding paired reference SDs shorter than 140bp (read-length cutoff), the reference SD map covers {big_ref_bed_obj.total_coverage()}bp. ")
+    big_ref_bed_obj = ref_bed_obj.filter(lambda x: len(x) > avg_frag_size).saveas() ## .saveas makes the BedTool object persistent in memory
+    logger.info(f"After excluding paired reference SDs with fragment size < {avg_frag_size:.1f}bp, the reference SD map covers {big_ref_bed_obj.total_coverage()}bp. ")
 
     # Step 3: Compare multialigned BED regions to the reference SD map to identify SD regions with mapping ambiguity
     total_bin_sd_bed = big_ref_bed_obj.intersect(multi_align_bed, wo=True)

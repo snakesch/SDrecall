@@ -50,9 +50,8 @@ def inspect_cnode_along_route(graph,
             qnode.rela_start = qnode_overlap_start
             qnode.rela_end = qnode_overlap_end
             
-            # if qnode_overlap_size <= max(mean_read_length, avg_frag_size - 2 * std_frag_size):
-            #     # 0.05 quantile in insert size distribution
-            if qnode_overlap_size <= 140:  # Use fixed read-length cutoff
+            if qnode_overlap_size <= max(mean_read_length, avg_frag_size - 2 * std_frag_size):
+                # 0.05 quantile in insert size distribution
                 logger.debug(f"The overlapping region for (cnode is {cnode}) query node {qnode}, ({qnode.chrom}:{qnode.start + qnode_overlap_start}-{qnode.start + qnode_overlap_end}) is too small, the traverse route ends here: {list(qnode.traverse_route) + [(qnode, 'overlap')]}")
                 return None
             else:
@@ -65,8 +64,7 @@ def inspect_cnode_along_route(graph,
                 cnode.rela_start = cnode_rela_start
                 cnode.rela_end = cnode_rela_end
 
-                # if cnode_rela_end - cnode_rela_start <= max(mean_read_length, avg_frag_size - 2 * std_frag_size):
-                if cnode_rela_end - cnode_rela_start <= 140:  # Use fixed read-length cutoff
+                if cnode_rela_end - cnode_rela_start <= max(mean_read_length, avg_frag_size - 2 * std_frag_size):
                     logger.debug(f"The cnode segment ({cnode}) is too small. Skipping ... ")
                     return None
                     
