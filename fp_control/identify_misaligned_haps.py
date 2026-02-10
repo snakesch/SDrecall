@@ -795,7 +795,7 @@ def stat_refseq_similarity(intrin_bam_ncls,
         shared_psv = verified_shared_snv_pos_abs.size + shared_psv_ins + shared_psv_del
         verified_shared_indel_pos_abs = np.unique(np.concatenate([shared_ins_pos_abs, shared_del_pos_abs]))
 
-        logger.info(f"For haplotype {hid}, within region {span}, comparing to the genomic sequence {homo_refseq_qname}. Variant count is {varcount}, alt-var count vs homologs is {alt_snv_count + alt_indel_count}, shared PSV (ALT-consistent) count is {shared_psv}.")
+        logger.debug(f"For haplotype {hid}, within region {span}, comparing to the genomic sequence {homo_refseq_qname}. Variant count is {varcount}, alt-var count vs homologs is {alt_snv_count + alt_indel_count}, shared PSV (ALT-consistent) count is {shared_psv}.")
         if homo_refseq_qname in varcounts_among_refseqs[hid]:
             # Each tuple records the stats across one continuous region of the haplotype hid
             varcounts_among_refseqs[hid][homo_refseq_qname].append((varcount,
@@ -869,7 +869,7 @@ def cal_similarity_score(varcounts_among_refseqs, hid_var_count, hid_max_local_d
             max_density = hid_max_local_density.get(hid, 0.0)
             non_psv_density_100bp = max_density * 100.0
             mixed_psv_metric = np.sqrt(psv_var_ratio) * total_shared_psv * np.sqrt(psv_sharing_ratio) + np.sqrt(non_psv_density_100bp) - (3 - psv_var_ratio)
-            logger.info(f"For haplotype {hid}, comparing to the reference sequence {homo_refseq_qname}, the similarity score is {psv_var_ratio} x {total_shared_psv} - ({alt_snv_count + alt_indel_count} - {total_shared_psv}) = {mixed_psv_metric}, while the total_shared_psv is {total_shared_psv}, the alt_snv_count is {alt_snv_count}, the alt_indel_count is {alt_indel_count}")
+            logger.debug(f"For haplotype {hid}, comparing to the reference sequence {homo_refseq_qname}, the similarity score is {psv_var_ratio} x {total_shared_psv} - ({alt_snv_count + alt_indel_count} - {total_shared_psv}) = {mixed_psv_metric}, while the total_shared_psv is {total_shared_psv}, the alt_snv_count is {alt_snv_count}, the alt_indel_count is {alt_indel_count}")
 
             if mixed_psv_metric > max_psv:
                 max_psv_c = total_shared_psv
@@ -1031,7 +1031,7 @@ def inspect_by_haplotypes(input_bam,
 
             # Update the variant count of the iterating haplotype
             hid_var_count[hid] += var_count
-            logger.info(f"For haplotype {hid}, within region {chrom}:{span[0]}-{span[1]}, the consensus sequence is {consensus_sequence.tolist()}. The extreme variant density is {extreme_vard}. The varcount is {var_count}, till now the total varcount is {hid_var_count[hid]}")
+            logger.debug(f"For haplotype {hid}, within region {chrom}:{span[0]}-{span[1]}, the consensus sequence is {consensus_sequence.tolist()}. The extreme variant density is {extreme_vard}. The varcount is {var_count}, till now the total varcount is {hid_var_count[hid]}")
 
             # Log the extreme variant density and the variant count of the iterating haplotype
             # logger.debug(f"For haplotype {hid} at continuous region {span}, the consensus sequence is {consensus_sequence.tolist()}. The extreme variant density is {extreme_vard}.")
@@ -1084,7 +1084,7 @@ def inspect_by_haplotypes(input_bam,
     sweep_regions = select_regions_with_min_haplotypes_from_hapbeds(
         hid_cov_beds,
         output_bed=sweep_region_bed,
-        min_haplotypes=1,
+        min_haplotypes=2,
         use_cli=True,
         logger=logger
     )
