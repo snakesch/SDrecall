@@ -1,3 +1,4 @@
+import logging
 import numba
 import re
 import numpy as np
@@ -163,6 +164,71 @@ def count_equal_alt(cons_codes,
         if cons_codes[i] >= 0 and hom_bases[i] >= 0 and cons_codes[i] == hom_bases[i]:
             cnt += 1
     return cnt
+
+
+@numba.njit(types.int32[:](types.int32[:, :], types.int8[:], types.int32[:]), fastmath=True)
+def verify_shared_snv_positions(tally, h_base, shared_snv_pos_abs):
+    """
+    From a base-count tally (num_pos x 5) and homolog base codes, return
+    the subset of shared_snv_pos_abs where the consensus ALT base matches
+    the homolog base.
+
+    Replaces the numpy sequence:
+        atcg = tally[:, :4]
+        coverage = atcg.sum(axis=1)
+        cons_codes = np.where(coverage > 0, atcg.argmax(axis=1).astype(np.int8), np.int8(-1))
+        eq_mask = (cons_codes >= 0) & (h_base >= 0) & (cons_codes == h_base)
+        verified = shared_snv_pos_abs[eq_mask]
+    """
+    n = shared_snv_pos_abs.size
+    out = np.empty(n, dtype=np.int32)
+    cnt = 0
+    for i in range(n):
+        # Sum A/T/C/G counts (columns 0..3) to get coverage
+        cov = tally[i, 0] + tally[i, 1] + tally[i, 2] + tally[i, 3]
+        if cov <= 0:
+            continue
+        # argmax over columns 0..3
+        best_base = np.int8(0)
+        best_count = tally[i, 0]
+        for b in range(1, 4):
+            if tally[i, b] > best_count:
+                best_count = tally[i, b]
+                best_base = np.int8(b)
+        # Check homolog base matches consensus
+        if h_base[i] >= 0 and best_base == h_base[i]:
+            out[cnt] = shared_snv_pos_abs[i]
+            cnt += 1
+    return out[:cnt]
+
+
+@numba.njit(types.int32[:](types.int32[:], types.int32[:]), fastmath=True)
+def merge_unique_sorted(arr1, arr2):
+    """
+    Merge two int32 arrays into a single sorted array with unique values.
+    Replaces: np.unique(np.concatenate([arr1, arr2]))
+    Avoids Python-level numpy dispatch overhead in hot loops.
+    """
+    # Concatenate
+    total = arr1.size + arr2.size
+    if total == 0:
+        return np.empty(0, dtype=np.int32)
+    merged = np.empty(total, dtype=np.int32)
+    merged[:arr1.size] = arr1
+    merged[arr1.size:] = arr2
+    # Sort
+    merged.sort()
+    # Unique (in-place, since sorted)
+    if total == 1:
+        return merged
+    out = np.empty(total, dtype=np.int32)
+    out[0] = merged[0]
+    cnt = 1
+    for i in range(1, total):
+        if merged[i] != merged[i - 1]:
+            out[cnt] = merged[i]
+            cnt += 1
+    return out[:cnt]
 
 
 @numba.njit
@@ -766,11 +832,6 @@ def stat_refseq_similarity(intrin_bam_ncls,
                                       qseq_encoded,
                                       tally)
 
-            # Majority base among A/T/C/G (codes 0..3)
-            atcg = tally[:, :4]
-            coverage = atcg.sum(axis=1)
-            cons_codes = np.where(coverage > 0, atcg.argmax(axis=1).astype(np.int8), np.int8(-1))
-
             # ALT codes from the homologous read using Numba-mapped bases
             h_ref_positions, h_qseq_ref_positions, h_qseq_encoded, _, read_ref_pos_dict = extract_read_qseqs(homo_refseq, read_ref_pos_dict)
             h_base = map_positions_to_bases(shared_snv_pos_abs.astype(np.int32),
@@ -778,9 +839,9 @@ def stat_refseq_similarity(intrin_bam_ncls,
                                             h_ref_positions,
                                             h_qseq_encoded)
 
-            # Verified shared PSV SNV positions: both defined and equal ALT
-            eq_mask = (cons_codes >= 0) & (h_base >= 0) & (cons_codes == h_base)
-            verified_shared_snv_pos_abs = shared_snv_pos_abs[eq_mask]
+            # Verify shared SNV positions: consensus ALT must match homolog ALT
+            # (single numba call replaces atcg.sum + argmax + np.where + eq_mask)
+            verified_shared_snv_pos_abs = verify_shared_snv_positions(tally, h_base, shared_snv_pos_abs.astype(np.int32))
 
         # Shared PSV count for scoring: verified SNVs + shared indels
         shared_psv_ins = 0
@@ -793,9 +854,10 @@ def stat_refseq_similarity(intrin_bam_ncls,
             elif ins_encode_event < 0:
                 logger.warning(f"The homologous genomic sequence aligned at interval {chrom}:{overlap_span[0]}-{overlap_span[1]} shared an insertion at position {ins_pos}. The encoded event is {interval_genomic_hap[ins_pos - overlap_span[0]]}, the alignment status on consensus sequence is {interval_con_seq[ins_pos - overlap_span[0]]}")
         shared_psv = verified_shared_snv_pos_abs.size + shared_psv_ins + shared_psv_del
-        verified_shared_indel_pos_abs = np.unique(np.concatenate([shared_ins_pos_abs, shared_del_pos_abs]))
+        verified_shared_indel_pos_abs = merge_unique_sorted(shared_ins_pos_abs.astype(np.int32), shared_del_pos_abs.astype(np.int32))
 
-        logger.debug(f"For haplotype {hid}, within region {span}, comparing to the genomic sequence {homo_refseq_qname}. Variant count is {varcount}, alt-var count vs homologs is {alt_snv_count + alt_indel_count}, shared PSV (ALT-consistent) count is {shared_psv}.")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"For haplotype {hid}, within region {span}, comparing to the genomic sequence {homo_refseq_qname}. Variant count is {varcount}, alt-var count vs homologs is {alt_snv_count + alt_indel_count}, shared PSV (ALT-consistent) count is {shared_psv}.")
         if homo_refseq_qname in varcounts_among_refseqs[hid]:
             # Each tuple records the stats across one continuous region of the haplotype hid
             varcounts_among_refseqs[hid][homo_refseq_qname].append((varcount,
@@ -865,7 +927,7 @@ def cal_similarity_score(varcounts_among_refseqs, hid_var_count, hid_max_local_d
             psv_var_ratio = total_shared_psv / total_varcount if total_varcount > 0 else min(1, total_shared_psv)
             non_psv_count = total_varcount - total_shared_psv
             total_psv_count = alt_snv_count + alt_indel_count
-            psv_sharing_ratio = total_shared_psv / total_psv_count # Measure how different to homologous sequence than the total PSV count
+            psv_sharing_ratio = total_shared_psv / total_psv_count if total_psv_count > 0 else 0.0 # Measure how different to homologous sequence than the total PSV count
             max_density = hid_max_local_density.get(hid, 0.0)
             non_psv_density_100bp = max_density * 100.0
             mixed_psv_metric = np.sqrt(psv_var_ratio) * total_shared_psv * np.sqrt(psv_sharing_ratio) + np.sqrt(non_psv_density_100bp) - (3 - psv_var_ratio)
