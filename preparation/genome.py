@@ -39,7 +39,7 @@ class Genome:
         pd.read_csv(self.fai_index, sep="\t", header=None).iloc[:, [0, 1]].to_csv(contig_genome_fn, sep="\t", index=False, header=False)
         return contig_genome_fn
 
-    def mask(self, bedf: str, avg_frag_size=400, std_frag_size=130, genome="hg19", logger=None, path="", merge_gap=10_000_000):
+    def mask(self, bedf: str, avg_frag_size=400, std_frag_size=130, genome="hg19", logger=None, path="", merge_gap=10_000):
         if not os.path.exists(bedf):
             raise FileNotFoundError(f"Invalid BED file: {bedf}")
         if path == "":
