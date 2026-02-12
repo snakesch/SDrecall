@@ -8,6 +8,9 @@ import pybedtools as pb
 from collections import defaultdict
 from numba import types, prange
 
+import pysam
+import graph_tool.all as gt
+
 from fp_control.bam_ncls import overlapping_reads_iterator
 from fp_control.bilc import lp_solve_remained_haplotypes
 from fp_control.numba_operators import numba_sum, \
@@ -779,6 +782,107 @@ def record_hap_err_vectors_per_region(reads,
 
     return read_spans, hap_vectors, err_vectors, total_hap_vectors, total_err_vectors, read_ref_pos_dict
 
+
+
+def filter_redundant_intrinsic_origins(intrinsic_bam, coverage_threshold=0.9999, logger=logger):
+    """
+    Filter intrinsic alignments whose origin interval (parsed from qname) is
+    fully contained within another origin's interval on the same chromosome.
+
+    Uses a graph-tool directed graph:
+    - Each unique origin interval is a node.
+    - A directed edge A -> B means A is contained within B.
+    - Nodes with out_degree > 0 (contained by something) are removable.
+    - Nodes with out_degree == 0 (not contained by anything) must be kept.
+
+    Returns a filtered BAM path with redundant origins removed.
+    """
+    # Step 1: Parse qnames to get origin intervals
+    bam = pysam.AlignmentFile(intrinsic_bam, "rb")
+    origins = {}  # qname -> (chrom, start, end)
+    for read in bam:
+        qname = read.query_name
+        if qname not in origins:
+            m = re.match(r"([a-zA-Z0-9_]+):(\d+)-(\d+)", qname)
+            if m:
+                origins[qname] = (m.group(1), int(m.group(2)), int(m.group(3)))
+    bam.close()
+
+    if len(origins) == 0:
+        logger.warning("No origin intervals parsed from intrinsic BAM qnames")
+        return intrinsic_bam
+
+    # Step 2: Group by chromosome and find containment relationships
+    by_chrom = defaultdict(list)
+    qname_to_idx = {}
+    idx_to_qname = {}
+    for idx, (qname, (chrom, start, end)) in enumerate(origins.items()):
+        by_chrom[chrom].append((start, end, idx))
+        qname_to_idx[qname] = idx
+        idx_to_qname[idx] = qname
+
+    n = len(origins)
+    g = gt.Graph(directed=True)
+    g.add_vertex(n)
+
+    # Per-chromosome sweep: sort by (start asc, end desc)
+    # If interval i's end <= current max_end, it is contained by the interval
+    # that established that max_end. Add edge: contained -> container.
+    for chrom in by_chrom:
+        intervals = sorted(by_chrom[chrom], key=lambda x: (x[0], -x[1]))
+        max_end = -1
+        max_end_idx = -1
+        for start, end, idx in intervals:
+            size = end - start
+            if size == 0:
+                continue
+            if max_end >= 0 and end <= max_end:
+                # This interval is contained within the one that set max_end
+                # Check coverage threshold
+                overlap = min(end, max_end) - max(start, intervals[0][0])
+                # Since end <= max_end and we sorted by start asc,
+                # the container starts at or before this interval, so
+                # containment is >= 100% of this interval's span
+                g.add_edge(idx, max_end_idx)
+            if end > max_end:
+                max_end = end
+                max_end_idx = idx
+
+    # Step 3: Nodes with out_degree > 0 are removable (they are contained by something)
+    removable_qnames = set()
+    for v in g.vertices():
+        if v.out_degree() > 0:
+            removable_qnames.add(idx_to_qname[int(v)])
+
+    kept = n - len(removable_qnames)
+    logger.info(f"Intrinsic origin filtering: {n} unique origins -> "
+                f"{kept} kept, {len(removable_qnames)} removed "
+                f"({len(removable_qnames)*100/n:.1f}% redundant, fully contained by larger origins)")
+
+    if len(removable_qnames) == 0:
+        return intrinsic_bam
+
+    # Step 4: Write filtered BAM
+    filtered_bam = intrinsic_bam.replace(".bam", ".filtered.bam")
+    bam_in = pysam.AlignmentFile(intrinsic_bam, "rb")
+    bam_out = pysam.AlignmentFile(filtered_bam, "wb", header=bam_in.header)
+    kept_count = 0
+    removed_count = 0
+    for read in bam_in:
+        if read.query_name in removable_qnames:
+            removed_count += 1
+        else:
+            bam_out.write(read)
+            kept_count += 1
+    bam_out.close()
+    bam_in.close()
+
+    pysam.sort("-o", filtered_bam, filtered_bam)
+    pysam.index(filtered_bam)
+    logger.info(f"Filtered intrinsic BAM: {kept_count} alignments kept, "
+                f"{removed_count} removed -> {filtered_bam}")
+
+    return filtered_bam
 
 
 def stat_refseq_similarity(intrin_bam_ncls,

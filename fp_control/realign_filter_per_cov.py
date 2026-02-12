@@ -220,15 +220,22 @@ def realign_filter_per_cov(bam,
 
     logger.info(f"Successfully migrated the BAM file {bam} to NCLS format, this part is necessary for both Python and Rust implementation\n\n")
 
-    # Now migrate the intrinsic BAM file to NCLS format
-    intrin_bam_ncls = migrate_bam_to_ncls(intrinsic_bam,
+    # Filter redundant intrinsic origins before NCLS migration.
+    # Origins whose span is fully contained within a larger origin provide
+    # no additional PSV information -- removing them reduces the homo_refseq
+    # iteration count in stat_refseq_similarity by ~80%.
+    from fp_control.identify_misaligned_haps import filter_redundant_intrinsic_origins
+    filtered_intrinsic_bam = filter_redundant_intrinsic_origins(intrinsic_bam, logger=logger)
+
+    # Now migrate the (filtered) intrinsic BAM file to NCLS format
+    intrin_bam_ncls = migrate_bam_to_ncls(filtered_intrinsic_bam,
                                           mapq_filter = 0,
                                           basequal_median_filter = 0,
                                           paired = False,
                                           filter_noisy = False,
                                           logger=logger)
 
-    logger.info(f"Successfully migrated the intrinsic BAM file {intrinsic_bam} to NCLS format\n")
+    logger.info(f"Successfully migrated the intrinsic BAM file {filtered_intrinsic_bam} to NCLS format\n")
     # Since intrinsic BAM reads are reference sequences, therefore there are no low quality reads
     intrin_bam_ncls = intrin_bam_ncls[:-1]
 
