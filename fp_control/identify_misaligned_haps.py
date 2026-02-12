@@ -132,6 +132,41 @@ def update_tally_for_read(shared_pos_abs,
             tally[i, base] += 1
 
 
+@numba.njit(types.void(types.int32, types.int32, types.int32, types.int32[:], types.int8[:], types.int32[:, :]), fastmath=True)
+def _update_full_tally(region_start, region_len, read_start,
+                       ref_qseq_positions, qseq_encoded, full_tally):
+    """
+    Tally all base calls from one read into a full region tally.
+    full_tally is (region_len x 5), indexed by genomic position - region_start.
+    """
+    for ref_offset in range(ref_qseq_positions.size):
+        region_idx = (read_start + ref_offset) - region_start
+        if region_idx < 0 or region_idx >= region_len:
+            continue
+        qidx = ref_qseq_positions[ref_offset]
+        if qidx < 0:
+            continue
+        base = qseq_encoded[qidx]
+        if base >= 0 and base < 4:
+            full_tally[region_idx, base] += 1
+
+
+@numba.njit(types.int32[:, :](types.int32[:, :], types.int32[:], types.int32), fastmath=True)
+def _extract_tally_at_positions(full_tally, shared_pos_abs, region_start):
+    """
+    Extract rows from full_tally at the given absolute genomic positions.
+    Returns (num_pos x 5) tally matrix aligned with shared_pos_abs.
+    """
+    num_pos = shared_pos_abs.size
+    tally = np.zeros((num_pos, 5), dtype=np.int32)
+    for i in range(num_pos):
+        idx = shared_pos_abs[i] - region_start
+        if idx >= 0 and idx < full_tally.shape[0]:
+            for b in range(5):
+                tally[i, b] = full_tally[idx, b]
+    return tally
+
+
 @numba.njit(types.int8[:](types.int32[:], types.int32, types.int32[:], types.int8[:]), fastmath=True)
 def map_positions_to_bases(shared_pos_abs,
                            read_start,
@@ -751,7 +786,7 @@ def stat_refseq_similarity(intrin_bam_ncls,
                            span,
                            hid,
                            consensus_sequence,
-                           reads,
+                           full_tally,
                            total_genomic_haps,
                            read_ref_pos_dict,
                            varcounts_among_refseqs,
@@ -819,18 +854,12 @@ def stat_refseq_similarity(intrin_bam_ncls,
         verified_shared_snv_pos_abs = np.empty(0, dtype=np.int32)
 
         if shared_snv_pos_abs.size > 0:
-            # Tally consensus ALT codes at shared positions from member reads
-            num_pos = shared_snv_pos_abs.size
-            tally = np.zeros((num_pos, 5), dtype=np.int32)  # bases 0..4
-
-            # Use Numba helper to update tally per read
-            for r in reads:
-                ref_qseq_positions, qseq_ref_positions, qseq_encoded, _, read_ref_pos_dict = extract_read_qseqs(r, read_ref_pos_dict)
-                update_tally_for_read(shared_snv_pos_abs.astype(np.int32),
-                                      np.int32(r.reference_start),
-                                      ref_qseq_positions,
-                                      qseq_encoded,
-                                      tally)
+            # Extract tally at shared positions from precomputed full region tally
+            # (full_tally was built once per haplotype region, avoiding redundant
+            #  per-read iteration for every homo_refseq comparison)
+            tally = _extract_tally_at_positions(full_tally,
+                                                shared_snv_pos_abs.astype(np.int32),
+                                                np.int32(span[0]))
 
             # ALT codes from the homologous read using Numba-mapped bases
             h_ref_positions, h_qseq_ref_positions, h_qseq_encoded, _, read_ref_pos_dict = extract_read_qseqs(homo_refseq, read_ref_pos_dict)
@@ -1082,6 +1111,19 @@ def inspect_by_haplotypes(input_bam,
             # Assemble the consensus sequence for the iterating continuous region
             consensus_sequence = assemble_consensus(hap_vectors, err_vectors, read_spans)
 
+            # Precompute a full position-by-base tally covering the entire region.
+            # This is built ONCE here and reused across all homo_refseq comparisons
+            # in stat_refseq_similarity, eliminating the redundant per-read loop
+            # that previously ran for every homo_refseq.
+            region_start = np.int32(span[0])
+            region_len = np.int32(span[1] - span[0])
+            full_tally = np.zeros((region_len, 5), dtype=np.int32)
+            for r in reads:
+                ref_qseq_positions, _, qseq_encoded, _, read_ref_pos_dict = extract_read_qseqs(r, read_ref_pos_dict)
+                _update_full_tally(region_start, region_len,
+                                   np.int32(r.reference_start),
+                                   ref_qseq_positions, qseq_encoded, full_tally)
+
             # Judge if the consensus sequence of the haplotype within the iterating continuous region contains extremely high variant density
             extreme_vard, region_max_density = judge_misalignment_by_extreme_vardensity(consensus_sequence)
 
@@ -1111,7 +1153,7 @@ def inspect_by_haplotypes(input_bam,
                                                                                 span,
                                                                                 hid,
                                                                                 consensus_sequence,
-                                                                                reads,
+                                                                                full_tally,
                                                                                 total_genomic_haps,
                                                                                 read_ref_pos_dict,
                                                                                 varcounts_among_refseqs,
