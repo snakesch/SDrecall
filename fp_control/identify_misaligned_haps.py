@@ -890,7 +890,7 @@ def stat_refseq_similarity(intrin_bam_ncls,
                            span,
                            hid,
                            consensus_sequence,
-                           full_tally,
+                           reads,
                            total_genomic_haps,
                            read_ref_pos_dict,
                            varcounts_among_refseqs,
@@ -958,12 +958,18 @@ def stat_refseq_similarity(intrin_bam_ncls,
         verified_shared_snv_pos_abs = np.empty(0, dtype=np.int32)
 
         if shared_snv_pos_abs.size > 0:
-            # Extract tally at shared positions from precomputed full region tally
-            # (full_tally was built once per haplotype region, avoiding redundant
-            #  per-read iteration for every homo_refseq comparison)
-            tally = _extract_tally_at_positions(full_tally,
-                                                shared_snv_pos_abs.astype(np.int32),
-                                                np.int32(span[0]))
+            # Tally consensus ALT codes at shared positions from member reads
+            num_pos = shared_snv_pos_abs.size
+            tally = np.zeros((num_pos, 5), dtype=np.int32)  # bases 0..4
+
+            # Use Numba helper to update tally per read
+            for r in reads:
+                ref_qseq_positions, qseq_ref_positions, qseq_encoded, _, read_ref_pos_dict = extract_read_qseqs(r, read_ref_pos_dict)
+                update_tally_for_read(shared_snv_pos_abs.astype(np.int32),
+                                      np.int32(r.reference_start),
+                                      ref_qseq_positions,
+                                      qseq_encoded,
+                                      tally)
 
             # ALT codes from the homologous read using Numba-mapped bases
             h_ref_positions, h_qseq_ref_positions, h_qseq_encoded, _, read_ref_pos_dict = extract_read_qseqs(homo_refseq, read_ref_pos_dict)
@@ -989,8 +995,8 @@ def stat_refseq_similarity(intrin_bam_ncls,
         shared_psv = verified_shared_snv_pos_abs.size + shared_psv_ins + shared_psv_del
         verified_shared_indel_pos_abs = merge_unique_sorted(shared_ins_pos_abs.astype(np.int32), shared_del_pos_abs.astype(np.int32))
 
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug(f"For haplotype {hid}, within region {span}, comparing to the genomic sequence {homo_refseq_qname}. Variant count is {varcount}, alt-var count vs homologs is {alt_snv_count + alt_indel_count}, shared PSV (ALT-consistent) count is {shared_psv}.")
+        
+        # logger.debug(f"For haplotype {hid}, within region {span}, comparing to the genomic sequence {homo_refseq_qname}. Variant count is {varcount}, alt-var count vs homologs is {alt_snv_count + alt_indel_count}, shared PSV (ALT-consistent) count is {shared_psv}.")
         if homo_refseq_qname in varcounts_among_refseqs[hid]:
             # Each tuple records the stats across one continuous region of the haplotype hid
             varcounts_among_refseqs[hid][homo_refseq_qname].append((varcount,
@@ -1215,19 +1221,6 @@ def inspect_by_haplotypes(input_bam,
             # Assemble the consensus sequence for the iterating continuous region
             consensus_sequence = assemble_consensus(hap_vectors, err_vectors, read_spans)
 
-            # Precompute a full position-by-base tally covering the entire region.
-            # This is built ONCE here and reused across all homo_refseq comparisons
-            # in stat_refseq_similarity, eliminating the redundant per-read loop
-            # that previously ran for every homo_refseq.
-            region_start = np.int32(span[0])
-            region_len = np.int32(span[1] - span[0])
-            full_tally = np.zeros((region_len, 5), dtype=np.int32)
-            for r in reads:
-                ref_qseq_positions, _, qseq_encoded, _, read_ref_pos_dict = extract_read_qseqs(r, read_ref_pos_dict)
-                _update_full_tally(region_start, region_len,
-                                   np.int32(r.reference_start),
-                                   ref_qseq_positions, qseq_encoded, full_tally)
-
             # Judge if the consensus sequence of the haplotype within the iterating continuous region contains extremely high variant density
             extreme_vard, region_max_density = judge_misalignment_by_extreme_vardensity(consensus_sequence)
 
@@ -1257,7 +1250,7 @@ def inspect_by_haplotypes(input_bam,
                                                                                 span,
                                                                                 hid,
                                                                                 consensus_sequence,
-                                                                                full_tally,
+                                                                                reads,
                                                                                 total_genomic_haps,
                                                                                 read_ref_pos_dict,
                                                                                 varcounts_among_refseqs,
