@@ -1069,7 +1069,7 @@ def cal_similarity_score(varcounts_among_refseqs, hid_var_count, hid_max_local_d
             psv_sharing_ratio = total_shared_psv / total_psv_count if total_psv_count > 0 else 0.0 # Measure how different to homologous sequence than the total PSV count
             max_density = hid_max_local_density.get(hid, 0.0)
             non_psv_density_100bp = max_density * 100.0
-            mixed_psv_metric = np.sqrt(psv_var_ratio) * total_shared_psv * np.sqrt(psv_sharing_ratio) + np.sqrt(non_psv_density_100bp) - (3 - psv_var_ratio)
+            mixed_psv_metric = np.sqrt(psv_var_ratio) * total_shared_psv * np.sqrt(psv_sharing_ratio) + np.sqrt(non_psv_density_100bp) - (4 - psv_var_ratio)
             logger.debug(f"For haplotype {hid}, comparing to the reference sequence {homo_refseq_qname}, the similarity score is {psv_var_ratio} x {total_shared_psv} - ({alt_snv_count + alt_indel_count} - {total_shared_psv}) = {mixed_psv_metric}, while the total_shared_psv is {total_shared_psv}, the alt_snv_count is {alt_snv_count}, the alt_indel_count is {alt_indel_count}")
 
             if mixed_psv_metric > max_psv:

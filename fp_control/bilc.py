@@ -113,7 +113,7 @@ def lp_solve_remained_haplotypes(total_record_df,
         rank_1_count = group.loc[group["varc_rank"] <= 1, "hap_id"].nunique()
         # Column index extraction
         hapid_indices = [hapid_to_index[hapid] for hapid in included_hapids]
-        upper_bound = included_hapids.size - 2 if included_hapids.size > 4 and total_var_count >= 1 else included_hapids.size - 1
+        upper_bound = included_hapids.size - rank_2_count if included_hapids.size > 4 and total_var_count > 1 else included_hapids.size - rank_1_count
         upper_bound = included_hapids.size if included_hapids.size <= 1 else upper_bound
         status = highs.addRow(0,
                               upper_bound,
