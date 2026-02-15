@@ -97,7 +97,7 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
     sd_freads, sd_rreads = zip(*fastq_tuple_list)
 
     # Perform the realignment and recall
-    num_jobs, threads_per_job = configure_parallelism(threads, 4)
+    num_jobs, threads_per_job = configure_parallelism(threads, 3)
     logger.info(f"The number of jobs is {num_jobs} and the threads per job is {threads_per_job}, we have in total {threads} assigned to this running\n\n")
     pool = ctx.Pool(num_jobs, initializer=pool_init, initargs=(sdrecall_paths.tmp_dir,))
     results = pool.imap_unordered(imap_process_masked_bam, zip( uniq_rgs,
@@ -176,6 +176,13 @@ def SDrecall_per_sample(sdrecall_paths: SDrecallPaths,
 
     # - Now we start filtering the pooled raw bam file by phasing and mislalignment elimination - #
     total_intrinsic_bam = sdrecall_paths.total_intrinsic_bam_path()
+
+    # Filter redundant intrinsic origins ONCE on the total intrinsic BAM before
+    # it gets split into per-chunk BAMs. Origins whose span is fully contained
+    # within a larger origin carry no additional PSV information.
+    from fp_control.identify_misaligned_haps import filter_redundant_intrinsic_origins
+    total_intrinsic_bam = filter_redundant_intrinsic_origins(total_intrinsic_bam, logger=logger)
+
     pooled_filtered_bam = sdrecall_paths.pooled_filtered_bam_path()
     print("\n"*2, "*"*100, file=sys.stderr)
     logger.info(f"START PERFORMING MISALIGNMENT ELIMINATION FOR {sdrecall_paths.sample_id} on file {deduped_raw_bam}")
