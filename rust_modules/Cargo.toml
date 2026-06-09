@@ -1,5 +1,5 @@
 [workspace]
-members = ["read_extraction", "build_phasing_graph"]
+members = ["read_extraction", "build_phasing_graph", "haplotype_inspection"]
 resolver = "2"
 
 # Optimize for release builds (important for Python modules)

@@ -20,3 +20,6 @@ rust_modules/target
 *.png
 */*.log
 CLAUDE.md
+progress.md
+.claude/
+docs/

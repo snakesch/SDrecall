@@ -1,0 +1,66 @@
+[package]
+name = "haplotype_inspection"
+version = "0.1.0"
+edition = "2021"
+
+# Note: Release profile optimization is set at workspace level
+
+[lib]
+name = "haplotype_inspection"
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "test_bam_lapper"
+path = "src/bin/test_bam_lapper.rs"
+
+[[bin]]
+name = "test_consensus"
+path = "src/bin/test_consensus.rs"
+
+[[bin]]
+name = "validate_select_regions"
+path = "src/bin/validate_select_regions.rs"
+
+[[bin]]
+name = "validate_bilc_solver"
+path = "src/bin/validate_bilc_solver.rs"
+
+[[bin]]
+name = "test_phase1"
+path = "src/bin/test_phase1.rs"
+
+[dependencies]
+# Python integration - core requirements
+pyo3 = { workspace = true }
+numpy = { workspace = true, features = ["nalgebra"] }
+
+# BAM/SAM file handling
+rust-htslib = "0.47.0"
+
+# Interval tree for overlap queries (replaces Python NCLS)
+rust-lapper = "1.1"
+
+# Data structures and algorithms
+ahash = "0.8"           # Fast HashMap implementation
+rustc-hash = "1.1"      # Fast HashMap for integer keys
+petgraph = "0.6"        # Graph data structures
+
+# Numerical computing
+ndarray = { version = "0.15", features = ["blas"] }
+half = { version = "2.6", features = ["num-traits", "bytemuck", "serde"] }
+statrs = "0.16"         # Statistical functions
+order-stat = "0.1"      # Fast O(n) median calculation
+
+# Data processing and I/O
+tempfile = "3.8"        # Temporary file handling
+
+# Logging
+log = "0.4"             # Logging framework
+pyo3-log = "0.10"       # Python logging integration
+env_logger = "0.11"     # Standalone logging for test binaries (reads RUST_LOG)
+
+# Optional: Parallel processing
+rayon = { workspace = true }
+
+# ILP solver (BILC haplotype selection)
+highs = "2.0"

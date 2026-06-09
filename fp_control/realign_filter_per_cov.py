@@ -11,6 +11,14 @@ from src.log import logger
 
 from fp_control.bam_ncls import migrate_bam_to_ncls, calculate_mean_read_length
 
+# Try to import Rust-accelerated haplotype inspection
+try:
+    from haplotype_inspection import inspect_haplotypes_rust
+    USE_RUST_HAPLOTYPE_INSPECTION = True
+except ImportError:
+    from fp_control.identify_misaligned_haps import inspect_by_haplotypes
+    USE_RUST_HAPLOTYPE_INSPECTION = False
+
 
 def imap_filter_out(args):
     """Worker function that processes a single region and returns results with log file path"""
@@ -202,37 +210,40 @@ def realign_filter_per_cov(bam,
     # Import the auto-selection function that chooses between Rust and Python implementations
     # Import the Rust implementation directly (no fallback)
     from fp_control.graph_build import build_phasing_graph
-    from fp_control.identify_misaligned_haps import inspect_by_haplotypes
     from fp_control.phasing import phasing_realigned_reads
 
     chunk_id = os.path.basename(bam).split(".")[-2]
 
-    logger.info(f"First need to migrate the BAM {bam} alignment records to NCLS format. This ncls part is not used in Rust graph-building, but will finally be required for downstream phasing")
+    # Only migrate BAM to NCLS if Python fallback is needed (Rust builds its own Lapper internally)
+    bam_ncls = None
+    intrin_bam_ncls = None
+    if not USE_RUST_HAPLOTYPE_INSPECTION:
+        logger.info(f"Python path: migrating BAM {bam} alignment records to NCLS format")
+        bam_ncls = migrate_bam_to_ncls(bam,
+                                       mapq_filter = recall_mq_cutoff,
+                                       basequal_median_filter = basequal_median_cutoff,
+                                       logger=logger)
+        if bam_ncls is None:
+            logger.warning(f"BAM file {bam} has less than 3 reads, skip this region.")
+            return None, None, None
 
-    # Use original Python implementation with NCLS preprocessing
-    bam_ncls = migrate_bam_to_ncls(bam,
-                                   mapq_filter = recall_mq_cutoff,
-                                   basequal_median_filter = basequal_median_cutoff,
-                                   logger=logger)
-    if bam_ncls is None:
-        logger.warning(f"BAM file {bam} has less than 3 reads, skip this region.")
-        return None, None, None
+        logger.info(f"Successfully migrated the BAM file {bam} to NCLS format\n\n")
 
-    logger.info(f"Successfully migrated the BAM file {bam} to NCLS format, this part is necessary for both Python and Rust implementation\n\n")
+        # Now migrate the intrinsic BAM file to NCLS format
+        # (redundant origins are already filtered at the total_intrinsic_bam level
+        #  in realign_and_recall.py before per-chunk slicing)
+        intrin_bam_ncls = migrate_bam_to_ncls(intrinsic_bam,
+                                              mapq_filter = 0,
+                                              basequal_median_filter = 0,
+                                              paired = False,
+                                              filter_noisy = False,
+                                              logger=logger)
 
-    # Now migrate the intrinsic BAM file to NCLS format
-    # (redundant origins are already filtered at the total_intrinsic_bam level
-    #  in realign_and_recall.py before per-chunk slicing)
-    intrin_bam_ncls = migrate_bam_to_ncls(intrinsic_bam,
-                                          mapq_filter = 0,
-                                          basequal_median_filter = 0,
-                                          paired = False,
-                                          filter_noisy = False,
-                                          logger=logger)
-
-    logger.info(f"Successfully migrated the intrinsic BAM file {intrinsic_bam} to NCLS format\n")
-    # Since intrinsic BAM reads are reference sequences, therefore there are no low quality reads
-    intrin_bam_ncls = intrin_bam_ncls[:-1]
+        logger.info(f"Successfully migrated the intrinsic BAM file {intrinsic_bam} to NCLS format\n")
+        # Since intrinsic BAM reads are reference sequences, therefore there are no low quality reads
+        intrin_bam_ncls = intrin_bam_ncls[:-1]
+    else:
+        logger.info(f"Rust path: skipping NCLS migration (Rust builds Lapper internally)")
 
     # Given the top 1% mismatch count per read (one structrual variant count as 1 mismatch)
     tmp_bam = prepare_tmp_file(suffix=".bam", tmp_dir = tmp_dir).name
@@ -299,6 +310,23 @@ def realign_filter_per_cov(bam,
     if len(hap_qname_info) <= 2:
         logger.warning(f"Only {len(hap_qname_info)} haplotype clusters are found for bam {bam}. Do not need to choose 2 haplotypes, Skip this region.\n")
         correct_qnames, mismap_qnames = set([qn for hs in list(hap_qname_info.values()) for qn in hs]), set([])
+    elif USE_RUST_HAPLOTYPE_INSPECTION:
+        logger.info(f"Using Rust-accelerated haplotype inspection for {bam}")
+        correct_list, mismap_list = inspect_haplotypes_rust(
+            bam_path=bam,
+            intrinsic_bam_path=intrinsic_bam,
+            hap_qname_info=dict(hap_qname_info),
+            qname_hap_info=dict(qname_hap_info),
+            qname_to_node=dict(qname_to_node),
+            total_lowqual_qnames=total_lowqual_qnames,
+            compare_haplotype_meta_tab=compare_haplotype_meta_tab,
+            mean_read_length=float(mean_read_length),
+            recall_mq_cutoff=recall_mq_cutoff,
+            basequal_median_cutoff=basequal_median_cutoff
+        )
+        correct_qnames = set(correct_list)
+        mismap_qnames = set(mismap_list)
+        logger.info(f"Rust inspection complete: {len(correct_qnames)} correct, {len(mismap_qnames)} misaligned")
     else:
         correct_qnames, mismap_qnames = inspect_by_haplotypes(bam,
                                                               bam_ncls,
