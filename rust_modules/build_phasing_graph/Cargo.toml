@@ -44,3 +44,6 @@ pyo3-log = "0.10"       # Python logging integration
 
 # Optional: Async runtime (only if needed for async operations)
 # tokio = { version = "1.0", features = ["process", "rt"] }
+
+[lints]
+workspace = true

@@ -30,7 +30,7 @@ export OPENSSL_NO_VENDOR=1
 export PKG_CONFIG_PATH=$CONDA_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH
 
 echo "Building test binary..."
-cargo build --bin test_bam_lapper 2>&1 | tail -5
+cargo build --example test_bam_lapper 2>&1 | tail -5
 
 echo
 echo "Running paired-mode test via Rust integration test..."

@@ -1,4 +1,4 @@
-/// Shared data structures for haplotype inspection module
+//! Shared data structures for haplotype inspection module
 
 /// One row of total_record_df that enters the BILC solver.
 /// Contains only the columns used by lp_solve_remained_haplotypes.

@@ -1,18 +1,12 @@
 /// Standalone test program for BAM to Lapper functionality
-/// Tests build_lapper_from_bam and query functions independently
-/// Does NOT depend on lib.rs, avoiding compilation of stub modules
+/// Tests build_lapper_from_bam and query functions via the library crate
 ///
 /// Usage:
-///   test_bam_lapper <bam_file> [chrom:start-end,...]
-///   test_bam_lapper input.bam chr1:10000-20000
+///   cargo run --example test_bam_lapper -- <bam_file> [chrom:start-end,...]
+///   cargo run --example test_bam_lapper -- input.bam chr1:10000-20000
 
-// Include bam_lapper directly — bypasses lib.rs so stub modules are not compiled
-#[path = "../bam_lappers.rs"]
-mod bam_lappers;
-
-use bam_lappers::{
+use haplotype_inspection::bam_lappers::{
     build_lapper_from_bam, query_overlapping_qname_indices, query_overlapping_reads,
-    query_overlapping_read_pairs,
 };
 use std::env;
 use std::io::Write;
@@ -31,7 +25,7 @@ fn main() {
     let bam_path = &args[1];
 
     println!("=== BAM to Lapper Test ===");
-    println!("BAM file: {}", bam_path);
+    println!("BAM file: {bam_path}");
     println!();
 
     // No quality filters — only skip secondary/supplementary/duplicate
@@ -42,10 +36,10 @@ fn main() {
     let filter_noisy = false;
 
     println!("Parameters:");
-    println!("  MAPQ filter: {}", mapq_filter);
-    println!("  Base quality median filter: {}", basequal_median_filter);
-    println!("  Paired-end mode: {}", paired);
-    println!("  Filter noisy reads: {}", filter_noisy);
+    println!("  MAPQ filter: {mapq_filter}");
+    println!("  Base quality median filter: {basequal_median_filter}");
+    println!("  Paired-end mode: {paired}");
+    println!("  Filter noisy reads: {filter_noisy}");
     println!();
 
     // Build Lapper from BAM
@@ -61,7 +55,7 @@ fn main() {
     ) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Error building Lapper: {}", e);
+            eprintln!("Error building Lapper: {e}");
             std::process::exit(1);
         }
     };
@@ -87,7 +81,7 @@ fn main() {
         if let Some(lapper) = result.lapper_dict.get(*chrom) {
             let interval_count = lapper.len();
             if interval_count > 0 {
-                println!("  {}: {} intervals", chrom, interval_count);
+                println!("  {chrom}: {interval_count} intervals");
             }
         }
     }
@@ -101,7 +95,7 @@ fn main() {
         let mut default_intervals = Vec::new();
         for chrom in &chroms {
             if let Some(lapper) = result.lapper_dict.get(*chrom) {
-                if lapper.len() > 0 {
+                if !lapper.is_empty() {
                     if let Some(first_iv) = lapper.iter().next() {
                         let start = first_iv.start;
                         let end = first_iv.stop;
@@ -126,7 +120,7 @@ fn main() {
     // Test queries
     println!("=== Testing Interval Queries ===");
     for (chrom, start, end) in &test_intervals {
-        println!("\nQuery: {}:{}-{}", chrom, start, end);
+        println!("\nQuery: {chrom}:{start}-{end}");
 
         // Test 1: Query qname indices from Lapper intervals
         if let Some(lapper) = result.lapper_dict.get(chrom) {
@@ -147,7 +141,7 @@ fn main() {
                 .collect();
             sorted_qnames.sort();
             for qname in &sorted_qnames {
-                println!("  QNAME: {}", qname);
+                println!("  QNAME: {qname}");
             }
             println!("  --- END QNAME LIST ---");
         } else {
@@ -183,8 +177,7 @@ fn main() {
             let mapq = read.mapq();
             let flag = read.flags();
             println!(
-                "  READ: {}\t{}\t{}\t{}\tMAPQ={}\tFLAG={}",
-                qname, chrom, read_start, read_end, mapq, flag
+                "  READ: {qname}\t{chrom}\t{read_start}\t{read_end}\tMAPQ={mapq}\tFLAG={flag}"
             );
         }
         println!("  --- END READ DETAILS ---");

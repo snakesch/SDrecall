@@ -16,9 +16,9 @@ use std::collections::{HashMap, HashSet};
 use std::io::Write;
 use ndarray::Array1;
 
-use haplotype_inspection::bam_lappers::{build_lapper_from_bam, BamLapperResult};
+use haplotype_inspection::bam_lappers::build_lapper_from_bam;
 use haplotype_inspection::pairwise_read_inspection::{
-    read_id, count_var, ReadQseqData,
+    read_id, count_var,
 };
 use haplotype_inspection::identify_misaligned_haps::{
     extract_continuous_regions_dict,
@@ -36,7 +36,7 @@ fn main() {
     env_logger::init();
 
     eprintln!("=== Phase 1 Rust Integration Test ===");
-    eprintln!("BAM: {}", BAM_PATH);
+    eprintln!("BAM: {BAM_PATH}");
 
     // ── Step 1: Build Lapper ──────────────────────────────────────────────
     eprintln!("\n--- Step 1: Build Lapper from BAM ---");
@@ -51,7 +51,7 @@ fn main() {
 
     // Count total records across all qname_idx entries
     let total_records: usize = bam_lapper.read_dict.values().map(|v| v.len()).sum();
-    eprintln!("Total BAM records in read_dict: {}", total_records);
+    eprintln!("Total BAM records in read_dict: {total_records}");
 
     // ── Step 2: Build Option A index (qname → &Vec<Record>) ──────────────
     eprintln!("\n--- Step 2: Build qname→records index ---");
@@ -79,7 +79,7 @@ fn main() {
     let mut sorted_entries: Vec<_> = qname_to_chrom.iter().collect();
     sorted_entries.sort_by_key(|(k, _)| *k);
     for (qn, ch) in sorted_entries.iter().take(5) {
-        eprintln!("  {} → {}", qn, ch);
+        eprintln!("  {qn} → {ch}");
     }
 
     // ── Step 4: Simulate haplotypes ───────────────────────────────────────
@@ -133,7 +133,7 @@ fn main() {
         // Log read IDs for detailed comparison
         let mut read_id_strs: Vec<String> = reads.iter().map(|r| read_id(r)).collect();
         read_id_strs.sort();
-        eprintln!("hap {}: {} qnames, {} reads", hid, n_qnames, n_reads);
+        eprintln!("hap {hid}: {n_qnames} qnames, {n_reads} reads");
         eprintln!("  read_ids (first 10): {:?}", &read_id_strs[..std::cmp::min(10, read_id_strs.len())]);
 
         if reads.is_empty() {
@@ -149,7 +149,7 @@ fn main() {
         // Extract continuous regions
         let conregion_dict = extract_continuous_regions_dict(&reads);
         let n_regions = conregion_dict.len();
-        eprintln!("  {} continuous regions on {}", n_regions, hap_chrom);
+        eprintln!("  {n_regions} continuous regions on {hap_chrom}");
 
         // Per-region inner loop
         for ((span_start, span_end), ref read_indices) in &conregion_dict {
@@ -172,7 +172,7 @@ fn main() {
             // b) Assemble consensus
             let consensus_sequence = assemble_consensus(&hap_vectors, &err_vectors, &read_spans);
             let consensus_len = consensus_sequence.len();
-            eprintln!("    consensus_len: {}", consensus_len);
+            eprintln!("    consensus_len: {consensus_len}");
 
             // c) Judge extreme variant density
             let (extreme_vard, region_max_density) =
@@ -185,8 +185,7 @@ fn main() {
             let prev_extreme = *total_extreme_vard.get(&hid).unwrap_or(&false);
             total_extreme_vard.insert(hid, extreme_vard || prev_extreme);
 
-            eprintln!("    var_count={}, extreme_vard={}, max_density={:.6}",
-                      var_count_val, extreme_vard, region_max_density);
+            eprintln!("    var_count={var_count_val}, extreme_vard={extreme_vard}, max_density={region_max_density:.6}");
 
             output_lines.push(format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.6}",
                 hid, n_qnames, n_reads, n_regions,
@@ -214,8 +213,8 @@ fn main() {
     // ── Write TSV output ─────────────────────────────────────────────────
     let mut f = std::fs::File::create(OUTPUT_TSV).expect("Failed to create output TSV");
     for line in &output_lines {
-        writeln!(f, "{}", line).expect("Failed to write");
+        writeln!(f, "{line}").expect("Failed to write");
     }
-    eprintln!("\nOutput written to {}", OUTPUT_TSV);
+    eprintln!("\nOutput written to {OUTPUT_TSV}");
     eprintln!("\n=== Phase 1 Rust Integration Test PASSED ===");
 }

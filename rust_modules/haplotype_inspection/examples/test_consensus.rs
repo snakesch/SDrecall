@@ -41,8 +41,8 @@ fn main() {
     let (chrom, start, end) = parse_interval(&args[2]);
 
     println!("=== Consensus Vector Integration Test ===");
-    println!("BAM file: {}", bam_path);
-    println!("Region: {}:{}-{}", chrom, start, end);
+    println!("BAM file: {bam_path}");
+    println!("Region: {chrom}:{start}-{end}");
     println!();
 
     // ── Step 1: Build Lapper from BAM ──────────────────────────────────────
@@ -52,7 +52,7 @@ fn main() {
     let result = match build_lapper_from_bam(bam_path, 0, 0, false, false) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Error building Lapper: {}", e);
+            eprintln!("Error building Lapper: {e}");
             std::process::exit(1);
         }
     };
@@ -117,7 +117,7 @@ fn main() {
         // Print raw base quality string (ASCII Phred+33)
         let qual = read.qual();
         let qual_str: String = qual.iter().map(|&q| (q + 33) as char).collect();
-        println!("    QUAL:  {}", qual_str);
+        println!("    QUAL:  {qual_str}");
 
         // Print raw hap vector (compact: show first 80 values, then "...")
         println!("    HAP[{}]: {}", hap.len(), format_vector_i16(&hap, 80));
@@ -126,10 +126,10 @@ fn main() {
         println!("    ERR[{}]: {}", err.len(), format_vector_f32(&err, 40));
 
         if !hap_ok {
-            println!("    hap_fail: {}", hap_details);
+            println!("    hap_fail: {hap_details}");
         }
         if !err_ok {
-            println!("    err_fail: {}", err_details);
+            println!("    err_fail: {err_details}");
         }
     }
 
@@ -195,8 +195,7 @@ fn main() {
             row_len_mismatches += 1;
             let qname = String::from_utf8_lossy(read.qname());
             println!(
-                "  ROW MISMATCH: read {} row_nonpad={} individual_len={}",
-                qname, row_nonpad, individual_len
+                "  ROW MISMATCH: read {qname} row_nonpad={row_nonpad} individual_len={individual_len}"
             );
         }
     }
@@ -224,7 +223,7 @@ fn main() {
         unique_rids.len(),
         if err_cache_ok { "OK" } else { "MISMATCH" }
     );
-    println!("  max_vec_len: {}", max_len);
+    println!("  max_vec_len: {max_len}");
     println!("  batch_time: {:.3}s", batch_time.as_secs_f64());
     println!();
 
@@ -281,8 +280,7 @@ fn main() {
             .unwrap_or(0);
 
         println!(
-            "    consensus_len={} ref_span={}..{} match={} snv={} del={} ins_marker={}",
-            consensus_len, min_start, max_end, n_match, n_snv, n_del, n_ins
+            "    consensus_len={consensus_len} ref_span={min_start}..{max_end} match={n_match} snv={n_snv} del={n_del} ins_marker={n_ins}"
         );
         println!(
             "    consensus[{}]: {}",
@@ -294,8 +292,7 @@ fn main() {
         let expected_len = (max_end - min_start) as usize;
         if consensus_len != expected_len {
             println!(
-                "    WARNING: consensus_len {} != expected {} (max_end - min_start)",
-                consensus_len, expected_len
+                "    WARNING: consensus_len {consensus_len} != expected {expected_len} (max_end - min_start)"
             );
             consensus_ok = false;
         } else {
@@ -315,10 +312,9 @@ fn main() {
         && consensus_ok;
 
     println!("=== Summary ===");
-    println!("Reads processed: {}", n_reads);
+    println!("Reads processed: {n_reads}");
     println!(
-        "Per-read CIGAR validation: {} passed, {} failed",
-        total_passed, total_failed
+        "Per-read CIGAR validation: {total_passed} passed, {total_failed} failed"
     );
     println!(
         "Batch shape checks: {}",
@@ -369,12 +365,12 @@ fn get_hp_tag(record: &Record) -> String {
     use rust_htslib::bam::record::Aux;
     match record.aux(b"HP") {
         Ok(Aux::String(s)) => s.to_string(),
-        Ok(Aux::I32(v)) => format!("{}", v),
-        Ok(Aux::I16(v)) => format!("{}", v),
-        Ok(Aux::I8(v)) => format!("{}", v),
-        Ok(Aux::U32(v)) => format!("{}", v),
-        Ok(Aux::U16(v)) => format!("{}", v),
-        Ok(Aux::U8(v)) => format!("{}", v),
+        Ok(Aux::I32(v)) => format!("{v}"),
+        Ok(Aux::I16(v)) => format!("{v}"),
+        Ok(Aux::I8(v)) => format!("{v}"),
+        Ok(Aux::U32(v)) => format!("{v}"),
+        Ok(Aux::U16(v)) => format!("{v}"),
+        Ok(Aux::U8(v)) => format!("{v}"),
         _ => "no_HP".to_string(),
     }
 }
@@ -385,15 +381,15 @@ fn cigar_to_string(record: &Record) -> String {
     let mut s = String::new();
     for c in cigar.iter() {
         match c {
-            Cigar::Match(n) => s.push_str(&format!("{}M", n)),
-            Cigar::Ins(n) => s.push_str(&format!("{}I", n)),
-            Cigar::Del(n) => s.push_str(&format!("{}D", n)),
-            Cigar::RefSkip(n) => s.push_str(&format!("{}N", n)),
-            Cigar::SoftClip(n) => s.push_str(&format!("{}S", n)),
-            Cigar::HardClip(n) => s.push_str(&format!("{}H", n)),
-            Cigar::Pad(n) => s.push_str(&format!("{}P", n)),
-            Cigar::Equal(n) => s.push_str(&format!("{}=", n)),
-            Cigar::Diff(n) => s.push_str(&format!("{}X", n)),
+            Cigar::Match(n) => s.push_str(&format!("{n}M")),
+            Cigar::Ins(n) => s.push_str(&format!("{n}I")),
+            Cigar::Del(n) => s.push_str(&format!("{n}D")),
+            Cigar::RefSkip(n) => s.push_str(&format!("{n}N")),
+            Cigar::SoftClip(n) => s.push_str(&format!("{n}S")),
+            Cigar::HardClip(n) => s.push_str(&format!("{n}H")),
+            Cigar::Pad(n) => s.push_str(&format!("{n}P")),
+            Cigar::Equal(n) => s.push_str(&format!("{n}=")),
+            Cigar::Diff(n) => s.push_str(&format!("{n}X")),
         }
     }
     s
@@ -415,10 +411,10 @@ fn format_vector_i16(v: &Array1<i16>, limit: usize) -> String {
 fn format_vector_f32(v: &Array1<f32>, limit: usize) -> String {
     let len = v.len();
     if len <= limit {
-        let vals: Vec<String> = v.iter().map(|x| format!("{:.3}", x)).collect();
+        let vals: Vec<String> = v.iter().map(|x| format!("{x:.3}")).collect();
         format!("[{}]", vals.join(","))
     } else {
-        let vals: Vec<String> = v.iter().take(limit).map(|x| format!("{:.3}", x)).collect();
+        let vals: Vec<String> = v.iter().take(limit).map(|x| format!("{x:.3}")).collect();
         format!("[{},...({} more)]", vals.join(","), len - limit)
     }
 }
@@ -479,13 +475,12 @@ fn validate_hap_against_cigar(record: &Record, hap: &Array1<i16>) -> (bool, Stri
                     if i == 0 && pending_insertion {
                         if val <= 1 && val != 1 {
                             errors.push(format!(
-                                "pos {} expected ins_marker or 1, got {}",
-                                pos, val
+                                "pos {pos} expected ins_marker or 1, got {val}"
                             ));
                         }
                         pending_insertion = false;
                     } else if val != 1 {
-                        errors.push(format!("pos {} expected 1 (=), got {}", pos, val));
+                        errors.push(format!("pos {pos} expected 1 (=), got {val}"));
                     }
                 }
                 ref_pos += n;
@@ -501,13 +496,12 @@ fn validate_hap_against_cigar(record: &Record, hap: &Array1<i16>) -> (bool, Stri
                     if i == 0 && pending_insertion {
                         if val <= 1 {
                             errors.push(format!(
-                                "pos {} expected ins_marker (>1), got {}",
-                                pos, val
+                                "pos {pos} expected ins_marker (>1), got {val}"
                             ));
                         }
                         pending_insertion = false;
                     } else if val != -4 {
-                        errors.push(format!("pos {} expected -4 (X), got {}", pos, val));
+                        errors.push(format!("pos {pos} expected -4 (X), got {val}"));
                     }
                 }
                 ref_pos += n;
@@ -523,13 +517,12 @@ fn validate_hap_against_cigar(record: &Record, hap: &Array1<i16>) -> (bool, Stri
                     if i == 0 && pending_insertion {
                         if val <= 1 {
                             errors.push(format!(
-                                "pos {} expected ins_marker (>1), got {}",
-                                pos, val
+                                "pos {pos} expected ins_marker (>1), got {val}"
                             ));
                         }
                         pending_insertion = false;
                     } else if val != -6 {
-                        errors.push(format!("pos {} expected -6 (D), got {}", pos, val));
+                        errors.push(format!("pos {pos} expected -6 (D), got {val}"));
                     }
                 }
                 ref_pos += n;
@@ -635,14 +628,12 @@ fn validate_err_against_cigar(record: &Record, err: &Array1<f32>) -> (bool, Stri
                     if insertion_overwrite_positions.contains(&pos) {
                         if val != 0.0 {
                             errors.push(format!(
-                                "pos {} expected 0.0 (ins overwrite), got {}",
-                                pos, val
+                                "pos {pos} expected 0.0 (ins overwrite), got {val}"
                             ));
                         }
                     } else if val <= 0.0 || val > 1.0 {
                         errors.push(format!(
-                            "pos {} expected (0.0, 1.0] (=/X), got {}",
-                            pos, val
+                            "pos {pos} expected (0.0, 1.0] (=/X), got {val}"
                         ));
                     }
                 }
@@ -689,19 +680,19 @@ fn validate_err_against_cigar(record: &Record, err: &Array1<f32>) -> (bool, Stri
 /// Parse an interval string like "chr1:1633000-1635000"
 fn parse_interval(s: &str) -> (String, u32, u32) {
     let (chrom, range) = s.split_once(':').unwrap_or_else(|| {
-        eprintln!("Invalid interval format: '{}'. Expected chrom:start-end", s);
+        eprintln!("Invalid interval format: '{s}'. Expected chrom:start-end");
         std::process::exit(1);
     });
     let (start_str, end_str) = range.split_once('-').unwrap_or_else(|| {
-        eprintln!("Invalid interval format: '{}'. Expected chrom:start-end", s);
+        eprintln!("Invalid interval format: '{s}'. Expected chrom:start-end");
         std::process::exit(1);
     });
     let start: u32 = start_str.parse().unwrap_or_else(|_| {
-        eprintln!("Invalid start position: '{}'", start_str);
+        eprintln!("Invalid start position: '{start_str}'");
         std::process::exit(1);
     });
     let end: u32 = end_str.parse().unwrap_or_else(|_| {
-        eprintln!("Invalid end position: '{}'", end_str);
+        eprintln!("Invalid end position: '{end_str}'");
         std::process::exit(1);
     });
     (chrom.to_string(), start, end)

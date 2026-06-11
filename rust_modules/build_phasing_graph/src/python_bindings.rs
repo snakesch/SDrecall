@@ -73,7 +73,6 @@ pub fn build_phasing_graph_rust(
     if let Some(level_str) = log_level {
         configure_rust_logging(level_str);
     } else {
-		println!("Rust logging configured with level: Debug (from Python: None), configure_rust_logging is not called");
         log::set_max_level(LevelFilter::Debug);
     }
     

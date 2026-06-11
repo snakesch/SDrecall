@@ -44,10 +44,10 @@ run_bedops() {
 RUST_OUTPUT="$TMPDIR/rust_all.txt"
 # Run the Rust binary — we assume it was already built
 # target/ lives under rust_modules/ (the workspace root)
-RUST_BIN="$PROJECT_DIR/../target/debug/validate_select_regions"
+RUST_BIN="$PROJECT_DIR/../target/debug/examples/validate_select_regions"
 if [[ ! -x "$RUST_BIN" ]]; then
     echo "ERROR: Rust binary not found at $RUST_BIN"
-    echo "Build first: cd rust_modules && cargo build --bin validate_select_regions"
+    echo "Build first: cd rust_modules && cargo build --example validate_select_regions"
     exit 1
 fi
 echo "Using Rust binary: $RUST_BIN"

@@ -9,26 +9,6 @@ edition = "2021"
 name = "haplotype_inspection"
 crate-type = ["cdylib", "rlib"]
 
-[[bin]]
-name = "test_bam_lapper"
-path = "src/bin/test_bam_lapper.rs"
-
-[[bin]]
-name = "test_consensus"
-path = "src/bin/test_consensus.rs"
-
-[[bin]]
-name = "validate_select_regions"
-path = "src/bin/validate_select_regions.rs"
-
-[[bin]]
-name = "validate_bilc_solver"
-path = "src/bin/validate_bilc_solver.rs"
-
-[[bin]]
-name = "test_phase1"
-path = "src/bin/test_phase1.rs"
-
 [dependencies]
 # Python integration - core requirements
 pyo3 = { workspace = true }
@@ -57,10 +37,16 @@ tempfile = "3.8"        # Temporary file handling
 # Logging
 log = "0.4"             # Logging framework
 pyo3-log = "0.10"       # Python logging integration
-env_logger = "0.11"     # Standalone logging for test binaries (reads RUST_LOG)
 
 # Optional: Parallel processing
 rayon = { workspace = true }
 
 # ILP solver (BILC haplotype selection)
 highs = "2.0"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+# Used only by unit tests and the example harnesses (reads RUST_LOG); never linked into the cdylib.
+env_logger = "0.11"

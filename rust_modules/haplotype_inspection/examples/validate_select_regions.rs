@@ -20,7 +20,7 @@ fn make_intervals(data: &[(i32, &[(&str, i64, i64)])]) -> HashMap<i32, Vec<(Stri
 fn print_bed(result: &Option<Vec<(String, i64, i64)>>) {
     if let Some(regions) = result {
         for (c, s, e) in regions {
-            println!("{}\t{}\t{}", c, s, e);
+            println!("{c}\t{s}\t{e}");
         }
     }
 }
@@ -28,7 +28,7 @@ fn print_bed(result: &Option<Vec<(String, i64, i64)>>) {
 fn run_test(name: &str, data: &[(i32, &[(&str, i64, i64)])], min_k: usize) {
     let intervals = make_intervals(data);
     let result = select_regions_with_min_haplotypes(&intervals, min_k);
-    println!("### {} (min={})", name, min_k);
+    println!("### {name} (min={min_k})");
     print_bed(&result);
     println!("---");
 }

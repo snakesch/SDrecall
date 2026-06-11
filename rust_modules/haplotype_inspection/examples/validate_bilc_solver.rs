@@ -14,13 +14,13 @@
 ///
 /// Usage:
 ///   # Single file:
-///   cargo run --bin validate_bilc_solver -- <path_to_haplotype_meta.tsv>
+///   cargo run --example validate_bilc_solver -- <path_to_haplotype_meta.tsv>
 ///
 ///   # Batch (multiple files):
-///   cargo run --bin validate_bilc_solver -- /dir/*.haplotype_meta.tsv
+///   cargo run --example validate_bilc_solver -- /dir/*.haplotype_meta.tsv
 ///
 ///   # Batch with TSV report:
-///   cargo run --bin validate_bilc_solver -- --report /path/to/report.tsv /dir/*.haplotype_meta.tsv
+///   cargo run --example validate_bilc_solver -- --report /path/to/report.tsv /dir/*.haplotype_meta.tsv
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
@@ -85,7 +85,7 @@ fn main() {
         eprint!("\r[{}/{}] Processing: {} ...", idx + 1, total, short_name(tsv_path));
         match validate_one(tsv_path) {
             Ok(r) => results.push(r),
-            Err(e) => eprintln!("\nERROR on {}: {}", tsv_path, e),
+            Err(e) => eprintln!("\nERROR on {tsv_path}: {e}"),
         }
     }
     eprintln!("\r{:width$}", " ", width = 120); // clear progress line
@@ -100,12 +100,12 @@ fn main() {
     let n_same_obj = results.iter().filter(|r| !r.ilp_match && (r.rust_obj - r.python_obj).abs() < 1e-6).count();
 
     println!("\n=== BILC Solver Cross-Validation Report ===");
-    println!("Files tested: {}", n_total);
-    println!("ILP-exact match: {} / {}", n_ilp_exact, n_total);
-    println!("ILP alternative optima (same #drops, same obj): {} / {}", n_same_obj, n_total);
-    println!("ILP different #drops: {} / {}", n_diff_count, n_total);
-    println!("Full (ILP+augmentation) match: {} / {}", n_full_match, n_total);
-    println!("Full mismatches: {}", n_full_mismatch);
+    println!("Files tested: {n_total}");
+    println!("ILP-exact match: {n_ilp_exact} / {n_total}");
+    println!("ILP alternative optima (same #drops, same obj): {n_same_obj} / {n_total}");
+    println!("ILP different #drops: {n_diff_count} / {n_total}");
+    println!("Full (ILP+augmentation) match: {n_full_match} / {n_total}");
+    println!("Full mismatches: {n_full_mismatch}");
 
     // --- Print per-file detail table for ILP-differing cases ---
     let diffs: Vec<&ValidationResult> = results.iter().filter(|r| !r.ilp_match).collect();
@@ -168,7 +168,7 @@ fn main() {
                 r.n_post_ilp_adds,
             ).unwrap();
         }
-        println!("\nTSV report written to: {}", path);
+        println!("\nTSV report written to: {path}");
     }
 
     if n_full_mismatch > 0 {
@@ -181,21 +181,21 @@ fn short_name(path: &str) -> &str {
 }
 
 fn validate_one(tsv_path: &str) -> Result<ValidationResult, String> {
-    let file = fs::File::open(tsv_path).map_err(|e| format!("Cannot open: {}", e))?;
+    let file = fs::File::open(tsv_path).map_err(|e| format!("Cannot open: {e}"))?;
     let reader = BufReader::new(file);
     let mut lines = reader.lines();
 
     let header_line = lines
         .next()
         .ok_or("empty file")?
-        .map_err(|e| format!("IO: {}", e))?;
+        .map_err(|e| format!("IO: {e}"))?;
     let headers: Vec<&str> = header_line.split('\t').collect();
 
     let col = |name: &str| -> Result<usize, String> {
         headers
             .iter()
             .position(|h| *h == name)
-            .ok_or_else(|| format!("column '{}' not found", name))
+            .ok_or_else(|| format!("column '{name}' not found"))
     };
     let i_start = col("start")?;
     let i_end = col("end")?;
@@ -223,7 +223,7 @@ fn validate_one(tsv_path: &str) -> Result<ValidationResult, String> {
     let mut row_count = 0;
 
     for line in lines {
-        let line = line.map_err(|e| format!("IO: {}", e))?;
+        let line = line.map_err(|e| format!("IO: {e}"))?;
         if line.is_empty() {
             continue;
         }
