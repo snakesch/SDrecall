@@ -10,6 +10,7 @@ from src.const import shell_utils
 from src.log import logger
 
 from fp_control.bam_ncls import migrate_bam_to_ncls, calculate_mean_read_length
+from fp_control import diff_dump
 
 # Try to import Rust-accelerated haplotype inspection
 try:
@@ -294,6 +295,13 @@ def realign_filter_per_cov(bam,
                                                              node_read_ids = node_read_ids,
                                                              logger = logger)
 
+    # Differential-validation dump (T3): inert unless SDRECALL_DIFF_DUMP_DIR is set
+    diff_dump.dump_phasing(bam, phased_graph, weight_matrix, edge_weight_cutoff,
+                           node_read_ids, qname_to_node, qname_hap_info, hap_qname_info,
+                           total_readhap_vector, total_readerr_vector,
+                           mean_read_length, recall_mq_cutoff, basequal_median_cutoff,
+                           intrinsic_bam, logger)
+
     # Inspect the raw BAM corresponding variants to get the high density regions
     # It's like active region identification for GATK HC
     if not bam_region_bed:
@@ -315,7 +323,10 @@ def realign_filter_per_cov(bam,
         correct_list, mismap_list = inspect_haplotypes_rust(
             bam_path=bam,
             intrinsic_bam_path=intrinsic_bam,
-            hap_qname_info=dict(hap_qname_info),
+            # hap_qname_info values are sets (defaultdict(set)); the Rust binding extracts each
+            # as a Sequence, so materialise them as lists. (Transitional PyO3 shim — at T4/T9 the
+            # partition is handed over as Rust types in-process and this conversion disappears.)
+            hap_qname_info={k: list(v) for k, v in hap_qname_info.items()},
             qname_hap_info=dict(qname_hap_info),
             qname_to_node=dict(qname_to_node),
             total_lowqual_qnames=total_lowqual_qnames,
@@ -327,6 +338,14 @@ def realign_filter_per_cov(bam,
         correct_qnames = set(correct_list)
         mismap_qnames = set(mismap_list)
         logger.info(f"Rust inspection complete: {len(correct_qnames)} correct, {len(mismap_qnames)} misaligned")
+
+        # Differential-validation (T1): run Python baseline + compare. Inert unless enabled.
+        diff_dump.compare_inspection(bam, intrinsic_bam, hap_qname_info, qname_hap_info,
+                                     qname_to_node, node_read_ids, read_id_read_dict,
+                                     total_readhap_vector, total_readerr_vector, read_ref_pos_dict,
+                                     total_lowqual_qnames, compare_haplotype_meta_tab,
+                                     mean_read_length, recall_mq_cutoff, basequal_median_cutoff,
+                                     correct_qnames, mismap_qnames, logger)
     else:
         correct_qnames, mismap_qnames = inspect_by_haplotypes(bam,
                                                               bam_ncls,
