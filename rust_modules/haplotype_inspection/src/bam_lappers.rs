@@ -66,8 +66,7 @@ fn spawn_collate_pipe(
     }
 
     info!(
-        "[spawn_collate_pipe] Running: samtools collate -f -@ {} {} -o - (piped)",
-        threads, bam_file_path
+        "[spawn_collate_pipe] Running: samtools collate -f -@ {threads} {bam_file_path} -o - (piped)"
     );
 
     let mut child = Command::new("samtools")
@@ -91,7 +90,7 @@ fn spawn_collate_pipe(
         .take()
         .ok_or("Failed to capture samtools stdout")?;
     let fd = stdout.as_raw_fd();
-    let fd_path = format!("/dev/fd/{}", fd);
+    let fd_path = format!("/dev/fd/{fd}");
 
     match bam::Reader::from_path(&fd_path) {
         Ok(reader) => {
@@ -102,13 +101,12 @@ fn spawn_collate_pipe(
             // handle (the fd stays open as child.stdout is already taken).
             // Ownership: child keeps the pipe alive until wait().
             std::mem::forget(stdout); // prevent close — fd now owned by htslib
-            info!("[spawn_collate_pipe] Opened BAM reader from pipe fd {}", fd);
+            info!("[spawn_collate_pipe] Opened BAM reader from pipe fd {fd}");
             Ok(Some((reader, child)))
         }
         Err(e) => {
             warn!(
-                "[spawn_collate_pipe] from_path({}) failed: {}, will fall back to temp file",
-                fd_path, e
+                "[spawn_collate_pipe] from_path({fd_path}) failed: {e}, will fall back to temp file"
             );
             let _ = child.kill();
             let _ = child.wait();
@@ -136,8 +134,7 @@ fn collate_bam_file(
         .ok_or("Failed to convert temp path to string")?;
 
     info!(
-        "[collate_bam_file] Running: samtools collate -f -@ {} {} -o {}",
-        threads, bam_file_path, temp_path
+        "[collate_bam_file] Running: samtools collate -f -@ {threads} {bam_file_path} -o {temp_path}"
     );
 
     let output = Command::new("samtools")
@@ -160,7 +157,7 @@ fn collate_bam_file(
         return Ok(None);
     }
 
-    info!("[collate_bam_file] Collation complete: {}", temp_path);
+    info!("[collate_bam_file] Collation complete: {temp_path}");
     Ok(Some(temp_file))
 }
 
@@ -204,7 +201,7 @@ pub fn build_lapper_from_bam(
                             let p = tf.path().to_str()
                                 .ok_or("Failed to convert temp path to string")?
                                 .to_string();
-                            info!("[build_lapper_from_bam] Using temp-file collation: {}", p);
+                            info!("[build_lapper_from_bam] Using temp-file collation: {p}");
                             BamSource::TempFile(p, tf)
                         }
                         None => {
@@ -316,10 +313,10 @@ pub fn build_lapper_from_bam(
             }
         }
 
-        // Flush the last group
+        // Flush the last group (return value unused: this is the final group)
         if let Some(ref prev_qname) = current_qname {
             if !current_group.is_empty() {
-                qname_idx_counter = process_qname_group(
+                let _ = process_qname_group(
                     prev_qname,
                     &current_group,
                     &header,
@@ -415,7 +412,7 @@ pub fn build_lapper_from_bam(
     if let Some(mut child) = collate_child.take() {
         let status = child.wait()?;
         if !status.success() {
-            warn!("[build_lapper_from_bam] samtools collate exited with: {}", status);
+            warn!("[build_lapper_from_bam] samtools collate exited with: {status}");
         }
     }
 
@@ -449,8 +446,7 @@ pub fn build_lapper_from_bam(
     let noisy_qnames_filtered = noisy_qnames.len();
 
     info!(
-        "[build_lapper_from_bam] Done: {} reads processed, {} skipped, {} qnames retained, {} noisy filtered",
-        total_reads_processed, skipped_alignments, qnames_retained, noisy_qnames_filtered
+        "[build_lapper_from_bam] Done: {total_reads_processed} reads processed, {skipped_alignments} skipped, {qnames_retained} qnames retained, {noisy_qnames_filtered} noisy filtered"
     );
 
     Ok(BamLapperResult {
@@ -590,7 +586,7 @@ fn is_read_noisy(
         let qualities = read.qual();
         if !qualities.is_empty() {
             let median_q = fast_median(qualities);
-            if median_q <= basequal_median_filter {
+            if median_q <= basequal_median_filter as f32 {
                 return true;
             }
 
@@ -621,10 +617,14 @@ fn is_read_noisy(
     false
 }
 
-/// Fast median calculation for quality scores
-fn fast_median(qualities: &[u8]) -> u8 {
+/// Median of quality scores, matching Python's `np.median`.
+///
+/// Returns a float: for an even-length input the mean of the two middle
+/// elements is NOT integer-truncated (e.g. median of [15, 16] is 15.5, not 15).
+/// This parity matters at the `median <= cutoff` boundary in `is_read_noisy`.
+fn fast_median(qualities: &[u8]) -> f32 {
     if qualities.is_empty() {
-        return 0;
+        return 0.0;
     }
 
     let mut sorted = qualities.to_vec();
@@ -632,9 +632,9 @@ fn fast_median(qualities: &[u8]) -> u8 {
     let mid = sorted.len() / 2;
 
     if sorted.len() % 2 == 0 {
-        ((sorted[mid - 1] as u16 + sorted[mid] as u16) / 2) as u8
+        (sorted[mid - 1] as f32 + sorted[mid] as f32) / 2.0
     } else {
-        sorted[mid]
+        sorted[mid] as f32
     }
 }
 
@@ -749,40 +749,18 @@ pub fn query_overlapping_read_pairs<'a>(
     result
 }
 
-/// Convert CIGAR operation to character
-fn cigar_op_to_char(cigar: &rust_htslib::bam::record::Cigar) -> u8 {
-    use rust_htslib::bam::record::Cigar;
-    match cigar {
-        Cigar::Match(_) => b'M',
-        Cigar::Ins(_) => b'I',
-        Cigar::Del(_) => b'D',
-        Cigar::RefSkip(_) => b'N',
-        Cigar::SoftClip(_) => b'S',
-        Cigar::HardClip(_) => b'H',
-        Cigar::Pad(_) => b'P',
-        Cigar::Equal(_) => b'=',
-        Cigar::Diff(_) => b'X',
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_cigar_conversion() {
-        use rust_htslib::bam::record::Cigar;
-        assert_eq!(cigar_op_to_char(&Cigar::Match(10)), b'M');
-        assert_eq!(cigar_op_to_char(&Cigar::Ins(5)), b'I');
-        assert_eq!(cigar_op_to_char(&Cigar::Del(3)), b'D');
-    }
-
-    #[test]
     fn test_fast_median() {
-        assert_eq!(fast_median(&[1, 2, 3, 4, 5]), 3);
-        assert_eq!(fast_median(&[1, 2, 3, 4]), 2);
-        assert_eq!(fast_median(&[5, 1, 3, 2, 4]), 3);
-        assert_eq!(fast_median(&[]), 0);
+        // Matches np.median: odd length → middle element; even length → mean
+        // of the two middle elements as a float (NOT integer-truncated).
+        assert_eq!(fast_median(&[1, 2, 3, 4, 5]), 3.0);
+        assert_eq!(fast_median(&[1, 2, 3, 4]), 2.5);
+        assert_eq!(fast_median(&[5, 1, 3, 2, 4]), 3.0);
+        assert_eq!(fast_median(&[]), 0.0);
     }
 
     /// Integration test: run build_lapper_from_bam in paired mode on real HG002 BAM.
@@ -793,7 +771,7 @@ mod tests {
 
         let bam_path = "/paedyl01/disk1/yangyxt/wgs/GIAB_samples/vcfs/hg38/HG002_hg38_exome_SDrecall/recall_results/HG002.pooled.clean.bam";
         if !std::path::Path::new(bam_path).exists() {
-            eprintln!("SKIP: test BAM not found at {}", bam_path);
+            eprintln!("SKIP: test BAM not found at {bam_path}");
             return;
         }
 
@@ -815,7 +793,7 @@ mod tests {
         eprintln!("read_dict entries: {}", result.read_dict.len());
 
         let total_records: usize = result.read_dict.values().map(|v| v.len()).sum();
-        eprintln!("Total BAM records in read_dict: {}", total_records);
+        eprintln!("Total BAM records in read_dict: {total_records}");
 
         // In paired mode, every retained qname should have exactly 2 records
         let mut singles = 0usize;
@@ -828,12 +806,12 @@ mod tests {
                 _ => triples_plus += 1,
             }
         }
-        eprintln!("Read grouping: 1-rec={} 2-rec={} 3+-rec={}", singles, pairs, triples_plus);
+        eprintln!("Read grouping: 1-rec={singles} 2-rec={pairs} 3+-rec={triples_plus}");
 
         // Basic sanity checks
         assert!(result.stats.total_reads_processed > 0, "No reads processed");
         assert!(result.stats.qnames_retained > 0, "No qnames retained");
-        assert!(result.read_dict.len() > 0, "read_dict is empty");
+        assert!(!result.read_dict.is_empty(), "read_dict is empty");
         // Paired mode should produce mostly pairs
         assert!(pairs > singles, "Expected more pairs than singles in paired mode");
     }

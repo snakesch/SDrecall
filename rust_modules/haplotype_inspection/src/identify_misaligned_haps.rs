@@ -1,17 +1,17 @@
-/// Haplotype misalignment identification.
-///
-/// Ports Python functions from `identify_misaligned_haps.py`:
-/// - `record_hap_err_vectors_per_region` → batch vector extraction
-/// - `assemble_consensus` → consensus assembly
-/// - `judge_misalignment_by_extreme_vardensity` → variant density filter
-/// - `stat_refseq_similarity` → reference sequence similarity
-/// - `cal_similarity_score` → similarity scoring
-/// - `extract_continuous_regions_dict` → region grouping
-/// - `group_by_dict_optimized` → haplotype grouping
-/// - `record_haplotype_rank` → haplotype ranking
-/// - `summarize_enclosing_haps` → enclosing haplotype summary
-/// - `identify_misalignment_per_region` → per-region orchestrator
-/// - `inspect_haplotypes` → main inspection loop
+//! Haplotype misalignment identification.
+//!
+//! Ports Python functions from `identify_misaligned_haps.py`:
+//! - `record_hap_err_vectors_per_region` → batch vector extraction
+//! - `assemble_consensus` → consensus assembly
+//! - `judge_misalignment_by_extreme_vardensity` → variant density filter
+//! - `stat_refseq_similarity` → reference sequence similarity
+//! - `cal_similarity_score` → similarity scoring
+//! - `extract_continuous_regions_dict` → region grouping
+//! - `group_by_dict_optimized` → haplotype grouping
+//! - `record_haplotype_rank` → haplotype ranking
+//! - `summarize_enclosing_haps` → enclosing haplotype summary
+//! - `identify_misalignment_per_region` → per-region orchestrator
+//! - `inspect_haplotypes` → main inspection loop
 
 use ndarray::{Array1, Array2};
 use rust_htslib::bam::Record;
@@ -49,39 +49,6 @@ pub struct RegionVarStats {
 /// Type alias for the nested dict: hid -> homo_refseq_qname -> Vec<RegionVarStats>
 pub type VarcountsAmongRefseqs = HashMap<i32, HashMap<String, Vec<RegionVarStats>>>;
 
-/// Calculate edit distance between two sequences
-pub fn edit_distance(seq1: &[u8], seq2: &[u8]) -> usize {
-    let len1 = seq1.len();
-    let len2 = seq2.len();
-
-    if len1 == 0 {
-        return len2;
-    }
-    if len2 == 0 {
-        return len1;
-    }
-
-    let mut dp = vec![vec![0; len2 + 1]; len1 + 1];
-
-    for i in 0..=len1 {
-        dp[i][0] = i;
-    }
-    for j in 0..=len2 {
-        dp[0][j] = j;
-    }
-
-    for i in 1..=len1 {
-        for j in 1..=len2 {
-            let cost = if seq1[i - 1] == seq2[j - 1] { 0 } else { 1 };
-            dp[i][j] = (dp[i - 1][j] + 1)
-                .min(dp[i][j - 1] + 1)
-                .min(dp[i - 1][j - 1] + cost);
-        }
-    }
-
-    dp[len1][len2]
-}
-
 // ============================================================================
 // Variant Density Filtering
 // Ports from identify_misaligned_haps.py
@@ -95,6 +62,13 @@ pub fn edit_distance(seq1: &[u8], seq2: &[u8]) -> usize {
 /// [i-padding_size, i+padding_size]. Density = variant_count / window_size.
 ///
 /// Returns an array of the same length as input, with density values at each position.
+///
+/// Implementation note: instead of re-slicing and re-counting each window
+/// (`O(n * window)`), this builds two prefix-sum arrays once and answers each
+/// window in O(1) (`O(n)` overall, no per-position allocation). The result is
+/// identical to `count_var` over each clamped window divided by the fixed
+/// `window_size`. See `count_window_var_density_reference` in the tests for the
+/// straightforward version this is cross-checked against.
 pub fn count_window_var_density(array: &Array1<i16>, padding_size: i32) -> Array1<f32> {
     let n = array.len();
 
@@ -104,19 +78,49 @@ pub fn count_window_var_density(array: &Array1<i16>, padding_size: i32) -> Array
         return Array1::zeros(n);
     }
 
-    let mut density_arr = Array1::<f32>::zeros(n);
+    let pad = padding_size as usize;
     let window_size = (padding_size * 2 + 1) as f32;
 
-    for i in 0..n {
-        let start = if i < padding_size as usize {
-            0
-        } else {
-            i - padding_size as usize
-        };
-        let end = (i + padding_size as usize + 1).min(n);
+    // Prefix sums computed once over the whole sequence:
+    //   snv_prefix[k]   = count of SNV markers (-4) in array[0..k]
+    //   block_prefix[k] = count of indel-block STARTS in array[0..k], where a
+    //                     start is an indel position (-6 or >1) whose left
+    //                     neighbour is not an indel — this mirrors how
+    //                     count_continuous_blocks counts maximal indel runs.
+    let mut snv_prefix = vec![0i32; n + 1];
+    let mut block_prefix = vec![0i32; n + 1];
+    let mut prev_indel = false;
+    for (k, &v) in array.iter().enumerate() {
+        let is_snv = v == -4;
+        let is_indel = v == -6 || v > 1;
+        let is_block_start = is_indel && !prev_indel;
+        snv_prefix[k + 1] = snv_prefix[k] + is_snv as i32;
+        block_prefix[k + 1] = block_prefix[k] + is_block_start as i32;
+        prev_indel = is_indel;
+    }
 
-        let window = array.slice(ndarray::s![start..end]);
-        let var_count = count_var(&window.to_owned()) as f32;
+    let is_indel_at = |k: usize| -> bool {
+        let v = array[k];
+        v == -6 || v > 1
+    };
+
+    let mut density_arr = Array1::<f32>::zeros(n);
+    for i in 0..n {
+        let start = i.saturating_sub(pad);
+        let end = (i + pad + 1).min(n);
+
+        // SNVs in [start, end): plain prefix difference.
+        let snv_count = snv_prefix[end] - snv_prefix[start];
+
+        // Indel blocks in [start, end): block starts strictly inside the window
+        // (positions start+1..end) come from block_prefix; the window's own
+        // first position counts as a fresh block start if it is an indel
+        // (count_continuous_blocks treats each window in isolation).
+        let internal_starts = block_prefix[end] - block_prefix[start + 1];
+        let boundary_start = is_indel_at(start) as i32;
+        let blocks = internal_starts + boundary_start;
+
+        let var_count = (snv_count + blocks) as f32;
         density_arr[i] = var_count / window_size;
     }
 
@@ -143,11 +147,9 @@ pub fn extract_true_stretches(bool_array: &Array1<bool>) -> Vec<(usize, usize)> 
                 in_stretch = true;
                 start_idx = i;
             }
-        } else {
-            if in_stretch {
-                stretches.push((start_idx, i - 1));
-                in_stretch = false;
-            }
+        } else if in_stretch {
+            stretches.push((start_idx, i - 1));
+            in_stretch = false;
         }
     }
 
@@ -183,21 +185,21 @@ pub fn judge_misalignment_by_extreme_vardensity(seq: &Array1<i16>) -> (bool, f32
     // Track the overall max local density across all three window sizes
     let mut max_density = 0.0f32;
 
-    if five_vard.len() > 0 {
+    if !five_vard.is_empty() {
         if let Some(&d) = five_vard.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
             if d > max_density {
                 max_density = d;
             }
         }
     }
-    if six_vard.len() > 0 {
+    if !six_vard.is_empty() {
         if let Some(&d) = six_vard.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
             if d > max_density {
                 max_density = d;
             }
         }
     }
-    if read_vard.len() > 0 {
+    if !read_vard.is_empty() {
         if let Some(&d) = read_vard.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
             if d > max_density {
                 max_density = d;
@@ -422,7 +424,7 @@ pub fn update_tally_for_read(
     read_start: i32,
     ref_qseq_positions: &[i32],
     qseq_encoded: &[i8],
-    tally: &mut Vec<[i32; 5]>,
+    tally: &mut [[i32; 5]],
 ) {
     let num_pos = shared_pos_abs.len();
     for i in 0..num_pos {
@@ -437,7 +439,7 @@ pub fn update_tally_for_read(
         }
         let base = qseq_encoded[qidx as usize];
         // Only tally A(0), T(1), C(2), G(3); exclude N(4) and invalid
-        if base >= 0 && base < 4 {
+        if (0..4).contains(&base) {
             tally[i][base as usize] += 1;
         }
     }
@@ -566,6 +568,7 @@ fn parse_origin_region(qname: &str) -> Option<(String, i64, i64)> {
 ///
 /// # Returns
 /// The (mutated) `varcounts_among_refseqs`.
+#[allow(clippy::too_many_arguments)]
 pub fn stat_refseq_similarity(
     intrin_lapper: &BamLapperResult,
     chrom: &str,
@@ -587,15 +590,15 @@ pub fn stat_refseq_similarity(
     );
 
     for homo_refseq in &homo_refseqs {
-        let homo_refseq_start = homo_refseq.pos() as i64;
-        let homo_refseq_end = homo_refseq.cigar().end_pos() as i64;
+        let homo_refseq_start = homo_refseq.pos();
+        let homo_refseq_end = homo_refseq.cigar().end_pos();
         let homo_refseq_qname = String::from_utf8_lossy(homo_refseq.qname()).to_string();
 
         let overlap_start = homo_refseq_start.max(span.0);
         let overlap_end = homo_refseq_end.min(span.1);
         let overlap_span_size = overlap_end - overlap_start;
 
-        let hregion_str = format!("{}:{}-{}", chrom, homo_refseq_start, homo_refseq_end);
+        let hregion_str = format!("{chrom}:{homo_refseq_start}-{homo_refseq_end}");
         // Some reference sequences can be mapped to multiple places;
         // to have a unique ID, we append the current region coordinate string.
         let homo_refseq_id = format!("{}:{}", read_id(homo_refseq), hregion_str);
@@ -610,10 +613,10 @@ pub fn stat_refseq_similarity(
             // string "N"), so extract_hap_vector (CIGAR-only) is equivalent.
             // Cache the qseq data for later use in map_positions_to_bases.
             let homo_rid = read_id(homo_refseq);
-            if !qseq_cache.contains_key(&homo_rid) {
-                let qseq_data = extract_read_qseqs(homo_refseq);
-                qseq_cache.insert(homo_rid, qseq_data);
-            }
+            qseq_cache.entry(homo_rid).or_insert_with(|| {
+                
+                extract_read_qseqs(homo_refseq)
+            });
             let hap_vec = extract_hap_vector(homo_refseq);
             total_genomic_haps.insert(homo_refseq_id.clone(), hap_vec.clone());
             hap_vec
@@ -650,9 +653,8 @@ pub fn stat_refseq_similarity(
                     && origin_end >= overlap_end
                 {
                     warn!(
-                        "The homologous genomic sequence {} overlapping interval {}-{} \
-                         is aligned to its origin. So ignore this homologous sequence.",
-                        homo_refseq_qname, overlap_start, overlap_end
+                        "The homologous genomic sequence {homo_refseq_qname} overlapping interval {overlap_start}-{overlap_end} \
+                         is aligned to its origin. So ignore this homologous sequence."
                     );
                     continue;
                 }
@@ -765,15 +767,14 @@ pub fn stat_refseq_similarity(
         };
 
         debug!(
-            "[stat_refseq_similarity] hid={} homo_qname={} varcount={} alt_snv={} alt_indel={} shared_psv={}",
-            hid, homo_refseq_qname, varcount, alt_snv_count, alt_indel_count, shared_psv
+            "[stat_refseq_similarity] hid={hid} homo_qname={homo_refseq_qname} varcount={varcount} alt_snv={alt_snv_count} alt_indel={alt_indel_count} shared_psv={shared_psv}"
         );
 
         varcounts_among_refseqs
             .entry(hid)
-            .or_insert_with(HashMap::new)
+            .or_default()
             .entry(homo_refseq_qname.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(stats);
     }
 }
@@ -877,12 +878,9 @@ pub fn cal_similarity_score(
                 - (4.0 - psv_var_ratio);
 
             debug!(
-                "[cal_similarity_score] hid={} homo_refseq={} psv_var_ratio={:.4} \
-                 total_shared_psv={} alt_snv={} alt_indel={} psv_sharing_ratio={:.4} \
-                 non_psv_density_100bp={:.4} mixed_psv_metric={:.6}",
-                hid, homo_refseq_qname, psv_var_ratio,
-                total_shared_psv, alt_snv_count, alt_indel_count,
-                psv_sharing_ratio, non_psv_density_100bp, mixed_psv_metric,
+                "[cal_similarity_score] hid={hid} homo_refseq={homo_refseq_qname} psv_var_ratio={psv_var_ratio:.4} \
+                 total_shared_psv={total_shared_psv} alt_snv={alt_snv_count} alt_indel={alt_indel_count} psv_sharing_ratio={psv_sharing_ratio:.4} \
+                 non_psv_density_100bp={non_psv_density_100bp:.4} mixed_psv_metric={mixed_psv_metric:.6}",
             );
 
             if mixed_psv_metric > max_psv {
@@ -893,9 +891,8 @@ pub fn cal_similarity_score(
         }
 
         info!(
-            "[cal_similarity_score] hid={} max_sim_score={:.6} max_psv_count={} \
-             max_psv_positions={:?}",
-            hid, max_psv, max_psv_c, max_psv_pos,
+            "[cal_similarity_score] hid={hid} max_sim_score={max_psv:.6} max_psv_count={max_psv_c} \
+             max_psv_positions={max_psv_pos:?}",
         );
 
         results.insert(
@@ -1005,41 +1002,6 @@ pub fn record_hap_err_vectors_per_region(
     err_cache: &mut HashMap<String, Array1<f32>>,
 ) -> (Array2<i32>, Array2<i16>, Array2<f32>) {
     let n = records.len();
-    let cache_size_before = hap_cache.len();
-
-    // First pass: extract/cache all vectors and collect spans
-    let mut spans_vec: Vec<[i32; 2]> = Vec::with_capacity(n);
-    let mut hap_list: Vec<Array1<i16>> = Vec::with_capacity(n);
-    let mut err_list: Vec<Array1<f32>> = Vec::with_capacity(n);
-
-    for &record in records {
-        let ref_start = record.pos() as i32;
-        let ref_end = record.cigar().end_pos() as i32;
-        spans_vec.push([ref_start, ref_end]);
-
-        let rid = read_id(record);
-
-        // rid is cloned here because HashMap::entry() takes ownership of the key.
-        // The second use of rid (for err_cache) consumes the original.
-        let hap_hit = hap_cache.contains_key(&rid);
-        let hap_vector = hap_cache
-            .entry(rid.clone())
-            .or_insert_with(|| extract_hap_vector(record))
-            .clone(); // Clone the cached Array1 to leave cache intact for future lookups
-
-        let err_vector = err_cache
-            .entry(rid)
-            .or_insert_with(|| extract_error_vector(record))
-            .clone();
-
-        debug!(
-            "[record_hap_err_vectors_per_region] read {} cache_hit={} hap_len={} err_len={}",
-            String::from_utf8_lossy(record.qname()), hap_hit, hap_vector.len(), err_vector.len()
-        );
-
-        hap_list.push(hap_vector);
-        err_list.push(err_vector);
-    }
 
     if n == 0 {
         info!("[record_hap_err_vectors_per_region] no reads to process");
@@ -1050,8 +1012,41 @@ pub fn record_hap_err_vectors_per_region(
         );
     }
 
-    // Determine max vector length for padding (Python uses fixed 500, we use actual max)
-    let max_len = hap_list.iter().map(|v| v.len()).max().unwrap_or(0);
+    let cache_size_before = hap_cache.len();
+
+    // First pass: ensure each read's hap/err vectors are in the caches, and
+    // collect spans + read_ids + the max hap length for padding. We deliberately
+    // do NOT clone the cached vectors here — the second pass copies straight from
+    // the cache into the output rows, so each Array1 is touched only by reference.
+    let mut spans_vec: Vec<[i32; 2]> = Vec::with_capacity(n);
+    let mut rids: Vec<String> = Vec::with_capacity(n);
+    let mut max_len = 0usize;
+
+    for &record in records {
+        let ref_start = record.pos() as i32;
+        let ref_end = record.cigar().end_pos() as i32;
+        spans_vec.push([ref_start, ref_end]);
+
+        let rid = read_id(record);
+        let hap_hit = hap_cache.contains_key(&rid);
+
+        let hap_len = hap_cache
+            .entry(rid.clone())
+            .or_insert_with(|| extract_hap_vector(record))
+            .len();
+        let err_len = err_cache
+            .entry(rid.clone())
+            .or_insert_with(|| extract_error_vector(record))
+            .len();
+
+        debug!(
+            "[record_hap_err_vectors_per_region] read {} cache_hit={} hap_len={} err_len={}",
+            String::from_utf8_lossy(record.qname()), hap_hit, hap_len, err_len
+        );
+
+        max_len = max_len.max(hap_len);
+        rids.push(rid);
+    }
 
     let cache_hits = n - (hap_cache.len() - cache_size_before);
     info!(
@@ -1066,19 +1061,20 @@ pub fn record_hap_err_vectors_per_region(
         read_spans[[i, 1]] = span[1];
     }
 
-    // Build hap_vectors Array2<i16> (n × max_len), padded with -10
+    // Second pass: copy each cached vector directly into its padded row.
+    // hap and err vectors share the same length (both span the read's reference
+    // footprint), so max_len computed from hap lengths bounds both.
     let mut hap_vectors = Array2::<i16>::from_elem((n, max_len), -10i16);
-    for (i, hap) in hap_list.iter().enumerate() {
-        let len = hap.len();
-        hap_vectors.row_mut(i).as_slice_mut().unwrap()[..len]
-            .copy_from_slice(hap.as_slice().unwrap());
-    }
-
-    // Build err_vectors Array2<f32> (n × max_len), padded with -10.0
     let mut err_vectors = Array2::<f32>::from_elem((n, max_len), -10.0f32);
-    for (i, err) in err_list.iter().enumerate() {
-        let len = err.len();
-        err_vectors.row_mut(i).as_slice_mut().unwrap()[..len]
+    for (i, rid) in rids.iter().enumerate() {
+        let hap = &hap_cache[rid];
+        let hlen = hap.len();
+        hap_vectors.row_mut(i).as_slice_mut().unwrap()[..hlen]
+            .copy_from_slice(hap.as_slice().unwrap());
+
+        let err = &err_cache[rid];
+        let elen = err.len();
+        err_vectors.row_mut(i).as_slice_mut().unwrap()[..elen]
             .copy_from_slice(err.as_slice().unwrap());
     }
 
@@ -1096,7 +1092,7 @@ pub fn record_hap_err_vectors_per_region(
 ///
 /// # Arguments
 /// * `seq_arrays`  - `Array2<i16>` shape `(n_reads, max_len)`, padded with -10.
-///                   Values >= -8 are considered valid (non-NA).
+///   Values >= -8 are considered valid (non-NA).
 /// * `qual_arrays` - `Array2<f32>` shape `(n_reads, max_len)`, same padding convention.
 /// * `read_spans`  - `Array2<i32>` shape `(n_reads, 2)` with `[ref_start, ref_end]` per read.
 ///
@@ -1160,12 +1156,11 @@ pub fn assemble_consensus(
         // ── Python lines 334-339 ────────────────────────────────────────
         for j in 0..non_na_values {
             let pos = rel_start + j;
-            if pos < length {
-                if nona_qual[j] <= consensus_qual[pos] && nona_qual[j] <= 0.2 {
+            if pos < length
+                && nona_qual[j] <= consensus_qual[pos] && nona_qual[j] <= 0.2 {
                     consensus_seq[pos] = nona_seq[j] as i16;
                     consensus_qual[pos] = nona_qual[j];
                 }
-            }
         }
     }
 
@@ -1407,8 +1402,7 @@ pub fn record_haplotype_rank(
     result.column_mut(7).assign(&psv_counts);
 
     debug!(
-        "[record_haplotype_rank] {} haplotypes, total_depth={}",
-        n, total_depth
+        "[record_haplotype_rank] {n} haplotypes, total_depth={total_depth}"
     );
 
     result
@@ -1647,10 +1641,11 @@ pub struct IdentifyMisalignmentResult {
 /// # Returns
 /// `Some(IdentifyMisalignmentResult)` — ranked haplotype array + chrom,
 /// or `None` if the region is skipped (no haplotypes, < 2 enclosing haps, etc.).
-pub fn identify_misalignment_per_region<'a>(
+#[allow(clippy::too_many_arguments)]
+pub fn identify_misalignment_per_region(
     region: (&str, i64, i64),
     lapper_dict: &HashMap<String, Lapper<u32, u32>>,
-    read_dict: &'a FxHashMap<u32, Vec<Record>>,
+    read_dict: &FxHashMap<u32, Vec<Record>>,
     qname_hap_info: &HashMap<i32, i32>,
     qname_to_node: &HashMap<String, i32>,
     lowqual_qnames: &HashSet<String>,
@@ -1660,7 +1655,7 @@ pub fn identify_misalignment_per_region<'a>(
     mean_read_length: f64,
 ) -> Option<IdentifyMisalignmentResult> {
     let (chrom, start, end) = region;
-    let region_str = format!("{}:{}-{}", chrom, start, end);
+    let region_str = format!("{chrom}:{start}-{end}");
 
     // ── Step 1: Query overlapping reads ─────────────────────────────────
     let overlap_reads = query_overlapping_reads(
@@ -1701,18 +1696,14 @@ pub fn identify_misalignment_per_region<'a>(
 
     if hap_subgraphs.is_empty() {
         warn!(
-            "[identify_misalignment_per_region] No haplotype clusters found for region {}. Skipping.",
-            region_str
+            "[identify_misalignment_per_region] No haplotype clusters found for region {region_str}. Skipping."
         );
         return None;
     }
 
     // ── Step 4: Summarize enclosing haplotypes ──────────────────────────
     let summarize_result = summarize_enclosing_haps(&hap_subgraphs, qname_to_node, region);
-    let (region_haplotype_info, overlapping_span) = match summarize_result {
-        Some(r) => r,
-        None => return None,
-    };
+    let (region_haplotype_info, overlapping_span) = summarize_result?;
 
     debug!(
         "[identify_misalignment_per_region] region {}:{}-{} → {} enclosing haplotypes",
@@ -1738,8 +1729,7 @@ pub fn identify_misalignment_per_region<'a>(
 
         if reads.is_empty() {
             warn!(
-                "[identify_misalignment_per_region] No reads for haplotype across ({}, {}). Skipping cluster.",
-                span_start, span_end
+                "[identify_misalignment_per_region] No reads for haplotype across ({span_start}, {span_end}). Skipping cluster."
             );
             continue;
         }
@@ -1914,8 +1904,7 @@ pub fn select_regions_with_min_haplotypes(
 
     if result.is_empty() {
         info!(
-            "[select_regions_with_min_haplotypes] No regions found with >= {} haplotypes.",
-            min_haplotypes
+            "[select_regions_with_min_haplotypes] No regions found with >= {min_haplotypes} haplotypes."
         );
         return None;
     }
@@ -1946,12 +1935,13 @@ pub fn select_regions_with_min_haplotypes(
 ///
 /// # Returns
 /// `(correct_qnames, mismap_qnames)` — two disjoint sets of read names.
+#[allow(clippy::too_many_arguments)]
 pub fn inspect_haplotypes(
     bam_path: &str,
     intrinsic_bam_path: &str,
     hap_qname_info: &HashMap<i32, Vec<String>>,
     qname_hap_info: &HashMap<i32, i32>,         // vertex_idx → hap_id
-    qname_to_node: &HashMap<String, u32>,        // qname → vertex_idx
+    qname_to_node: &HashMap<String, i32>,        // qname → vertex_idx
     total_lowqual_qnames: &HashSet<String>,
     compare_haplotype_meta_tab: &str,
     mean_read_length: f64,
@@ -1962,9 +1952,9 @@ pub fn inspect_haplotypes(
     // ══════════════════════════════════════════════════════════════════════
     // Phase 0: Build Lapper structures from BAM files
     // ══════════════════════════════════════════════════════════════════════
-    info!("[inspect_haplotypes] Building Lapper from input BAM: {}", bam_path);
+    info!("[inspect_haplotypes] Building Lapper from input BAM: {bam_path}");
     let bam_lapper = build_lapper_from_bam(bam_path, mapq_cutoff, basequal_median_cutoff, true, true)?;
-    info!("[inspect_haplotypes] Building Lapper from intrinsic BAM: {}", intrinsic_bam_path);
+    info!("[inspect_haplotypes] Building Lapper from intrinsic BAM: {intrinsic_bam_path}");
     let intrin_lapper = build_lapper_from_bam(intrinsic_bam_path, 0, 0, false, false)?;
 
     // Option A: Build qname → &Vec<Record> index for direct lookup (replaces
@@ -2032,7 +2022,7 @@ pub fn inspect_haplotypes(
             .collect();
 
         if reads.is_empty() {
-            debug!("[inspect_haplotypes] haplotype {} has no reads after lookup, skipping", hid);
+            debug!("[inspect_haplotypes] haplotype {hid} has no reads after lookup, skipping");
             continue;
         }
 
@@ -2104,8 +2094,8 @@ pub fn inspect_haplotypes(
     }
 
     // Post-loop logging
-    info!("[inspect_haplotypes] extreme variant density haplotypes: {:?}", hid_extreme_vard);
-    info!("[inspect_haplotypes] scatter haplotypes: {:?}", scatter_hid_dict);
+    info!("[inspect_haplotypes] extreme variant density haplotypes: {hid_extreme_vard:?}");
+    info!("[inspect_haplotypes] scatter haplotypes: {scatter_hid_dict:?}");
     let scatter_qnames: HashSet<String> = scatter_hid_dict.iter()
         .filter(|(_, &v)| v)
         .flat_map(|(&hid, _)| hap_qname_info.get(&hid).into_iter().flatten().cloned())
@@ -2126,11 +2116,11 @@ pub fn inspect_haplotypes(
     }
     // Fill missing haplotypes with empty PSV positions
     for hid in hap_qname_info.keys() {
-        hap_max_psv_pos.entry(*hid).or_insert_with(Vec::new);
+        hap_max_psv_pos.entry(*hid).or_default();
     }
     drop(varcounts_among_refseqs);
-    info!("[inspect_haplotypes] similarity scores: {:?}", hap_max_sim_scores);
-    info!("[inspect_haplotypes] PSV counts: {:?}", hap_max_psvs);
+    info!("[inspect_haplotypes] similarity scores: {hap_max_sim_scores:?}");
+    info!("[inspect_haplotypes] PSV counts: {hap_max_psvs:?}");
 
     // ══════════════════════════════════════════════════════════════════════
     // Phase 3: Sweep region selection (Python lines 1277-1292)
@@ -2159,10 +2149,6 @@ pub fn inspect_haplotypes(
     // Phase 5: Per-region inspection loop (Python lines 1308-1329)
     // ══════════════════════════════════════════════════════════════════════
     let mut record_results: Vec<IdentifyMisalignmentResult> = Vec::new();
-    // Convert qname_to_node to HashMap<String, i32> as identify_misalignment_per_region expects
-    let qname_to_node_i32: HashMap<String, i32> = qname_to_node.iter()
-        .map(|(k, &v)| (k.clone(), v as i32))
-        .collect();
 
     for (chrom, start, end) in &sweep_regions {
         if let Some(result) = identify_misalignment_per_region(
@@ -2170,7 +2156,7 @@ pub fn inspect_haplotypes(
             &bam_lapper.lapper_dict,
             &bam_lapper.read_dict,
             qname_hap_info,
-            &qname_to_node_i32,
+            qname_to_node,
             total_lowqual_qnames,
             &hap_max_psv_pos,
             &mut hap_cache,
@@ -2179,7 +2165,7 @@ pub fn inspect_haplotypes(
         ) {
             record_results.push(result);
         } else {
-            warn!("[inspect_haplotypes] No valid haplotypes for region {}:{}-{}", chrom, start, end);
+            warn!("[inspect_haplotypes] No valid haplotypes for region {chrom}:{start}-{end}");
         }
     }
 
@@ -2240,7 +2226,7 @@ pub fn inspect_haplotypes(
             .collect();
 
         remove_hids = candidate_remove.difference(&kept_scatter_hids).copied().collect();
-        info!("[inspect_haplotypes] remove_hids (pre-ILP filter): {:?}", remove_hids);
+        info!("[inspect_haplotypes] remove_hids (pre-ILP filter): {remove_hids:?}");
 
         // (c) Filter out remove_hids and low-depth rows
         total_records.retain(|r| !remove_hids.contains(&r.hap_id) && r.total_depth > 5);
@@ -2266,7 +2252,7 @@ pub fn inspect_haplotypes(
             region_groups.entry(key).or_default().push(i);
         }
 
-        for (_key, indices) in &region_groups {
+        for indices in region_groups.values() {
             // rank_unique_values on rounded hap_max_sim_scores
             let sim_arr: Vec<f32> = indices.iter()
                 .map(|&i| (total_records[i].hap_max_sim_scores * 10.0).round() as f32 / 10.0)
@@ -2313,7 +2299,7 @@ pub fn inspect_haplotypes(
         }
 
         // (d) Rank coefficient per region group (Python lines 1401-1406)
-        for (_key, indices) in &region_groups {
+        for indices in region_groups.values() {
             let coeff_arr: Vec<f32> = indices.iter()
                 .map(|&i| ((total_records[i].coefficient * 100.0).round() / 100.0) as f32)
                 .collect();
@@ -2435,7 +2421,7 @@ fn write_haplotype_meta_tsv(
     let file = match std::fs::File::create(path) {
         Ok(f) => f,
         Err(e) => {
-            warn!("[write_haplotype_meta_tsv] Failed to create {}: {}", path, e);
+            warn!("[write_haplotype_meta_tsv] Failed to create {path}: {e}");
             return;
         }
     };
@@ -2859,13 +2845,6 @@ mod tests {
         let _ = env_logger::try_init();
     }
 
-    #[test]
-    fn test_edit_distance() {
-        assert_eq!(edit_distance(b"ACGT", b"ACGT"), 0);
-        assert_eq!(edit_distance(b"ACGT", b"ACCT"), 1);
-        assert_eq!(edit_distance(b"ACGT", b"TGCA"), 4);
-    }
-
     // ========================================================================
     // Tests for Variant Density Filtering Functions
     // ========================================================================
@@ -2952,6 +2931,107 @@ mod tests {
         // Middle positions should have higher density
         assert!(density[2] > 0.0);
         assert!(density[3] > 0.0);
+    }
+
+    /// Straightforward (slow) version: re-slice and re-count each window.
+    /// This is the original implementation, kept here only as a reference to
+    /// cross-check the optimized prefix-sum `count_window_var_density` against.
+    fn count_window_var_density_reference(array: &Array1<i16>, padding_size: i32) -> Array1<f32> {
+        let n = array.len();
+        let has_variants = array.iter().any(|&v| v != 1);
+        if !has_variants {
+            return Array1::zeros(n);
+        }
+        let mut density_arr = Array1::<f32>::zeros(n);
+        let window_size = (padding_size * 2 + 1) as f32;
+        for i in 0..n {
+            let start = i.saturating_sub(padding_size as usize);
+            let end = (i + padding_size as usize + 1).min(n);
+            let window = array.slice(ndarray::s![start..end]);
+            let var_count = count_var(&window.to_owned()) as f32;
+            density_arr[i] = var_count / window_size;
+        }
+        density_arr
+    }
+
+    /// Deterministic xorshift used by the cross-check / timing tests.
+    fn xorshift(state: &mut u64) -> u64 {
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
+    }
+
+    #[test]
+    fn test_count_window_var_density_matches_reference() {
+        init_log();
+        // Mix of matches, SNVs (-4), deletions (-6), and insertion markers (>1),
+        // including adjacent mixed indel types so runs straddle window edges.
+        let values = [1i16, 1, 1, -4, -6, -6, 8, 1, -4, 12, -6, 1, 1, -4, -4, 8];
+        let mut seed = 0x1234_5678u64;
+        for &len in &[0usize, 1, 2, 5, 13, 50, 137, 300] {
+            let arr: Array1<i16> = (0..len)
+                .map(|_| values[(xorshift(&mut seed) as usize) % values.len()])
+                .collect::<Vec<_>>()
+                .into();
+            for &pad in &[0i32, 1, 2, 5, 42, 65, 74] {
+                let got = count_window_var_density(&arr, pad);
+                let want = count_window_var_density_reference(&arr, pad);
+                assert_eq!(got.len(), want.len(), "len mismatch len={len} pad={pad}");
+                for k in 0..got.len() {
+                    assert!(
+                        (got[k] - want[k]).abs() < 1e-6,
+                        "mismatch len={len} pad={pad} idx={k}: got={} want={}",
+                        got[k], want[k]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "timing benchmark; run with: cargo test --lib -- --ignored --nocapture bench_count_window_var_density"]
+    fn bench_count_window_var_density() {
+        use std::time::Instant;
+        let len = 2000usize;
+        let values = [1i16, 1, 1, 1, 1, -4, -6, 8, 1, 1];
+        let mut seed = 0x00AB_CDEFu64;
+        let arr: Array1<i16> = (0..len)
+            .map(|_| values[(xorshift(&mut seed) as usize) % values.len()])
+            .collect::<Vec<_>>()
+            .into();
+
+        let iters = 200;
+        let pads = [42i32, 65, 74];
+        let mut sink = 0.0f32;
+
+        let t0 = Instant::now();
+        for _ in 0..iters {
+            for &pad in &pads {
+                sink += count_window_var_density_reference(&arr, pad).sum();
+            }
+        }
+        let old = t0.elapsed();
+
+        let t1 = Instant::now();
+        for _ in 0..iters {
+            for &pad in &pads {
+                sink += count_window_var_density(&arr, pad).sum();
+            }
+        }
+        let new = t1.elapsed();
+
+        eprintln!(
+            "count_window_var_density  len={len} x{iters} iters x{} pads:",
+            pads.len()
+        );
+        eprintln!("  reference (re-count each window): {old:?}");
+        eprintln!("  prefix-sum (new):                 {new:?}");
+        eprintln!(
+            "  speedup: {:.1}x  (sink={sink})",
+            old.as_secs_f64() / new.as_secs_f64().max(1e-9)
+        );
+        assert!(new < old, "expected prefix-sum to be faster (old={old:?}, new={new:?})");
     }
 
     #[test]
@@ -3100,9 +3180,9 @@ mod tests {
         let r4: [f32; 10] = [1633000.0, 1635000.0, 45.0, 4.0, 45.0, 0.0, 0.0, 0.0, 4.0, 7.00];
         let result = calculate_coefficient(&[&r1, &r2, &r3, &r4]);
 
-        assert!((result[0] - 19.7995929718).abs() < 0.001, "hap1: got {}", result[0]);
-        assert!((result[1] - 1.0844353437).abs() < 0.001, "hap2: got {}", result[1]);
-        assert!((result[2] - (-6.3245558739)).abs() < 0.001, "hap3: got {}", result[2]);
+        assert!((result[0] - 19.799_593).abs() < 0.001, "hap1: got {}", result[0]);
+        assert!((result[1] - 1.084_435_3).abs() < 0.001, "hap2: got {}", result[1]);
+        assert!((result[2] - (-6.324_556)).abs() < 0.001, "hap3: got {}", result[2]);
         assert!((result[3] - 0.0).abs() < 0.001, "hap4: got {}", result[3]);
     }
 
@@ -3121,10 +3201,10 @@ mod tests {
         let r4: [f32; 10] = [0.0, 10000.0, 20.0, 4.0, 5.0, 3.0, 1.0, 2.0, 1.0, 3.0];
         let result = calculate_coefficient(&[&r1, &r2, &r3, &r4]);
 
-        assert!((result[0] - 2.5980761051).abs() < 0.001, "span100: got {}", result[0]);
-        assert!((result[1] - 5.8094754219).abs() < 0.001, "span500: got {}", result[1]);
-        assert!((result[2] - 8.2158384323).abs() < 0.001, "span1000: got {}", result[2]);
-        assert!((result[3] - 25.9807624817).abs() < 0.001, "span10000: got {}", result[3]);
+        assert!((result[0] - 2.598_076).abs() < 0.001, "span100: got {}", result[0]);
+        assert!((result[1] - 5.809_475_4).abs() < 0.001, "span500: got {}", result[1]);
+        assert!((result[2] - 8.215_838).abs() < 0.001, "span1000: got {}", result[2]);
+        assert!((result[3] - 25.980_762).abs() < 0.001, "span10000: got {}", result[3]);
     }
 
     #[test]
@@ -3142,10 +3222,10 @@ mod tests {
         let r4: [f32; 10] = [100.0, 500.0, 100.0, 4.0, 90.0, 5.0, 1.0, 3.0, 1.0, 4.0];
         let result = calculate_coefficient(&[&r1, &r2, &r3, &r4]);
 
-        assert!((result[0] - 7.5894660950).abs() < 0.001, "frac0.90: got {}", result[0]);
-        assert!((result[1] - 6.9282031059).abs() < 0.001, "frac0.75: got {}", result[1]);
-        assert!((result[2] - 5.6568541527).abs() < 0.001, "frac0.50: got {}", result[2]);
-        assert!((result[3] - 2.5298223495).abs() < 0.001, "frac0.10: got {}", result[3]);
+        assert!((result[0] - 7.589_466).abs() < 0.001, "frac0.90: got {}", result[0]);
+        assert!((result[1] - 6.928_203).abs() < 0.001, "frac0.75: got {}", result[1]);
+        assert!((result[2] - 5.656_854).abs() < 0.001, "frac0.50: got {}", result[2]);
+        assert!((result[3] - 2.529_822_3).abs() < 0.001, "frac0.10: got {}", result[3]);
     }
 
     #[test]
@@ -3161,8 +3241,8 @@ mod tests {
         let result = calculate_coefficient(&[&r1, &r2, &r3]);
 
         assert!((result[0] - 0.0).abs() < 0.001, "zero: got {}", result[0]);
-        assert!((result[1] - (-6.9451222420)).abs() < 0.001, "neg: got {}", result[1]);
-        assert!((result[2] - 27.3861293793).abs() < 0.001, "pos: got {}", result[2]);
+        assert!((result[1] - (-6.945_122_2)).abs() < 0.001, "neg: got {}", result[1]);
+        assert!((result[2] - 27.386_13).abs() < 0.001, "pos: got {}", result[2]);
     }
 
     #[test]
@@ -3171,7 +3251,7 @@ mod tests {
         // Python output: 16.1116104126
         let r1: [f32; 10] = [500000.0, 502000.0, 88.0, 7.0, 22.0, 11.0, 3.0, 8.0, 1.0, 4.16];
         let result = calculate_coefficient(&[&r1]);
-        assert!((result[0] - 16.1116104126).abs() < 0.01, "single: got {}", result[0]);
+        assert!((result[0] - 16.111_61).abs() < 0.01, "single: got {}", result[0]);
     }
 
     #[test]
@@ -3199,16 +3279,13 @@ mod tests {
         let row_refs: Vec<&[f32; 10]> = rows.iter().collect();
         let result = calculate_coefficient(&row_refs);
 
-        let expected = vec![
-            19.7995929718, 13.1635856628, -4.0551748276, 1.7260359526,
-            13.9530639648, 7.6685075760, 33.2039146423, -16.6495361328,
-        ];
+        let expected = [19.7995929718, 13.1635856628, -4.0551748276, 1.7260359526,
+            13.9530639648, 7.6685075760, 33.2039146423, -16.6495361328];
 
         for (i, (&got, &exp)) in result.iter().zip(expected.iter()).enumerate() {
             assert!(
                 (got - exp as f32).abs() < 0.01,
-                "row {}: got {} expected {}",
-                i, got, exp
+                "row {i}: got {got} expected {exp}"
             );
         }
     }
@@ -3222,7 +3299,7 @@ mod tests {
     fn test_merge_unique_sorted_both_empty() {
         init_log();
         let result = merge_unique_sorted(&[], &[]);
-        debug!("merge_unique_sorted([], []) = {:?}", result);
+        debug!("merge_unique_sorted([], []) = {result:?}");
         assert_eq!(result, Vec::<i32>::new());
     }
 
@@ -3231,8 +3308,8 @@ mod tests {
         init_log();
         let r1 = merge_unique_sorted(&[1, 3, 5], &[]);
         let r2 = merge_unique_sorted(&[], &[2, 4]);
-        debug!("merge_unique_sorted([1,3,5], []) = {:?}", r1);
-        debug!("merge_unique_sorted([], [2,4]) = {:?}", r2);
+        debug!("merge_unique_sorted([1,3,5], []) = {r1:?}");
+        debug!("merge_unique_sorted([], [2,4]) = {r2:?}");
         assert_eq!(r1, vec![1, 3, 5]);
         assert_eq!(r2, vec![2, 4]);
     }
@@ -3241,7 +3318,7 @@ mod tests {
     fn test_merge_unique_sorted_no_overlap() {
         init_log();
         let result = merge_unique_sorted(&[1, 3, 5], &[2, 4, 6]);
-        debug!("merge_unique_sorted([1,3,5], [2,4,6]) = {:?}", result);
+        debug!("merge_unique_sorted([1,3,5], [2,4,6]) = {result:?}");
         assert_eq!(result, vec![1, 2, 3, 4, 5, 6]);
     }
 
@@ -3249,7 +3326,7 @@ mod tests {
     fn test_merge_unique_sorted_with_duplicates() {
         init_log();
         let result = merge_unique_sorted(&[1, 2, 3], &[2, 3, 4]);
-        debug!("merge_unique_sorted([1,2,3], [2,3,4]) = {:?}", result);
+        debug!("merge_unique_sorted([1,2,3], [2,3,4]) = {result:?}");
         assert_eq!(result, vec![1, 2, 3, 4]);
     }
 
@@ -3257,7 +3334,7 @@ mod tests {
     fn test_merge_unique_sorted_identical() {
         init_log();
         let result = merge_unique_sorted(&[5, 5, 5], &[5, 5]);
-        debug!("merge_unique_sorted([5,5,5], [5,5]) = {:?}", result);
+        debug!("merge_unique_sorted([5,5,5], [5,5]) = {result:?}");
         assert_eq!(result, vec![5]);
     }
 
@@ -3394,8 +3471,7 @@ mod tests {
         let qseq_encoded: Vec<i8> = vec![0, 1, 2, 3, 0]; // A, T, C, G, A
         let shared_pos = vec![100, 102, 104];
         let result = map_positions_to_bases(&shared_pos, 100, &ref_qseq_positions, &qseq_encoded);
-        debug!("map_positions_to_bases(shared_pos={:?}, read_start=100, ref_qseq={:?}, qseq={:?}) = {:?}",
-               shared_pos, ref_qseq_positions, qseq_encoded, result);
+        debug!("map_positions_to_bases(shared_pos={shared_pos:?}, read_start=100, ref_qseq={ref_qseq_positions:?}, qseq={qseq_encoded:?}) = {result:?}");
         assert_eq!(result, vec![0, 2, 0]); // A, C, A
     }
 
@@ -3406,8 +3482,7 @@ mod tests {
         let qseq_encoded: Vec<i8> = vec![0, 1, 2];
         let shared_pos = vec![99, 100, 105]; // 99 is before read, 105 is after
         let result = map_positions_to_bases(&shared_pos, 100, &ref_qseq_positions, &qseq_encoded);
-        debug!("map_positions_to_bases(shared_pos={:?}, read_start=100, ref_qseq={:?}, qseq={:?}) = {:?}",
-               shared_pos, ref_qseq_positions, qseq_encoded, result);
+        debug!("map_positions_to_bases(shared_pos={shared_pos:?}, read_start=100, ref_qseq={ref_qseq_positions:?}, qseq={qseq_encoded:?}) = {result:?}");
         assert_eq!(result, vec![-1, 0, -1]); // only pos 100 maps
     }
 
@@ -3419,8 +3494,7 @@ mod tests {
         let qseq_encoded: Vec<i8> = vec![3, 2]; // G, C
         let shared_pos = vec![100, 101, 102];
         let result = map_positions_to_bases(&shared_pos, 100, &ref_qseq_positions, &qseq_encoded);
-        debug!("map_positions_to_bases(shared_pos={:?}, read_start=100, ref_qseq={:?}, qseq={:?}) = {:?}",
-               shared_pos, ref_qseq_positions, qseq_encoded, result);
+        debug!("map_positions_to_bases(shared_pos={shared_pos:?}, read_start=100, ref_qseq={ref_qseq_positions:?}, qseq={qseq_encoded:?}) = {result:?}");
         assert_eq!(result, vec![3, -1, 2]); // G, gap, C
     }
 
@@ -3436,8 +3510,7 @@ mod tests {
 
         update_tally_for_read(&shared_pos, 100, &ref_qseq_positions, &qseq_encoded, &mut tally);
 
-        debug!("update_tally(shared_pos={:?}, read_start=100, ref_qseq={:?}, qseq={:?}) => tally={:?}",
-               shared_pos, ref_qseq_positions, qseq_encoded, tally);
+        debug!("update_tally(shared_pos={shared_pos:?}, read_start=100, ref_qseq={ref_qseq_positions:?}, qseq={qseq_encoded:?}) => tally={tally:?}");
         assert_eq!(tally[0][0], 1); // A at pos 0
         assert_eq!(tally[1][1], 1); // T at pos 1
         assert_eq!(tally[2][2], 1); // C at pos 2
@@ -3452,13 +3525,13 @@ mod tests {
 
         // Read 1: A, T
         update_tally_for_read(&shared_pos, 100, &ref_qseq_pos, &[0, 1], &mut tally);
-        debug!("after read1 (A,T): tally={:?}", tally);
+        debug!("after read1 (A,T): tally={tally:?}");
         // Read 2: A, C
         update_tally_for_read(&shared_pos, 100, &ref_qseq_pos, &[0, 2], &mut tally);
-        debug!("after read2 (A,C): tally={:?}", tally);
+        debug!("after read2 (A,C): tally={tally:?}");
         // Read 3: G, T
         update_tally_for_read(&shared_pos, 100, &ref_qseq_pos, &[3, 1], &mut tally);
-        debug!("after read3 (G,T): tally={:?}", tally);
+        debug!("after read3 (G,T): tally={tally:?}");
 
         assert_eq!(tally[0][0], 2); // 2 reads have A at pos 0
         assert_eq!(tally[0][3], 1); // 1 read has G at pos 0
@@ -3475,7 +3548,7 @@ mod tests {
         let mut tally = vec![[0i32; 5]; 1];
 
         update_tally_for_read(&shared_pos, 100, &ref_qseq_pos, &qseq_encoded, &mut tally);
-        debug!("update_tally with N base: qseq={:?}, tally={:?}", qseq_encoded, tally);
+        debug!("update_tally with N base: qseq={qseq_encoded:?}, tally={tally:?}");
         // N (4) should be excluded — no column updated
         assert_eq!(tally[0], [0, 0, 0, 0, 0]);
     }
@@ -3505,8 +3578,7 @@ mod tests {
         let h_base: Vec<i8> = vec![0]; // A
         let shared_pos = vec![100];
         let result = verify_shared_snv_positions(&tally, &h_base, &shared_pos);
-        debug!("verify_shared_snv(tally={:?}, h_base={:?}, shared_pos={:?}) = {:?}",
-               tally, h_base, shared_pos, result);
+        debug!("verify_shared_snv(tally={tally:?}, h_base={h_base:?}, shared_pos={shared_pos:?}) = {result:?}");
         assert_eq!(result, vec![100]);
     }
 
@@ -3519,8 +3591,7 @@ mod tests {
         let h_base: Vec<i8> = vec![3]; // G
         let shared_pos = vec![100];
         let result = verify_shared_snv_positions(&tally, &h_base, &shared_pos);
-        debug!("verify_shared_snv(tally={:?}, h_base={:?}, shared_pos={:?}) = {:?} (expect empty, T!=G)",
-               tally, h_base, shared_pos, result);
+        debug!("verify_shared_snv(tally={tally:?}, h_base={h_base:?}, shared_pos={shared_pos:?}) = {result:?} (expect empty, T!=G)");
         assert!(result.is_empty());
     }
 
@@ -3532,8 +3603,7 @@ mod tests {
         let h_base: Vec<i8> = vec![0];
         let shared_pos = vec![100];
         let result = verify_shared_snv_positions(&tally, &h_base, &shared_pos);
-        debug!("verify_shared_snv zero-coverage: tally={:?}, result={:?} (expect empty)",
-               tally, result);
+        debug!("verify_shared_snv zero-coverage: tally={tally:?}, result={result:?} (expect empty)");
         assert!(result.is_empty());
     }
 
@@ -3545,8 +3615,7 @@ mod tests {
         let h_base: Vec<i8> = vec![-1];
         let shared_pos = vec![100];
         let result = verify_shared_snv_positions(&tally, &h_base, &shared_pos);
-        debug!("verify_shared_snv homolog_not_covered: h_base={:?}, result={:?} (expect empty)",
-               h_base, result);
+        debug!("verify_shared_snv homolog_not_covered: h_base={h_base:?}, result={result:?} (expect empty)");
         assert!(result.is_empty());
     }
 
@@ -3562,8 +3631,7 @@ mod tests {
         let h_base: Vec<i8> = vec![0, 3, 3]; // A, G, G
         let shared_pos = vec![100, 101, 102];
         let result = verify_shared_snv_positions(&tally, &h_base, &shared_pos);
-        debug!("verify_shared_snv_multi: tally={:?}, h_base={:?}, shared_pos={:?} => {:?}",
-               tally, h_base, shared_pos, result);
+        debug!("verify_shared_snv_multi: tally={tally:?}, h_base={h_base:?}, shared_pos={shared_pos:?} => {result:?}");
         // pos 100: cons A == hom A → verified
         // pos 101: cons C != hom G → not
         // pos 102: cons G == hom G → verified
@@ -3577,7 +3645,7 @@ mod tests {
         init_log();
         let qname = "chr1:12345-67890";
         let result = parse_origin_region(qname);
-        debug!("parse_origin_region({:?}) => {:?}", qname, result);
+        debug!("parse_origin_region({qname:?}) => {result:?}");
         assert_eq!(result, Some(("chr1".to_string(), 12345, 67890)));
     }
 
@@ -3588,7 +3656,7 @@ mod tests {
         // So "chr1:100-200:RG001" should match "chr1", 100, 200
         let qname = "chr1:100-200:RG001";
         let result = parse_origin_region(qname);
-        debug!("parse_origin_region({:?}) => {:?}", qname, result);
+        debug!("parse_origin_region({qname:?}) => {result:?}");
         assert_eq!(result, Some(("chr1".to_string(), 100, 200)));
     }
 
@@ -3597,7 +3665,7 @@ mod tests {
         init_log();
         let qname = "READNAME_NO_COORDS";
         let result = parse_origin_region(qname);
-        debug!("parse_origin_region({:?}) => {:?}", qname, result);
+        debug!("parse_origin_region({qname:?}) => {result:?}");
         assert_eq!(result, None);
     }
 
@@ -3606,7 +3674,7 @@ mod tests {
         init_log();
         let qname = "chr1:abc-200";
         let result = parse_origin_region(qname);
-        debug!("parse_origin_region({:?}) => {:?}", qname, result);
+        debug!("parse_origin_region({qname:?}) => {result:?}");
         assert_eq!(result, None);
     }
 
@@ -3615,7 +3683,7 @@ mod tests {
         init_log();
         let qname = "chr1:12345_67890";
         let result = parse_origin_region(qname);
-        debug!("parse_origin_region({:?}) => {:?}", qname, result);
+        debug!("parse_origin_region({qname:?}) => {result:?}");
         assert_eq!(result, None);
     }
 
@@ -3625,7 +3693,7 @@ mod tests {
         // Chromosome names like "chr22" should work
         let qname = "chr22:5000000-6000000";
         let result = parse_origin_region(qname);
-        debug!("parse_origin_region({:?}) => {:?}", qname, result);
+        debug!("parse_origin_region({qname:?}) => {result:?}");
         assert_eq!(result, Some(("chr22".to_string(), 5000000, 6000000)));
     }
 
@@ -3635,7 +3703,7 @@ mod tests {
         // qname might have prefix/suffix around the chrom:start-end
         let qname = "sample1_chr1:100-200_hap1";
         let result = parse_origin_region(qname);
-        debug!("parse_origin_region({:?}) => {:?}", qname, result);
+        debug!("parse_origin_region({qname:?}) => {result:?}");
         // The first alphanumeric run before ':' that matches the pattern
         // "sample1" is separated by '_', so the chrom_start scan backwards
         // stops at '_'. alphanumeric run would be "chr1" (scanning back from ':')
@@ -3650,7 +3718,7 @@ mod tests {
         // "chr1:100-200:chr2:300-400" should match the first occurrence
         let qname = "chr1:100-200:chr2:300-400";
         let result = parse_origin_region(qname);
-        debug!("parse_origin_region({:?}) => {:?}", qname, result);
+        debug!("parse_origin_region({qname:?}) => {result:?}");
         assert_eq!(result, Some(("chr1".to_string(), 100, 200)));
     }
 
@@ -3659,7 +3727,7 @@ mod tests {
         init_log();
         let qname = "chrX:100000000-200000000";
         let result = parse_origin_region(qname);
-        debug!("parse_origin_region({:?}) => {:?}", qname, result);
+        debug!("parse_origin_region({qname:?}) => {result:?}");
         assert_eq!(result, Some(("chrX".to_string(), 100000000, 200000000)));
     }
 
@@ -3668,7 +3736,7 @@ mod tests {
         init_log();
         let qname = "chr1:1-2";
         let result = parse_origin_region(qname);
-        debug!("parse_origin_region({:?}) => {:?}", qname, result);
+        debug!("parse_origin_region({qname:?}) => {result:?}");
         assert_eq!(result, Some(("chr1".to_string(), 1, 2)));
     }
 
@@ -3676,7 +3744,7 @@ mod tests {
     fn test_parse_origin_region_empty_string() {
         init_log();
         let result = parse_origin_region("");
-        debug!("parse_origin_region('') => {:?}", result);
+        debug!("parse_origin_region('') => {result:?}");
         assert_eq!(result, None);
     }
 
@@ -3685,7 +3753,7 @@ mod tests {
         init_log();
         // ':' at position 0 means no chrom before it
         let result = parse_origin_region(":100-200");
-        debug!("parse_origin_region(':100-200') => {:?}", result);
+        debug!("parse_origin_region(':100-200') => {result:?}");
         assert_eq!(result, None);
     }
 
@@ -3693,7 +3761,7 @@ mod tests {
     fn test_parse_origin_region_missing_end_digits() {
         init_log();
         let result = parse_origin_region("chr1:100-");
-        debug!("parse_origin_region('chr1:100-') => {:?}", result);
+        debug!("parse_origin_region('chr1:100-') => {result:?}");
         assert_eq!(result, None);
     }
 
@@ -3730,7 +3798,7 @@ mod tests {
         let hid_density: HashMap<i32, f64> = HashMap::new();
 
         let result = cal_similarity_score(&varcounts, &hid_var_count, &hid_density);
-        debug!("empty input => {:?}", result);
+        debug!("empty input => {result:?}");
         assert!(result.is_empty());
     }
 
@@ -4046,7 +4114,7 @@ mod tests {
         init_log();
         let reads: Vec<&Record> = vec![];
         let result = extract_continuous_regions_dict(&reads);
-        debug!("empty reads => {:?}", result);
+        debug!("empty reads => {result:?}");
         assert!(result.is_empty());
     }
 
@@ -4056,7 +4124,7 @@ mod tests {
         let r = make_read(100, 50); // [100, 150)
         let reads: Vec<&Record> = vec![&r];
         let result = extract_continuous_regions_dict(&reads);
-        debug!("single read [100,150) => {:?}", result);
+        debug!("single read [100,150) => {result:?}");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, (100, 150));
         assert_eq!(result[0].1, vec![0]);
@@ -4069,7 +4137,7 @@ mod tests {
         let r2 = make_read(120, 50); // [120, 170)
         let reads: Vec<&Record> = vec![&r1, &r2];
         let result = extract_continuous_regions_dict(&reads);
-        debug!("two overlapping [100,150)+[120,170) => {:?}", result);
+        debug!("two overlapping [100,150)+[120,170) => {result:?}");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, (100, 170));
         // Both reads in the single region; indices are into the original slice
@@ -4085,7 +4153,7 @@ mod tests {
         let r2 = make_read(200, 50);  // [200, 250)
         let reads: Vec<&Record> = vec![&r1, &r2];
         let result = extract_continuous_regions_dict(&reads);
-        debug!("two disjoint [100,150)+[200,250) => {:?}", result);
+        debug!("two disjoint [100,150)+[200,250) => {result:?}");
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].0, (100, 150));
         assert_eq!(result[0].1, vec![0]);
@@ -4102,7 +4170,7 @@ mod tests {
         let r2 = make_read(150, 50);  // [150, 200)
         let reads: Vec<&Record> = vec![&r1, &r2];
         let result = extract_continuous_regions_dict(&reads);
-        debug!("touching [100,150)+[150,200) => {:?}", result);
+        debug!("touching [100,150)+[150,200) => {result:?}");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, (100, 200));
         assert_eq!(result[0].1.len(), 2);
@@ -4117,7 +4185,7 @@ mod tests {
         let r2 = make_read(151, 50);  // [151, 201)
         let reads: Vec<&Record> = vec![&r1, &r2];
         let result = extract_continuous_regions_dict(&reads);
-        debug!("gap of 1 [100,150)+[151,201) => {:?}", result);
+        debug!("gap of 1 [100,150)+[151,201) => {result:?}");
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].0, (100, 150));
         assert_eq!(result[1].0, (151, 201));
@@ -4132,7 +4200,7 @@ mod tests {
         let r3 = make_read(120, 50);  // [120, 170)
         let reads: Vec<&Record> = vec![&r1, &r2, &r3];
         let result = extract_continuous_regions_dict(&reads);
-        debug!("unsorted input [200,250)+[100,150)+[120,170) => {:?}", result);
+        debug!("unsorted input [200,250)+[100,150)+[120,170) => {result:?}");
         // r2 [100,150) and r3 [120,170) overlap → region [100,170)
         // r1 [200,250) is separate → region [200,250)
         assert_eq!(result.len(), 2);
@@ -4155,7 +4223,7 @@ mod tests {
         let r2 = make_read(130, 20);   // [130, 150) — fully inside r1
         let reads: Vec<&Record> = vec![&r1, &r2];
         let result = extract_continuous_regions_dict(&reads);
-        debug!("contained [100,200)+[130,150) => {:?}", result);
+        debug!("contained [100,200)+[130,150) => {result:?}");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, (100, 200));
         assert_eq!(result[0].1.len(), 2);
@@ -4170,7 +4238,7 @@ mod tests {
         let r3 = make_read(180, 50);  // [180, 230)
         let reads: Vec<&Record> = vec![&r1, &r2, &r3];
         let result = extract_continuous_regions_dict(&reads);
-        debug!("chain merge [100,150)+[140,190)+[180,230) => {:?}", result);
+        debug!("chain merge [100,150)+[140,190)+[180,230) => {result:?}");
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].0, (100, 230));
         assert_eq!(result[0].1.len(), 3);
@@ -4184,7 +4252,7 @@ mod tests {
         let r3 = make_read(300, 10);   // [300, 310)
         let reads: Vec<&Record> = vec![&r1, &r2, &r3];
         let result = extract_continuous_regions_dict(&reads);
-        debug!("three separate regions => {:?}", result);
+        debug!("three separate regions => {result:?}");
         assert_eq!(result.len(), 3);
         assert_eq!(result[0].0, (100, 110));
         assert_eq!(result[1].0, (200, 210));
@@ -4200,7 +4268,7 @@ mod tests {
             .collect();
         let reads: Vec<&Record> = records.iter().map(|r| r as &Record).collect();
         let result = extract_continuous_regions_dict(&reads);
-        debug!("10 overlapping reads => {:?}", result);
+        debug!("10 overlapping reads => {result:?}");
         assert_eq!(result.len(), 1);
         // First read starts at 100, last read ends at 100 + 9*5 + 50 = 195
         assert_eq!(result[0].0, (100, 195));
@@ -4218,7 +4286,7 @@ mod tests {
         let reads: Vec<&Record> = vec![&r_a, &r_b, &r_c, &r_d];
         let result = extract_continuous_regions_dict(&reads);
 
-        debug!("preserve indices => {:?}", result);
+        debug!("preserve indices => {result:?}");
         // Region 1: [100, 160) — readB(1) + readC(2)
         // Region 2: [300, 360) — readA(0) + readD(3)
         assert_eq!(result.len(), 2);
@@ -4227,7 +4295,7 @@ mod tests {
         assert_eq!(*span1, (100, 160));
         for &idx in idxs1 {
             let name = String::from_utf8_lossy(reads[idx].qname());
-            debug!("  region1 idx={} name={}", idx, name);
+            debug!("  region1 idx={idx} name={name}");
             assert!(name == "readB" || name == "readC");
         }
 
@@ -4235,7 +4303,7 @@ mod tests {
         assert_eq!(*span2, (300, 360));
         for &idx in idxs2 {
             let name = String::from_utf8_lossy(reads[idx].qname());
-            debug!("  region2 idx={} name={}", idx, name);
+            debug!("  region2 idx={idx} name={name}");
             assert!(name == "readA" || name == "readD");
         }
     }
@@ -4369,7 +4437,7 @@ mod tests {
         psv_pos.insert(1, vec![101, 102]);
 
         let result = record_haplotype_rank(&hap_dict, 150, &psv_pos);
-        debug!("rank_single: {:?}", result);
+        debug!("rank_single: {result:?}");
         assert_eq!(result.shape(), &[1, 8]);
 
         // Col 0: start=100, Col 1: end=104
@@ -4414,7 +4482,7 @@ mod tests {
         let psv_pos: HashMap<i32, Vec<i32>> = HashMap::new(); // empty
 
         let result = record_haplotype_rank(&hap_dict, 150, &psv_pos);
-        debug!("rank_two: {:?}", result);
+        debug!("rank_two: {result:?}");
         assert_eq!(result.shape(), &[2, 8]);
 
         // Sorted by hid: hid=1 is row 0, hid=2 is row 1
@@ -4632,7 +4700,7 @@ mod tests {
         // Only 1 haplotype, need 2 → None
         let hid_cov = make_hid_cov(&[(1, "chr1", 100, 500)]);
         let result = select_regions_with_min_haplotypes(&hid_cov, 2);
-        debug!("too_few_haplotypes: {:?}", result);
+        debug!("too_few_haplotypes: {result:?}");
         assert!(result.is_none());
     }
 
@@ -4645,7 +4713,7 @@ mod tests {
             (2, "chr1", 300, 400),
         ]);
         let result = select_regions_with_min_haplotypes(&hid_cov, 2);
-        debug!("no_overlap: {:?}", result);
+        debug!("no_overlap: {result:?}");
         assert!(result.is_none());
     }
 
@@ -4658,7 +4726,7 @@ mod tests {
             (2, "chr1", 200, 400),
         ]);
         let result = select_regions_with_min_haplotypes(&hid_cov, 2);
-        debug!("simple_overlap: {:?}", result);
+        debug!("simple_overlap: {result:?}");
         let regions = result.unwrap();
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0], ("chr1".to_string(), 200, 300));
@@ -4671,26 +4739,28 @@ mod tests {
         // hap1: [100, 400)
         // hap2: [200, 500)
         // hap3: [300, 600)
-        // min_haplotypes=2: [200,400) from hap1+hap2, [300,500) from hap2+hap3
-        // After merge: [200, 600) since these overlap
-        // Actually let's be precise:
+        // Partitions are NOT merged (mirrors BEDOPS --partition): each kept
+        // breakpoint interval is returned separately so downstream per-region
+        // inspection sees fine-grained spans.
         //   breakpoints: 100, 200, 300, 400, 500, 600
         //   [100,200): hap1 only → skip
         //   [200,300): hap1+hap2 → keep (2)
         //   [300,400): hap1+hap2+hap3 → keep (3)
         //   [400,500): hap2+hap3 → keep (2)
         //   [500,600): hap3 only → skip
-        //   Adjacent kept: [200,300) + [300,400) + [400,500) → merged [200,500)
+        //   Result: three separate partitions [200,300), [300,400), [400,500)
         let hid_cov = make_hid_cov(&[
             (1, "chr1", 100, 400),
             (2, "chr1", 200, 500),
             (3, "chr1", 300, 600),
         ]);
         let result = select_regions_with_min_haplotypes(&hid_cov, 2);
-        debug!("three_haplotypes_pairwise: {:?}", result);
+        debug!("three_haplotypes_pairwise: {result:?}");
         let regions = result.unwrap();
-        assert_eq!(regions.len(), 1);
-        assert_eq!(regions[0], ("chr1".to_string(), 200, 500));
+        assert_eq!(regions.len(), 3);
+        assert_eq!(regions[0], ("chr1".to_string(), 200, 300));
+        assert_eq!(regions[1], ("chr1".to_string(), 300, 400));
+        assert_eq!(regions[2], ("chr1".to_string(), 400, 500));
     }
 
     #[test]
@@ -4704,7 +4774,7 @@ mod tests {
             (3, "chr1", 300, 600),
         ]);
         let result = select_regions_with_min_haplotypes(&hid_cov, 3);
-        debug!("min_3_haplotypes: {:?}", result);
+        debug!("min_3_haplotypes: {result:?}");
         let regions = result.unwrap();
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0], ("chr1".to_string(), 300, 400));
@@ -4721,7 +4791,7 @@ mod tests {
             (2, "chr2", 600, 800),
         ]);
         let result = select_regions_with_min_haplotypes(&hid_cov, 2);
-        debug!("multiple_chroms: {:?}", result);
+        debug!("multiple_chroms: {result:?}");
         let regions = result.unwrap();
         assert_eq!(regions.len(), 2);
         assert_eq!(regions[0], ("chr1".to_string(), 200, 300));
@@ -4742,7 +4812,7 @@ mod tests {
             (2, "chr1", 550, 650),
         ]);
         let result = select_regions_with_min_haplotypes(&hid_cov, 2);
-        debug!("disjoint_overlaps: {:?}", result);
+        debug!("disjoint_overlaps: {result:?}");
         let regions = result.unwrap();
         assert_eq!(regions.len(), 2);
         assert_eq!(regions[0], ("chr1".to_string(), 150, 200));
@@ -4759,7 +4829,7 @@ mod tests {
             (3, "chr1", 100, 500),
         ]);
         let result = select_regions_with_min_haplotypes(&hid_cov, 2);
-        debug!("identical_intervals: {:?}", result);
+        debug!("identical_intervals: {result:?}");
         let regions = result.unwrap();
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0], ("chr1".to_string(), 100, 500));
@@ -4770,7 +4840,7 @@ mod tests {
         init_log();
         let hid_cov: HashMap<i32, Vec<(String, i64, i64)>> = HashMap::new();
         let result = select_regions_with_min_haplotypes(&hid_cov, 2);
-        debug!("empty_input: {:?}", result);
+        debug!("empty_input: {result:?}");
         assert!(result.is_none());
     }
 
@@ -4784,7 +4854,7 @@ mod tests {
             (2, "chr1", 200, 400),
         ]);
         let result = select_regions_with_min_haplotypes(&hid_cov, 2);
-        debug!("contained_interval: {:?}", result);
+        debug!("contained_interval: {result:?}");
         let regions = result.unwrap();
         assert_eq!(regions.len(), 1);
         assert_eq!(regions[0], ("chr1".to_string(), 200, 400));

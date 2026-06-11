@@ -1,4 +1,5 @@
-/// Python bindings for haplotype inspection module
+//! Python bindings for haplotype inspection module
+
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PySet};
 use std::collections::{HashMap, HashSet};
@@ -6,6 +7,7 @@ use crate::identify_misaligned_haps::inspect_haplotypes;
 
 /// Main Python-facing function for haplotype inspection
 /// Replaces Python's inspect_by_haplotypes function
+#[allow(clippy::too_many_arguments)]
 #[pyfunction]
 #[pyo3(signature = (
     bam_path,
@@ -49,11 +51,12 @@ pub fn inspect_haplotypes_rust(
         qname_hap_info_rs.insert(vert_idx, hap_id);
     }
 
-    // Convert qname_to_node: Dict[str, int] → HashMap<String, u32>
-    let mut qname_to_node_rs: HashMap<String, u32> = HashMap::new();
+    // Convert qname_to_node: Dict[str, int] → HashMap<String, i32>
+    // (i32 matches qname_hap_info's vertex-index key type, so no later re-mapping.)
+    let mut qname_to_node_rs: HashMap<String, i32> = HashMap::new();
     for (key, value) in qname_to_node.iter() {
         let qname: String = key.extract()?;
-        let node_idx: u32 = value.extract()?;
+        let node_idx: i32 = value.extract()?;
         qname_to_node_rs.insert(qname, node_idx);
     }
 
@@ -81,7 +84,7 @@ pub fn inspect_haplotypes_rust(
         recall_mq_cutoff,
         basequal_median_cutoff,
     ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-        format!("Rust haplotype inspection failed: {}", e)
+        format!("Rust haplotype inspection failed: {e}")
     ))?;
 
     // Convert HashSet<String> → Vec<String> for Python

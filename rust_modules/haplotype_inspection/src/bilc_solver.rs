@@ -26,7 +26,7 @@ impl fmt::Display for BilcStatus {
         match self {
             BilcStatus::Optimal => write!(f, "Optimal"),
             BilcStatus::Infeasible => write!(f, "Infeasible"),
-            BilcStatus::Other(s) => write!(f, "{}", s),
+            BilcStatus::Other(s) => write!(f, "{s}"),
         }
     }
 }
@@ -36,7 +36,7 @@ impl From<HighsModelStatus> for BilcStatus {
         match status {
             HighsModelStatus::Optimal => BilcStatus::Optimal,
             HighsModelStatus::Infeasible => BilcStatus::Infeasible,
-            other => BilcStatus::Other(format!("{:?}", other)),
+            other => BilcStatus::Other(format!("{other:?}")),
         }
     }
 }
@@ -124,8 +124,7 @@ pub fn lp_solve_remained_haplotypes_with_obj(
     let inspect_region_no = region_groups.len();
 
     info!(
-        "BILC: constraint matrix shape ({}, {})",
-        inspect_region_no, hap_no
+        "BILC: constraint matrix shape ({inspect_region_no}, {hap_no})"
     );
 
     // --- Step 3: Build the HiGHS model ---
@@ -215,7 +214,7 @@ pub fn lp_solve_remained_haplotypes_with_obj(
     let solved = model.solve();
 
     let status = solved.status();
-    info!("BILC: model status = {:?}", status);
+    info!("BILC: model status = {status:?}");
 
     let bilc_status = BilcStatus::from(status);
 
@@ -241,8 +240,7 @@ pub fn lp_solve_remained_haplotypes_with_obj(
     }
 
     info!(
-        "BILC: select_hap_ids={:?}, drop_hap_ids={:?}, obj_value={}",
-        select_hap_ids, drop_hap_ids, objective_value
+        "BILC: select_hap_ids={select_hap_ids:?}, drop_hap_ids={drop_hap_ids:?}, obj_value={objective_value}"
     );
 
     (select_hap_ids, drop_hap_ids, bilc_status, objective_value)

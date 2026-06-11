@@ -1,32 +1,33 @@
-/// Pairwise read inspection: haplotype/error vector extraction and variant counting.
-///
-/// Ports Python functions from `pairwise_read_inspection.py`:
-/// - `get_read_id` → `read_id`
-/// - `get_hapvector_from_cigar` → `extract_hap_vector`
-/// - `get_errorvector_from_cigar` → `extract_error_vector`
-/// - `extract_read_qseqs` → `extract_read_qseqs`
-/// - `count_snv`, `count_continuous_indel_blocks`, `count_var`, `count_continuous_blocks`
-/// - `encode_base`
-///
-/// Haplotype encoding:
-///    1  = reference match
-///   -4  = SNV
-///   -6  = deletion
-///   >1  = insertion marker (length × 4, placed at first pos of next ref-consuming op)
-///  -10  = padding (NaN / not-a-value)
-///
-/// Error probabilities (qual_arrays) are float32 values in [0, 1] where smaller = better quality.
-///
-/// # Ownership model
-///
-/// - **Records are borrowed** (`&Record`) — we never take ownership of BAM records.
-/// - **Caches store owned values** — `HashMap<String, Array1<…>>` needs owned keys.
-/// - **Batch returns are owned** — caller takes full ownership.
+//! Pairwise read inspection: haplotype/error vector extraction and variant counting.
+//!
+//! Ports Python functions from `pairwise_read_inspection.py`:
+//! - `get_read_id` → `read_id`
+//! - `get_hapvector_from_cigar` → `extract_hap_vector`
+//! - `get_errorvector_from_cigar` → `extract_error_vector`
+//! - `extract_read_qseqs` → `extract_read_qseqs`
+//! - `count_snv`, `count_continuous_indel_blocks`, `count_var`, `count_continuous_blocks`
+//! - `encode_base`
+//!
+//! Haplotype encoding:
+//!    1  = reference match
+//!   -4  = SNV
+//!   -6  = deletion
+//!   >1  = insertion marker (length × 4, placed at first pos of next ref-consuming op)
+//! > -10  = padding (NaN / not-a-value)
+//!
+//! Error probabilities (qual_arrays) are float32 values in [0, 1] where smaller = better quality.
+//!
+//! # Ownership model
+//!
+//! - **Records are borrowed** (`&Record`) — we never take ownership of BAM records.
+//! - **Caches store owned values** — `HashMap<String, Array1<…>>` needs owned keys.
+//! - **Batch returns are owned** — caller takes full ownership.
 
 use rust_htslib::bam::Record;
 use rust_htslib::bam::record::Cigar;
 use ndarray::Array1;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use log::debug;
 
 
@@ -41,10 +42,23 @@ pub fn read_id(record: &Record) -> String {
     format!("{}:{}", qname, record.flags())
 }
 
+/// Lookup table mapping every possible Phred score (0..=255) to its error
+/// probability `10^(-Q/10)`. Built once on first use, then read directly —
+/// avoids a `powf` call for every base in the hot error-vector path.
+static PHRED_TO_PROB: LazyLock<[f32; 256]> = LazyLock::new(|| {
+    let mut table = [0.0f32; 256];
+    for (q, p) in table.iter_mut().enumerate() {
+        *p = 10f32.powf(-(q as f32) / 10.0);
+    }
+    table
+});
+
 /// Convert a Phred quality score to an error probability: `10^(-Q/10)`.
+/// Reads from a precomputed table; the value is identical to computing
+/// `10f32.powf(-(phred as f32) / 10.0)` directly.
 #[inline]
 fn phred_to_prob(phred: u8) -> f32 {
-    10f32.powf(-(phred as f32) / 10.0)
+    PHRED_TO_PROB[phred as usize]
 }
 
 // ─── Haplotype vector extraction ──────────────────────────────────────────────
@@ -61,7 +75,7 @@ fn phred_to_prob(phred: u8) -> f32 {
 /// - `-4`  = SNV (`X` mismatch)
 /// - `-6`  = deletion (`D`)
 /// - `>1`  = insertion marker (`length × 4`), placed at the first position of the
-///           next reference-consuming operation after the insertion
+///   next reference-consuming operation after the insertion
 ///
 /// # Panics
 /// - If the CIGAR contains `M` (op 0) — requires `=`/`X` mode (--eqx).
@@ -99,10 +113,10 @@ pub fn extract_hap_vector(record: &Record) -> Array1<i16> {
             Cigar::RefSkip(len) => {
                 let n = *len as usize;
                 if pending_ins == 0 {
-                    hapvector.extend(std::iter::repeat(1i16).take(n));
+                    hapvector.extend(std::iter::repeat_n(1i16, n));
                 } else {
                     hapvector.push(pending_ins);
-                    hapvector.extend(std::iter::repeat(1i16).take(n.saturating_sub(1)));
+                    hapvector.extend(std::iter::repeat_n(1i16, n.saturating_sub(1)));
                     pending_ins = 0;
                 }
             }
@@ -110,10 +124,10 @@ pub fn extract_hap_vector(record: &Record) -> Array1<i16> {
             Cigar::Equal(len) => {
                 let n = *len as usize;
                 if pending_ins == 0 {
-                    hapvector.extend(std::iter::repeat(1i16).take(n));
+                    hapvector.extend(std::iter::repeat_n(1i16, n));
                 } else {
                     hapvector.push(pending_ins);
-                    hapvector.extend(std::iter::repeat(1i16).take(n.saturating_sub(1)));
+                    hapvector.extend(std::iter::repeat_n(1i16, n.saturating_sub(1)));
                     pending_ins = 0;
                 }
                 query_pos += n;
@@ -125,11 +139,11 @@ pub fn extract_hap_vector(record: &Record) -> Array1<i16> {
             Cigar::Diff(len) => {
                 let n = *len as usize;
                 if pending_ins == 0 {
-                    hapvector.extend(std::iter::repeat(-4i16).take(n));
+                    hapvector.extend(std::iter::repeat_n(-4i16, n));
                 } else {
                     hapvector.push(pending_ins);
                     if n > 1 {
-                        hapvector.extend(std::iter::repeat(-4i16).take(n - 1));
+                        hapvector.extend(std::iter::repeat_n(-4i16, n - 1));
                     }
                     pending_ins = 0;
                 }
@@ -150,11 +164,11 @@ pub fn extract_hap_vector(record: &Record) -> Array1<i16> {
             Cigar::Del(len) => {
                 let n = *len as usize;
                 if pending_ins == 0 {
-                    hapvector.extend(std::iter::repeat(-6i16).take(n));
+                    hapvector.extend(std::iter::repeat_n(-6i16, n));
                 } else {
                     hapvector.push(pending_ins);
                     if n > 1 {
-                        hapvector.extend(std::iter::repeat(-6i16).take(n - 1));
+                        hapvector.extend(std::iter::repeat_n(-6i16, n - 1));
                     }
                     pending_ins = 0;
                 }
@@ -186,7 +200,7 @@ pub fn extract_hap_vector(record: &Record) -> Array1<i16> {
 /// # Encoding
 /// - `(0.0, 1.0]` = error probability from Phred: `10^(-Q/10)`
 /// - `0.0`        = placeholder for insertions, deletions, and reference skips
-///                   (Python uses sentinel 99 → converted to 0 at the end)
+///   (Python uses sentinel 99 → converted to 0 at the end)
 ///
 /// # Key insertion behavior
 /// When an insertion is encountered, the error probability at the reference position
@@ -229,7 +243,7 @@ pub fn extract_error_vector(record: &Record) -> Array1<f32> {
             // Python: errorvector[ref_consume:...] = 99; later 99 → 0
             Cigar::RefSkip(len) => {
                 let n = *len as usize;
-                err_vector.extend(std::iter::repeat(0.0f32).take(n));
+                err_vector.extend(std::iter::repeat_n(0.0f32, n));
                 ref_pos += n;
             }
             // ── SoftClip (S, op 4) ────────────────────────────────
@@ -267,7 +281,7 @@ pub fn extract_error_vector(record: &Record) -> Array1<f32> {
             // Python: errorvector[ref_consume:...] = 99; later 99 → 0
             Cigar::Del(len) => {
                 let n = *len as usize;
-                err_vector.extend(std::iter::repeat(0.0f32).take(n));
+                err_vector.extend(std::iter::repeat_n(0.0f32, n));
                 ref_pos += n;
             }
             _ => {}
@@ -351,7 +365,7 @@ pub fn count_continuous_blocks(arr: &Array1<bool>) -> i32 {
 
     // Pad one False to the beginning and end of arr
     let mut extended_arr = Array1::<bool>::from_elem(arr.len() + 2, false);
-    extended_arr.slice_mut(ndarray::s![1..-1]).assign(arr);
+    extended_arr.slice_mut(ndarray::s![1..arr.len() + 1]).assign(arr);
 
     // Count block starts: where extended_arr[i] is True and extended_arr[i+1] is False
     let mut block_count = 0;
@@ -473,8 +487,8 @@ pub fn extract_read_qseqs(record: &Record) -> ReadQseqData {
     }
 
     // Copy quality scores (Phred, not ASCII-offset — pysam/htslib already converts)
-    for i in 0..qual.len() {
-        qseq_qualities.push(qual[i] as i8);
+    for &q in qual {
+        qseq_qualities.push(q as i8);
     }
 
     // Walk CIGAR to build both maps simultaneously
