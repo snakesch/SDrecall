@@ -49,22 +49,16 @@ fn should_include_read(record: &bam::Record, multi_aligned: bool) -> bool {
         return true;
     }
     
-    // Filter: ![SA] && [XA] && abs(AS - XS) <= 5
+    // Filter: ![SA] && [XA] && abs(AS - XS) <= 10
     // Check for SA tag (should NOT exist)
-    let has_sa: bool = match record.aux(b"SA") {
-        Ok(_) => true,
-        Err(_) => false,
-    };
+    let has_sa: bool = record.aux(b"SA").is_ok();
     
     if has_sa {
         return false;
     }
     
     // Check for XA tag (should exist)
-    let has_xa: bool = match record.aux(b"XA") {
-        Ok(_) => true,
-        Err(_) => false,
-    };
+    let has_xa: bool = record.aux(b"XA").is_ok();
     
     if !has_xa {
         return false;
@@ -96,7 +90,7 @@ fn should_include_read(record: &bam::Record, multi_aligned: bool) -> bool {
     if let (Some(as_score), Some(xs_score)) = (as_score_opt, xs_score_opt) {
         (as_score - xs_score).abs() <= 10
     } else {
-        // If AS or XS is missing, fallback to just the MAPQ < 50 check (already enforced above)
+        // If AS or XS is missing, fallback to just the MAPQ < 60 check (already enforced above)
         // This satisfies the "alternative condition" without additional logic
         true
     }
@@ -230,9 +224,11 @@ for (chr, start, end) in regions {
                 // Write R1 first (ensures order)
                 {
                     let mut writer = r1_writer.lock().unwrap();
-                    writeln!(writer, "@{}", std::str::from_utf8(r1.qname()).unwrap())
+                    let r1_name = std::str::from_utf8(r1.qname())
+                        .map_err(|e| PyValueError::new_err(format!("R1 read name is not valid UTF-8: {}", e)))?;
+                    writeln!(writer, "@{}", r1_name)
                         .map_err(|e| PyIOError::new_err(format!("Failed to write R1: {}", e)))?;
-                    writeln!(writer, "{}", std::str::from_utf8(&r1.seq().as_bytes()).unwrap())
+                    writeln!(writer, "{}", String::from_utf8_lossy(&r1.seq().as_bytes()))
                         .map_err(|e| PyIOError::new_err(format!("Failed to write R1: {}", e)))?;
                     writeln!(writer, "+")
                         .map_err(|e| PyIOError::new_err(format!("Failed to write R1: {}", e)))?;
@@ -243,9 +239,11 @@ for (chr, start, end) in regions {
                 // Write R2
                 {
                     let mut writer = r2_writer.lock().unwrap();
-                    writeln!(writer, "@{}", std::str::from_utf8(r2.qname()).unwrap())
+                    let r2_name = std::str::from_utf8(r2.qname())
+                        .map_err(|e| PyValueError::new_err(format!("R2 read name is not valid UTF-8: {}", e)))?;
+                    writeln!(writer, "@{}", r2_name)
                         .map_err(|e: std::io::Error| PyIOError::new_err(format!("Failed to write R2: {}", e)))?;
-                    writeln!(writer, "{}", std::str::from_utf8(&r2.seq().as_bytes()).unwrap())
+                    writeln!(writer, "{}", String::from_utf8_lossy(&r2.seq().as_bytes()))
                         .map_err(|e: std::io::Error| PyIOError::new_err(format!("Failed to write R2: {}", e)))?;
                     writeln!(writer, "+")
                         .map_err(|e: std::io::Error| PyIOError::new_err(format!("Failed to write R2: {}", e)))?;
