@@ -1,28 +1,17 @@
-# Haplotype Inspection Rust Module
+# haplotype_inspection
 
-This module provides high-performance Rust implementations for haplotype inspection operations in SDrecall.
+Rust implementation of SDrecall's haplotype inspection pipeline (Phase 2c FP control). Replaces Python NCLS-based haplotype inspection with Rust using `rust-lapper`, `rust-htslib`, and `highs`.
 
-## Purpose
-
-Replaces Python NCLS-based haplotype inspection with Rust implementations using:
-- `rust-lapper` for fast interval queries (replaces Python NCLS)
-- `rust-htslib` for efficient BAM file I/O
-- Native Rust for compute-intensive consensus assembly and similarity calculations
-
-## Expected Performance
-
-- BAM → Lapper: 5-8s (vs 19s Python NCLS) - 2.4-3.8× speedup
-- Haplotype inspection: 10-15s (vs 60s Python) - 4-6× speedup
-- Total per subprocess: 22-30s (vs 82s) - 2.7-3.7× speedup
+**Status:** Code complete (54 functions, 182 unit tests — 181 active + 1 ignored bench, 5 example harnesses in `examples/`).
 
 ## Building
 
 ```bash
-./build.sh
-```
+eval "$(conda shell.bash hook 2>/dev/null)" && conda activate SDrecall
+export LIBCLANG_PATH=$CONDA_PREFIX/lib
+export OPENSSL_NO_VENDOR=1
+export PKG_CONFIG_PATH=$CONDA_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH
 
-Or manually:
-```bash
 maturin build --release
 pip install target/wheels/haplotype_inspection-*.whl
 ```
@@ -33,24 +22,10 @@ pip install target/wheels/haplotype_inspection-*.whl
 from haplotype_inspection import inspect_haplotypes_rust
 
 correct_qnames, mismap_qnames = inspect_haplotypes_rust(
-    bam_path=bam,
-    intrinsic_bam_path=intrinsic_bam,
-    hap_qname_info=dict(hap_qname_info),
-    qname_hap_info=dict(qname_hap_info),
-    # ... other parameters
+    bam_path, intrinsic_bam_path, hap_qname_info, qname_hap_info,
+    qname_to_node, total_lowqual_qnames, compare_haplotype_meta_tab,
+    mean_read_length, recall_mq_cutoff, basequal_median_cutoff,
 )
 ```
 
-## Module Structure
-
-- `lib.rs` - Module entry point and PyO3 bindings
-- `bam_lapper.rs` - BAM reading and Lapper construction
-- `consensus.rs` - Consensus sequence assembly
-- `similarity.rs` - Reference sequence similarity calculations
-- `inspection.rs` - Main haplotype inspection logic
-- `python_bindings.rs` - Python interface functions
-- `structs.rs` - Shared data structures
-
-## Development Status
-
-🚧 Under active development - migrating functions one at a time
+For the data-flow diagram + Python interface contract see [T1 — validate haplotype-inspection](../../docs/analysis/tasks/T1_validate_haplotype_inspection.md), and the validated submodule deep-dives in [docs/analysis/](../../docs/analysis/); the function inventory + struct layout live in the source.
