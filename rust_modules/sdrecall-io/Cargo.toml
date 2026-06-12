@@ -1,0 +1,48 @@
+[package]
+name = "sdrecall-io"
+version = "0.1.0"
+edition = "2021"
+description = "In-process file I/O for the SDrecall Rust pipeline (BAM/BED/VCF/GraphML/TSV) — no shelling to samtools/bcftools/bedtools (SDrecall T0)"
+license = "MIT"
+authors = ["Xingtian Yang <yangyxt@hku.hk>"]
+repository = "https://github.com/snakesch/SDrecall"
+
+# Pure-Rust I/O foundation library. Default crate-type (rlib) so every stage
+# crate, bin, example and test links it. NO cdylib, NO PyO3 — this crate never
+# crosses the FFI seam; the in-process orchestrator calls it directly.
+[lib]
+name = "sdrecall_io"
+path = "src/lib.rs"
+
+# Release profile is defined once at the workspace root (rust_modules/Cargo.toml).
+
+[dependencies]
+sdrecall-utils = { path = "../sdrecall-utils" }
+rust-htslib = { workspace = true }
+# bedrs default features include `serde` (used by our round-trips); the optional
+# `htslib` feature is left OFF — we build intervals from our own GenomicInterval,
+# not from BAM records, so we avoid a second rust-htslib link path.
+bedrs = "0.2.26"
+rust-lapper = "1.2"
+petgraph = "0.8.3"
+petgraph-graphml = "5.0.0"
+quick-xml = "0.40.1"
+rustc-hash = "1.1"
+ahash = "0.8"
+log = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+# Tab-separated I/O via the serde-integrated csv crate (delimiter set to b'\t').
+# The DESIGN sanctions "the csv crate with b'\t' delimiter"; it gives us a
+# correct serde Serializer/Deserializer for free rather than hand-rolling one.
+csv = "1.3"
+# Monte-Carlo read sampling for get_insert_size_distribution (ports Python's
+# random.random() accept test). Exact RNG parity with CPython is impossible, so
+# the differential test tolerates Monte-Carlo variance (DESIGN §6).
+rand = "0.8"
+tempfile = "3.8"
+
+[dev-dependencies]
+env_logger = "0.11"
+
+[lints]
+workspace = true

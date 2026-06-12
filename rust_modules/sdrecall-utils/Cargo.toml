@@ -1,0 +1,27 @@
+[package]
+name = "sdrecall-utils"
+version = "0.1.0"
+edition = "2021"
+description = "Shared pure types, errors, logging and parallelism math for the SDrecall Rust pipeline (no file I/O, no heavy deps)"
+license = "MIT"
+authors = ["Xingtian Yang <yangyxt@hku.hk>"]
+repository = "https://github.com/snakesch/SDrecall"
+
+# Pure-Rust foundation library. Default crate-type (rlib) so every stage crate
+# and binary can link it. NO cdylib, NO PyO3 — this never crosses the FFI seam.
+[lib]
+name = "sdrecall_utils"
+path = "src/lib.rs"
+
+# Release profile is defined once at the workspace root (rust_modules/Cargo.toml).
+
+[dependencies]
+thiserror = { workspace = true }
+# `std` feature enables set_boxed_logger (the global logger installer).
+log = { version = "0.4", features = ["std"] }
+# Geometry value types derive Serialize/Deserialize so intervals/keys can be
+# dumped to JSON for differential validation and persisted across stages.
+serde = { version = "1.0", features = ["derive"] }
+
+[lints]
+workspace = true
