@@ -9,13 +9,17 @@ repository = "https://github.com/snakesch/SDrecall"
 
 [lib]
 name = "rust_read_extraction"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 # Release profile is defined once at the workspace root (rust_modules/Cargo.toml).
 # Cargo ignores [profile.*] in non-root members, so it is intentionally absent here.
 
+[features]
+default = ["python"]
+python = ["dep:pyo3"]
+
 [dependencies]
-pyo3 = { version = "0.21", features = ["extension-module", "abi3-py38"] }
+pyo3 = { version = "0.21", features = ["extension-module", "abi3-py38"], optional = true }
 rust-htslib = "0.47"
 rayon = "1.8"
 thiserror = "1.0"
