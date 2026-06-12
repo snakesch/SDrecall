@@ -7,19 +7,33 @@ license = "MIT"
 authors = ["Xingtian Yang <yangyxt@hku.hk>"]
 repository = "https://github.com/snakesch/SDrecall"
 
-# Bin-only orchestrator. The T9 implementation adds path deps on the stage crates
-# (read_extraction, region-prep, fp-control, vcf-ops, nm-stats, sd-prep) as it
-# wires each subcommand; kept minimal here so the skeleton decouples from the
-# in-flight sd-prep work.
 [[bin]]
 name = "sdrecall"
 path = "src/main.rs"
 
 [dependencies]
+# Foundation crates.
 sdrecall-utils = { path = "../sdrecall-utils" }
+sdrecall-io = { path = "../sdrecall-io" }
+
+# Stage crates.
+sd-prep = { path = "../sd-prep" }
+rust_read_extraction = { path = "../read_extraction", default-features = false }
+region-prep = { path = "../region-prep" }
+fp-control = { path = "../fp-control" }
+vcf-ops = { path = "../vcf-ops" }
+nm-stats = { path = "../nm-stats" }
+
+# External.
 clap = { version = "4.6", features = ["derive"] }
 rayon = { workspace = true }
+rust-htslib = { workspace = true }
+ahash = "0.8"
 log = "0.4"
+tempfile = "3"
+
+[dev-dependencies]
+tempfile = "3"
 
 [lints]
 workspace = true

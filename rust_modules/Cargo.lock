@@ -2063,10 +2063,20 @@ dependencies = [
 name = "sdrecall"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "clap",
+ "fp-control",
  "log",
+ "nm-stats",
  "rayon",
+ "region-prep",
+ "rust-htslib",
+ "rust_read_extraction",
+ "sd-prep",
+ "sdrecall-io",
  "sdrecall-utils",
+ "tempfile",
+ "vcf-ops",
 ]
 
 [[package]]
