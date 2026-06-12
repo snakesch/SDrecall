@@ -1,0 +1,56 @@
+[package]
+name = "fp-control"
+version = "0.1.0"
+edition = "2021"
+description = "Fused Phase-2c FP control: BAM -> graph -> phasing -> inspection in one Rust call (SDrecall T4)"
+license = "MIT"
+authors = ["Xingtian Yang <yangyxt@hku.hk>"]
+repository = "https://github.com/snakesch/SDrecall"
+
+# lib + bin. Default crate-type (rlib) so the bin, examples and tests link the
+# library — the reusable lib+bin template the later stage crates copy.
+[lib]
+name = "fp_control"
+path = "src/lib.rs"
+# No doctests in this crate. Disabled because rustdoc's doctest harness links the
+# cdylib stage crates (build_phasing_graph / haplotype_inspection are
+# crate-type=["cdylib","rlib"]) and cannot resolve the cdylib form — the normal
+# test/bin/example targets link the rlib fine. (`cargo test` doctest step only.)
+doctest = false
+
+[[bin]]
+name = "fp-control"
+path = "src/bin/fp_control.rs"
+
+# Release profile is defined once at the workspace root (rust_modules/Cargo.toml).
+
+[dependencies]
+# The three Phase-2c stage libraries this crate fuses. Path deps; depending on
+# build_phasing_graph / haplotype_inspection transitively pulls pyo3/numpy (their
+# cdylib deps) — acceptable transitional cruft for the fuse (removed when those
+# crates drop PyO3 at T9). `cargo test`/bins DO link under the SDrecall conda env.
+build_phasing_graph = { path = "../build_phasing_graph" }
+phasing = { path = "../phasing" }
+haplotype_inspection = { path = "../haplotype_inspection" }
+
+# Numerics — MATCH the stage libs' versions exactly (no skew): petgraph 0.6,
+# ndarray 0.15. The phasing crate's PhasingInput.weight_matrix is Array2<f32>
+# from this same ndarray, so the graph's Array2<f32> threads through unchanged.
+ndarray = "0.15"
+petgraph = "0.6"
+
+# BAM I/O + parallelism + logging + CLI, same versions the workspace pins.
+rust-htslib = { workspace = true }
+rayon = { workspace = true }
+log = "0.4"
+clap = { version = "4.6", features = ["derive"] }
+
+sdrecall-utils = { path = "../sdrecall-utils" }
+
+[dev-dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ndarray-npy = "0.8"
+
+[lints]
+workspace = true
