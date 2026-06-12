@@ -291,6 +291,46 @@ impl Paths {
         append_suffix(&self.ref_genome, ".fai")
     }
 
+    /// The deduped raw BAM = `pooled_raw_bam.replace(".bam", ".deduped.bam")`.
+    pub fn deduped_raw_bam_path(&self) -> PathBuf {
+        let raw = self.pooled_raw_bam_path();
+        let stem = raw.to_string_lossy().replace(".bam", ".deduped.bam");
+        PathBuf::from(stem)
+    }
+
+    /// Merge-intermediate VCF (before subsetting to target).
+    /// `recall_results/{sample_id}.sdrecall.merged.vcf.gz`.
+    pub fn merged_recall_vcf_path(&self) -> PathBuf {
+        self.recall_results_dir
+            .join(format!("{}.sdrecall.merged.vcf.gz", self.sample_id))
+    }
+
+    /// Bridge to `sd_prep::PrepPaths` — extracts the 5 fields sd-prep needs.
+    pub fn to_prep_paths(&self) -> sd_prep::PrepPaths {
+        sd_prep::PrepPaths {
+            ref_genome: self.ref_genome.clone(),
+            input_bam: self.input_bam.clone(),
+            reference_sd_map: self.reference_sd_map.clone(),
+            target_bed: self.target_bed.clone().unwrap_or_default(),
+            work_dir: self.work_dir.clone(),
+        }
+    }
+
+    /// Build `sd_prep::PrepParams` from CLI args. sd-prep auto-derives frag
+    /// stats from the BAM, so placeholders are acceptable.
+    pub fn to_prep_params(&self, common: &crate::cli::CommonArgs, prep: &crate::cli::PreparationArgs) -> sd_prep::PrepParams {
+        sd_prep::PrepParams {
+            mq_threshold: common.mq_cutoff as u8,
+            high_quality_depth: prep.high_quality_depth as i64,
+            minimum_depth: prep.minimum_depth as i64,
+            multialign_frac: prep.multialign_frac,
+            avg_frag: self.avg_frag_size.unwrap_or(400.0),
+            std_frag: self.frag_size_std.unwrap_or(100.0),
+            mean_read_length: 150.0, // sd-prep auto-derives from BAM
+            threads: common.threads,
+        }
+    }
+
     // ─────────────────────────────────────────────────────────────────────
     //  RG (realign-group) getters — each normalizes the label internally
     //  (src/const.py:370-446). PURE joins (Python mkdir side-effect dropped).
