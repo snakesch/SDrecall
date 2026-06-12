@@ -1,0 +1,32 @@
+[package]
+name = "vcf-ops"
+version = "0.1.0"
+edition = "2021"
+description = "Sorted-VCF priority merge + inhouse-common binomial annotation (SDrecall T5)"
+license = "MIT"
+authors = ["Xingtian Yang <yangyxt@hku.hk>"]
+repository = "https://github.com/snakesch/SDrecall"
+
+# lib + bin: the library is what the in-process orchestrator calls; the thin CLI
+# (files in → files out) makes the stage independently runnable/testable.
+[lib]
+name = "vcf_ops"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vcf-ops"
+path = "src/bin/vcf_ops.rs"
+
+[dependencies]
+rust-htslib = { workspace = true }
+statrs = "0.18"
+rustc-hash = "1.1"
+log = "0.4"
+clap = { version = "4.6", features = ["derive"] }
+sdrecall-utils = { path = "../sdrecall-utils" }
+
+[dev-dependencies]
+tempfile = "3.8"
+
+[lints]
+workspace = true
