@@ -7,7 +7,9 @@ edition = "2021"
 
 [lib]
 name = "build_phasing_graph"
-crate-type = ["cdylib"]
+# cdylib for the PyO3 wheel; rlib so the T4 fuse + cargo examples/tests can link
+# this crate as a library (a cdylib-only crate is not linkable downstream).
+crate-type = ["cdylib", "rlib"]
 
 # Add conservative CPU target flags for better compatibility
 

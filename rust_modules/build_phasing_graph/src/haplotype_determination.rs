@@ -137,58 +137,101 @@ pub fn compare_sequences(seq1: &[u8], seq2: &[u8]) -> bool {
     true
 }
 
-/// Extract haplotype vector from CIGAR operations
-/// 
-/// Returns a vector representing variants relative to reference:
-/// - 1: Match
-/// - -4: SNV (mismatch)  
-/// - -6: Deletion
-/// - positive values: Insertion length
+/// Extract haplotype vector from CIGAR operations.
+///
+/// Returns one entry per reference-consuming base, encoding the read's variants
+/// relative to the reference:
+/// - `1`: match (`=`, or a lenient `M` — see note)
+/// - `-4`: SNV (mismatch, `X`)
+/// - `-6`: deletion (`D`)
+/// - `len*4` (positive): an insertion of `len` bases, placed on the **next**
+///   reference-consuming position (deferred-marker convention)
+///
+/// # Insertion-marker convention (T2 fix, 2026-06-11)
+/// An insertion is recorded by deferring a `pending_ins = len*4` marker to the
+/// **next** reference-consuming op (matching Python `get_hapvector_from_cigar`
+/// and `haplotype_inspection::extract_hap_vector`). The previous implementation
+/// overwrote the **previous** aligned position (`105=1I42=` put the marker at
+/// index 104 instead of 105); that one-position shift made Python-inspect (which
+/// reuses these exported vectors) disagree with Rust-inspect (which recomputes
+/// with the correct convention) on borderline reads — the root cause of the 3
+/// diverging T1 islands (137/139/163). An insertion at the read start (empty
+/// vector) is dropped, mirroring Python's `if index > 0`.
+///
+/// # Note on `M`
+/// Unlike `haplotype_inspection` (which panics on `M` per the golden DivA
+/// decision), this crate keeps `M` lenient (treated as a match) for now; under
+/// `minimap2 --eqx` no `M` appears, so the two agree on real data. The `M`-policy
+/// unification is deferred to the shared `sdrecall-utils` encoder (T0/T4).
 pub fn extract_hap_vector(record: &Record) -> Vec<i16> {
+    use rust_htslib::bam::record::Cigar;
     let cigar = record.cigar();
-    let mut hap_vector = Vec::new();
-    
-    for &op in cigar.iter() {
-        use rust_htslib::bam::record::Cigar;
+
+    // Pre-size from reference-consuming ops (=, X/M, D, N).
+    let ref_len: usize = cigar
+        .iter()
+        .map(|c| match c {
+            Cigar::Match(len)
+            | Cigar::Equal(len)
+            | Cigar::Diff(len)
+            | Cigar::Del(len)
+            | Cigar::RefSkip(len) => *len as usize,
+            _ => 0,
+        })
+        .sum();
+
+    let mut hap_vector: Vec<i16> = Vec::with_capacity(ref_len);
+    let mut pending_ins: i16 = 0; // 0 = no pending insertion; drained on next ref-consuming op
+
+    for op in cigar.iter() {
         match op {
-            Cigar::Match(len) | Cigar::Equal(len) => {
-                // Match to reference
-                for _ in 0..len {
-                    hap_vector.push(1);
+            // Match (M, lenient) / Equal (=) / RefSkip (N) → match-to-reference (1).
+            // N consumes reference like a gap of matches (mirrors haplotype_inspection).
+            Cigar::Match(len) | Cigar::Equal(len) | Cigar::RefSkip(len) => {
+                let n = *len as usize;
+                if pending_ins == 0 {
+                    hap_vector.extend(std::iter::repeat_n(1i16, n));
+                } else {
+                    hap_vector.push(pending_ins);
+                    hap_vector.extend(std::iter::repeat_n(1i16, n.saturating_sub(1)));
+                    pending_ins = 0;
                 }
             }
+            // Diff (X) → SNV (-4). A compound insertion+mismatch overwrites the X
+            // with the insertion marker (current encoding; golden DivB summation
+            // deferred to T4).
             Cigar::Diff(len) => {
-                // Mismatch (SNV)
-                for _ in 0..len {
-                    hap_vector.push(-4);
+                let n = *len as usize;
+                if pending_ins == 0 {
+                    hap_vector.extend(std::iter::repeat_n(-4i16, n));
+                } else {
+                    hap_vector.push(pending_ins);
+                    hap_vector.extend(std::iter::repeat_n(-4i16, n.saturating_sub(1)));
+                    pending_ins = 0;
                 }
             }
+            // Ins (I) → defer the marker to the next ref-consuming op; drop at read start.
             Cigar::Ins(len) => {
-                // Insertion - mark previous position with insertion length
                 if !hap_vector.is_empty() {
-                    let last_idx = hap_vector.len() - 1;
-                    hap_vector[last_idx] = len as i16 * 4; // Encode insertion
+                    pending_ins = (*len as i16) * 4;
                 }
             }
+            // Del (D) → deletion (-6).
             Cigar::Del(len) => {
-                // Deletion
-                for _ in 0..len {
-                    hap_vector.push(-6);
+                let n = *len as usize;
+                if pending_ins == 0 {
+                    hap_vector.extend(std::iter::repeat_n(-6i16, n));
+                } else {
+                    hap_vector.push(pending_ins);
+                    hap_vector.extend(std::iter::repeat_n(-6i16, n.saturating_sub(1)));
+                    pending_ins = 0;
                 }
             }
-            Cigar::SoftClip(_) | Cigar::HardClip(_) => {
-                // Skip clipped bases
-            }
-            _ => {
-                // Handle other operations as matches for now
-                let len = op.len();
-                for _ in 0..len {
-                    hap_vector.push(1);
-                }
-            }
+            // SoftClip / HardClip / Pad and anything else → no reference contribution.
+            _ => {}
         }
     }
-    
+
     hap_vector
 }
 
@@ -1193,4 +1236,93 @@ pub fn are_variants_compatible(vars1: &[&Variant], vars2: &[&Variant]) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod hap_vector_tests {
+    use super::extract_hap_vector;
+    use rust_htslib::bam::record::{Cigar, CigarString};
+    use rust_htslib::bam::Record;
+
+    /// Build a record with the given CIGAR (seq/qual sized to the query length).
+    fn rec(cigar: Vec<Cigar>) -> Record {
+        let qlen: usize = cigar
+            .iter()
+            .map(|c| match c {
+                Cigar::Match(l)
+                | Cigar::Ins(l)
+                | Cigar::SoftClip(l)
+                | Cigar::Equal(l)
+                | Cigar::Diff(l) => *l as usize,
+                _ => 0,
+            })
+            .sum();
+        let seq = vec![b'A'; qlen];
+        let qual = vec![30u8; qlen];
+        let cs = CigarString(cigar);
+        let mut r = Record::new();
+        r.set(b"r", Some(&cs), &seq, &qual);
+        r.set_pos(100);
+        r.set_tid(0);
+        r.set_mapq(60);
+        r
+    }
+
+    #[test]
+    fn insertion_marker_is_deferred_to_next_ref_position() {
+        // 3=1I3=: marker at index 3 (the position AFTER the 3 matches), not index 2.
+        // This is the T2 fix — the old code put it at index 2 (the position before).
+        let v = extract_hap_vector(&rec(vec![Cigar::Equal(3), Cigar::Ins(1), Cigar::Equal(3)]));
+        assert_eq!(v, vec![1, 1, 1, 4, 1, 1]);
+    }
+
+    #[test]
+    fn insertion_at_read_start_is_dropped() {
+        // 1I5=: a leading insertion has no prior ref position → dropped (Python `if index > 0`).
+        let v = extract_hap_vector(&rec(vec![Cigar::Ins(1), Cigar::Equal(5)]));
+        assert_eq!(v, vec![1, 1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn pending_insertion_drains_into_refskip() {
+        // 3=1I2N3=: the deferred marker drains onto the first N base. The old `_=>`
+        // catch-all pushed N as matches WITHOUT draining a pending insertion
+        // (the latent second off-by-one) — this guards the fix.
+        let v = extract_hap_vector(&rec(vec![
+            Cigar::Equal(3),
+            Cigar::Ins(1),
+            Cigar::RefSkip(2),
+            Cigar::Equal(3),
+        ]));
+        assert_eq!(v, vec![1, 1, 1, 4, 1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn compound_insertion_then_mismatch_overwrites_x() {
+        // 3=1I1X2=: current encoding overwrites the X with the insertion marker
+        // (golden DivB summation deferred to T4); matches haplotype_inspection.
+        let v = extract_hap_vector(&rec(vec![
+            Cigar::Equal(3),
+            Cigar::Ins(1),
+            Cigar::Diff(1),
+            Cigar::Equal(2),
+        ]));
+        assert_eq!(v, vec![1, 1, 1, 4, 1, 1]);
+    }
+
+    #[test]
+    fn plain_match_snv_deletion() {
+        assert_eq!(
+            extract_hap_vector(&rec(vec![Cigar::Equal(5)])),
+            vec![1, 1, 1, 1, 1]
+        );
+        assert_eq!(
+            extract_hap_vector(&rec(vec![Cigar::Equal(2), Cigar::Diff(1), Cigar::Equal(2)])),
+            vec![1, 1, -4, 1, 1]
+        );
+        assert_eq!(
+            extract_hap_vector(&rec(vec![Cigar::Equal(3), Cigar::Del(2), Cigar::Equal(3)])),
+            vec![1, 1, 1, -6, -6, 1, 1, 1]
+        );
+    }
 }
