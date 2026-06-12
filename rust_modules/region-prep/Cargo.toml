@@ -1,0 +1,32 @@
+[package]
+name = "region-prep"
+version = "0.1.0"
+edition = "2021"
+description = "Strand-aware relative-coordinate segment projection for masked-align regions (SDrecall T7)"
+license = "MIT"
+authors = ["Xingtian Yang <yangyxt@hku.hk>"]
+repository = "https://github.com/snakesch/SDrecall"
+
+# lib + bin: default crate-type (rlib) so the bin, examples and tests link the
+# library — mirrors the nm-stats lib+bin template.
+[lib]
+name = "region_prep"
+path = "src/lib.rs"
+
+[[bin]]
+name = "region-prep"
+path = "src/bin/region_prep.rs"
+
+[dependencies]
+rayon = { workspace = true }
+log = "0.4"
+clap = { version = "4.6", features = ["derive"] }
+ahash = "0.8"
+sdrecall-utils = { path = "../sdrecall-utils" }
+sdrecall-io = { path = "../sdrecall-io" }
+
+[dev-dependencies]
+tempfile = "3.8"
+
+[lints]
+workspace = true
