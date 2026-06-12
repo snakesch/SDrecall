@@ -1,0 +1,58 @@
+[package]
+name = "sd-prep"
+version = "0.1.0"
+edition = "2021"
+description = "Phase-1 preparation: SD graph, RG grouping, masked genomes (graph-tool replacement) (SDrecall T8)"
+license = "MIT"
+authors = ["Xingtian Yang <yangyxt@hku.hk>"]
+repository = "https://github.com/snakesch/SDrecall"
+
+# lib + bin: default crate-type (rlib) so the bin, examples and tests link the
+# library — mirrors the nm-stats / region-prep lib+bin template.
+[lib]
+name = "sd_prep"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sd-prep"
+path = "src/bin/sd_prep.rs"
+
+[dependencies]
+sdrecall-utils = { path = "../sdrecall-utils" }
+sdrecall-io = { path = "../sdrecall-io" }
+# Graph engine: components (UnionFind), Dijkstra-with-route, the SD+PO DiGraph.
+petgraph = "0.8.3"
+# Per-chromosome physical-overlap interval index (cache-friendly, Send+Sync).
+rust-lapper = "1.2"
+# BED set-ops parity helpers (already a transitive dep via sdrecall-io; pinned here
+# so this crate's direct uses resolve to the same version).
+bedrs = "0.2.26"
+rust-htslib = { workspace = true }
+# rust-bio FASTA random access (faidx) for masking + region-sequence extraction.
+bio = "2"
+# minimap2-rs FFI: the ONE external algorithm (intrinsic + traversal similarity).
+# Bundled minimap2 2.30 (system CLI is 2.28 — see minimap::SIMILARITY_THRESHOLD note).
+# NOTE: the crate's `htslib` feature is deliberately OFF — it hard-pins
+# rust-htslib 1.0 which conflicts with the workspace's 0.47.1 (two libhts builds +
+# incompatible Record types). We use only the rust-htslib-free `map()` → Mapping
+# API and build intrinsic BAM records via the workspace rust-htslib from the
+# Mapping CIGAR (see intrinsic.rs).
+minimap2 = "0.1.31"
+rayon = { workspace = true }
+ahash = "0.8"
+rustc-hash = "1.1"
+log = "0.4"
+# md5-gated masked-genome update (Python update_plain_file_on_md5): only replace
+# the FASTA when its content hash changes (keeps mtime stable for freshness checks).
+md5 = "0.7"
+# Transparent gzip for `.bed.gz` SD-map inputs (the production `-m` arg is gzipped;
+# Python/pandas auto-decompresses, so the Rust driver must too).
+flate2 = "1.0"
+clap = { version = "4.6", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3.8"
+env_logger = "0.11"
+
+[lints]
+workspace = true
