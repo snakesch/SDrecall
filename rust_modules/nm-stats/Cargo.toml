@@ -1,0 +1,33 @@
+[package]
+name = "nm-stats"
+version = "0.1.0"
+edition = "2021"
+description = "NM (edit-distance) Poisson cutoff for a BAM — Rust port of cal_edge_NM_values.py (SDrecall T6)"
+license = "MIT"
+authors = ["Xingtian Yang <yangyxt@hku.hk>"]
+repository = "https://github.com/snakesch/SDrecall"
+
+# lib + bin. Default crate-type (rlib) so the bin, examples and tests link the
+# library — the reusable lib+bin template every later stage crate copies.
+[lib]
+name = "nm_stats"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nm-stats"
+path = "src/bin/nm_stats.rs"
+
+# Release profile is defined once at the workspace root (rust_modules/Cargo.toml).
+
+[dependencies]
+rust-htslib = { workspace = true }
+statrs = "0.18"
+log = "0.4"
+clap = { version = "4.6", features = ["derive"] }
+sdrecall-utils = { path = "../sdrecall-utils" }
+
+[dev-dependencies]
+tempfile = "3.8"
+
+[lints]
+workspace = true
