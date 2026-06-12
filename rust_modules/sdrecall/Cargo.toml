@@ -1,0 +1,25 @@
+[package]
+name = "sdrecall"
+version = "0.1.0"
+edition = "2021"
+description = "Top-level SDrecall orchestrator binary — threads all stage crates in-process (SDrecall T9)"
+license = "MIT"
+authors = ["Xingtian Yang <yangyxt@hku.hk>"]
+repository = "https://github.com/snakesch/SDrecall"
+
+# Bin-only orchestrator. The T9 implementation adds path deps on the stage crates
+# (read_extraction, region-prep, fp-control, vcf-ops, nm-stats, sd-prep) as it
+# wires each subcommand; kept minimal here so the skeleton decouples from the
+# in-flight sd-prep work.
+[[bin]]
+name = "sdrecall"
+path = "src/main.rs"
+
+[dependencies]
+sdrecall-utils = { path = "../sdrecall-utils" }
+clap = { version = "4.6", features = ["derive"] }
+rayon = { workspace = true }
+log = "0.4"
+
+[lints]
+workspace = true
