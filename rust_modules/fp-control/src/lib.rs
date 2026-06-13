@@ -41,10 +41,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use phasing::bam_reading::{build_allele_depth_map, migrate_bam_to_sorted_intervals_grouped};
-use phasing::graph_builder::build_phasing_graph as build_graph;
-use phasing::structs::HaplotypeConfig;
-use phasing::{phase, phasing_input_from_graph};
+use phasing::{build_and_phase, PhaserParams};
 use haplotype_inspection::identify_misaligned_haps::inspect_haplotypes;
 use sdrecall_utils::{Result, SdError};
 
@@ -157,68 +154,42 @@ pub fn run_fp_control(
     intrinsic_bam: &str,
     params: &FpControlParams,
 ) -> Result<Option<FpControlOutput>> {
-    // ── Stage 1: BAM → read-pair map + allele depths → phasing graph ────────
-    // Re-create what `build_phasing_graph_rust` does (it owns the BAM read), but
-    // keep the Rust result in-process instead of exporting to Python.
-    log::info!("[fp_control] Stage 1: building phasing graph from {bam}");
-    let (read_pair_map, header) = migrate_bam_to_sorted_intervals_grouped(
-        bam,
-        params.mapq_cutoff,
-        params.basequal_median_cutoff,
-        /* filter_noisy */ true,
-        /* use_collate  */ true,
-        params.threads,
-    )
-    .map_err(|e| SdError::Compute(format!("BAM read/pairing failed for {bam}: {e}")))?;
+    // ── Stages 1–2: BAM → phasing graph → GCE partition ─────────────────────
+    // Shared with the standalone phaser via phasing::build_and_phase, so the
+    // graph+phase wiring lives in exactly one place.
+    let phaser_params = PhaserParams {
+        edge_weight_cutoff: params.edge_weight_cutoff,
+        mean_read_length: params.mean_read_length,
+        mapq_cutoff: params.mapq_cutoff,
+        basequal_median_cutoff: params.basequal_median_cutoff,
+        threads: params.threads,
+    };
+    log::info!("[fp_control] Stages 1-2: building + phasing graph from {bam}");
 
-    let allele_depth_map = build_allele_depth_map(
-        bam,
-        &params.reference_genome,
-        params.mapq_cutoff,
-        params.basequal_median_cutoff,
-    )
-    .map_err(|e| SdError::Compute(format!("allele-depth map failed for {bam}: {e}")))?;
-
-    let config = HaplotypeConfig::new(params.mean_read_length);
-    let graph = build_graph(&read_pair_map, &allele_depth_map, &header, &config)
-        .map_err(|e| SdError::Compute(format!("graph build failed for {bam}: {e}")))?;
-
-    // Early-out #1: same gate as `build_phasing_graph_rust` (None → skip island).
-    let weight_matrix = match graph.weight_matrix {
-        Some(ref wm) => wm,
+    // Early-out #1: no weight matrix (no ALT alleles) → build_and_phase returns
+    // None → skip island (matches the Python `build_phasing_graph_rust` None gate).
+    let phased = match build_and_phase(bam, &params.reference_genome, &phaser_params)? {
+        Some(p) => p,
         None => {
             log::warn!("[fp_control] no ALT alleles / empty weight matrix for {bam}; skipping");
             return Ok(None);
         }
     };
-    if graph.graph.node_count() <= 2 {
+
+    // Early-out #2: ≤ 2 vertices → skip island.
+    if phased.vertex_qname.len() <= 2 {
         log::warn!(
             "[fp_control] graph has {} vertices (<= 2) for {bam}; skipping",
-            graph.graph.node_count()
+            phased.vertex_qname.len()
         );
         return Ok(None);
     }
 
-    // Vertex index → qname (direct correspondence: qname_idx == NodeIndex.index()).
-    let n = graph.graph.node_count();
-    let mut vertex_qname = vec![String::new(); n];
-    for (&qname_idx, rp) in &read_pair_map.readpair_dict {
-        if qname_idx < n {
-            vertex_qname[qname_idx] = rp.qname.clone();
-        }
-    }
-
-    // ── Stage 2: phasing (replaces the Python `phasing_realigned_reads` hop) ─
-    log::info!("[fp_control] Stage 2: phasing {n} vertices");
-    let phasing_input =
-        phasing_input_from_graph(&graph, weight_matrix.clone(), params.edge_weight_cutoff);
-    let vertex_hap = phase(&phasing_input);
-    let partition = build_partition(&vertex_hap, &vertex_qname);
-
+    let partition = build_partition(&phased.vertex_hap, &phased.vertex_qname);
     log::info!(
         "[fp_control] phasing produced {} haplotype clusters over {} vertices",
         partition.hap_qname_info.len(),
-        vertex_hap.len()
+        phased.vertex_hap.len()
     );
 
     // Early-out #2: ≤ 2 haplotype clusters → no choice to make; every read is
@@ -240,7 +211,7 @@ pub fn run_fp_control(
     // ── Stage 3: haplotype inspection (consensus / similarity / BILC) ───────
     // inspect_haplotypes re-opens the BAMs itself (single-read fusion deferred).
     log::info!("[fp_control] Stage 3: inspecting haplotypes for {bam}");
-    let lowqual: HashSet<String> = graph.lowqual_qnames.iter().cloned().collect();
+    let lowqual: HashSet<String> = phased.lowqual_qnames;
     let (correct, mismap) = inspect_haplotypes(
         bam,
         intrinsic_bam,
@@ -272,7 +243,6 @@ pub fn run_fp_control(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ndarray::Array2;
 
     /// `build_partition` derives the three inspection maps from a vertex→hap
     /// map and the vertex→qname vector, exactly as the Python pre-inspect glue.
@@ -315,41 +285,5 @@ mod tests {
         let out = FpControlOutput::from_sets(correct, HashSet::new());
         assert_eq!(out.correct_qnames, vec!["qA".to_string(), "qB".to_string()]);
         assert!(out.mismap_qnames.is_empty());
-    }
-
-    /// `phasing_input_from_graph` flattens `node_read_ids` (drops the `None`
-    /// mate), extracts undirected edges, and threads the weight matrix + per-read
-    /// vector maps through unchanged. Built on a tiny hand-made graph result.
-    #[test]
-    fn phasing_input_glue_shapes_match() {
-        use phasing::structs::PhasingGraphResult;
-
-        let mut g = PhasingGraphResult::new();
-        let a = g.graph.add_node(());
-        let b = g.graph.add_node(());
-        let c = g.graph.add_node(());
-        g.graph.add_edge(a, b, 0.8);
-        g.graph.add_edge(b, c, 0.5);
-
-        g.node_read_ids = vec![
-            ("qA:65".to_string(), Some("qA:129".to_string())),
-            ("qB:65".to_string(), None),
-            ("qC:65".to_string(), Some("qC:129".to_string())),
-        ];
-        g.read_hap_vectors.insert("qA:65".to_string(), vec![1, 1, 1]);
-        g.read_error_vectors.insert("qA:65".to_string(), vec![0.01, 0.01, 0.01]);
-
-        let wm = Array2::<f32>::zeros((3, 3));
-        let pi = phasing_input_from_graph(&g, wm, 0.301);
-
-        // edges (order follows edge_indices insertion)
-        assert_eq!(pi.edges, vec![(0, 1), (1, 2)]);
-        // node_read_ids flattened, None mate dropped
-        assert_eq!(pi.node_read_ids[0], vec!["qA:65".to_string(), "qA:129".to_string()]);
-        assert_eq!(pi.node_read_ids[1], vec!["qB:65".to_string()]);
-        // per-read vectors threaded through
-        assert_eq!(pi.read_hap["qA:65"], vec![1, 1, 1]);
-        assert_eq!(pi.read_err["qA:65"], vec![0.01, 0.01, 0.01]);
-        assert_eq!(pi.weight_matrix.dim(), (3, 3));
     }
 }

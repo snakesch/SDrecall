@@ -33,7 +33,7 @@ pub mod phasing;
 // HP tag output
 pub mod hp_writer;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 pub use phasing::{phase, qname_partition, PhasingInput, Round};
@@ -195,20 +195,36 @@ fn build_vertex_qname(
     vertex_qname
 }
 
-/// High-level API: BAM → HP-tagged BAM.
+/// The phasing partition for one BAM — the shared output of the standalone
+/// [`phase_bam`] and the pipeline's `fp_control::run_fp_control`.
 ///
-/// Validates input (short reads, paired-end), builds the phasing graph, phases
-/// reads into haplotypes, and writes an HP-tagged output BAM.
-pub fn phase_bam(
+/// Produced by [`build_and_phase`], which runs the BAM → graph → GCE-partition
+/// stages once so neither caller re-implements that wiring.
+#[derive(Clone, Debug)]
+pub struct PhasedReads {
+    /// vertex index → haplotype id (Python `qname_hap_info`).
+    pub vertex_hap: HashMap<i32, i32>,
+    /// vertex index → qname.
+    pub vertex_qname: Vec<String>,
+    /// Reads dropped as low quality during BAM reading. The pipeline threads
+    /// these into haplotype inspection; the standalone phaser ignores them.
+    pub lowqual_qnames: HashSet<String>,
+}
+
+/// BAM → phasing graph → GCE partition: the shared core of the standalone phaser
+/// ([`phase_bam`]) and the fused FP-control pipeline (`fp_control::run_fp_control`).
+///
+/// Runs stages 1–2 — read+pair the BAM, build the allele-depth map and phasing
+/// graph, then phase the weight matrix. Returns `Ok(None)` for the single
+/// early-out both callers special-case: the graph has no weight matrix (no ALT
+/// alleles). The downstream gates differ between callers (the phaser writes an
+/// unphased BAM; fp-control skips the island / applies the ≤2-vertex and
+/// ≤2-haplotype shortcuts), so they stay with the callers.
+pub fn build_and_phase(
     bam: &str,
     reference: &str,
-    output_bam: &str,
     params: &PhaserParams,
-) -> Result<PhaserOutput> {
-    validate_input(bam)?;
-
-    // Stage 1: BAM → phasing graph
-    log::info!("[phase_bam] Stage 1: building phasing graph from {bam}");
+) -> Result<Option<PhasedReads>> {
     let (read_pair_map, header) = bam_reading::migrate_bam_to_sorted_intervals_grouped(
         bam,
         params.mapq_cutoff,
@@ -217,7 +233,7 @@ pub fn phase_bam(
         true,
         params.threads,
     )
-    .map_err(|e| SdError::Compute(format!("BAM read/pairing failed: {e}")))?;
+    .map_err(|e| SdError::Compute(format!("BAM read/pairing failed for {bam}: {e}")))?;
 
     let allele_depth_map = bam_reading::build_allele_depth_map(
         bam,
@@ -225,14 +241,44 @@ pub fn phase_bam(
         params.mapq_cutoff,
         params.basequal_median_cutoff,
     )
-    .map_err(|e| SdError::Compute(format!("allele-depth map failed: {e}")))?;
+    .map_err(|e| SdError::Compute(format!("allele-depth map failed for {bam}: {e}")))?;
 
     let config = structs::HaplotypeConfig::new(params.mean_read_length);
     let graph = graph_builder::build_phasing_graph(&read_pair_map, &allele_depth_map, &header, &config)
-        .map_err(|e| SdError::Compute(format!("graph build failed: {e}")))?;
+        .map_err(|e| SdError::Compute(format!("graph build failed for {bam}: {e}")))?;
 
     let weight_matrix = match graph.weight_matrix {
         Some(ref wm) => wm.clone(),
+        None => return Ok(None),
+    };
+
+    let n = graph.graph.node_count();
+    let vertex_qname = build_vertex_qname(&read_pair_map, n);
+    let phasing_input = phasing_input_from_graph(&graph, weight_matrix, params.edge_weight_cutoff);
+    let vertex_hap = phase(&phasing_input);
+
+    Ok(Some(PhasedReads {
+        vertex_hap,
+        vertex_qname,
+        lowqual_qnames: graph.lowqual_qnames,
+    }))
+}
+
+/// High-level API: BAM → HP-tagged BAM.
+///
+/// Validates input (short reads, paired-end), builds + phases the graph via
+/// [`build_and_phase`], and writes an HP-tagged output BAM.
+pub fn phase_bam(
+    bam: &str,
+    reference: &str,
+    output_bam: &str,
+    params: &PhaserParams,
+) -> Result<PhaserOutput> {
+    validate_input(bam)?;
+
+    log::info!("[phase_bam] building + phasing graph from {bam}");
+    let phased = match build_and_phase(bam, reference, params)? {
+        Some(p) => p,
         None => {
             log::warn!("[phase_bam] no ALT alleles / empty weight matrix; writing unphased BAM");
             let n_tagged = hp_writer::write_hp_tagged_bam(
@@ -250,29 +296,23 @@ pub fn phase_bam(
         }
     };
 
-    let n = graph.graph.node_count();
-    let vertex_qname = build_vertex_qname(&read_pair_map, n);
-
-    // Stage 2: phase
-    log::info!("[phase_bam] Stage 2: phasing {n} vertices");
-    let phasing_input = phasing_input_from_graph(&graph, weight_matrix, params.edge_weight_cutoff);
-    let vertex_hap = phase(&phasing_input);
-
     let n_haplotypes = {
-        let mut hap_ids: Vec<i32> = vertex_hap.values().copied().collect();
+        let mut hap_ids: Vec<i32> = phased.vertex_hap.values().copied().collect();
         hap_ids.sort_unstable();
         hap_ids.dedup();
         hap_ids.len()
     };
-    log::info!("[phase_bam] phasing produced {n_haplotypes} haplotype clusters over {} vertices", vertex_hap.len());
+    log::info!(
+        "[phase_bam] phasing produced {n_haplotypes} haplotype clusters over {} vertices",
+        phased.vertex_hap.len()
+    );
 
-    // Stage 3: write HP-tagged BAM
-    log::info!("[phase_bam] Stage 3: writing HP-tagged BAM to {output_bam}");
+    log::info!("[phase_bam] writing HP-tagged BAM to {output_bam}");
     let n_tagged = hp_writer::write_hp_tagged_bam(
         bam,
         output_bam,
-        &vertex_hap,
-        &vertex_qname,
+        &phased.vertex_hap,
+        &phased.vertex_qname,
         params.threads,
     )?;
 
