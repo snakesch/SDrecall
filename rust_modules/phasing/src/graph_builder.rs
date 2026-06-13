@@ -567,38 +567,89 @@ fn find_uncovered_regions(
     query_end: i64,
 ) -> Vec<[i64; 2]> {
     let (existing_starts, existing_ends) = inspected_overlaps.get_intervals();
-    
+
     if existing_starts.is_empty() {
         return vec![[query_start, query_end]];
     }
-    
-    // Find overlapping intervals using binary search logic
-    let overlaps: Vec<bool> = existing_starts.iter().zip(existing_ends.iter())
-        .map(|(&start, &end)| start <= query_end && end >= query_start)
+
+    // Collect the inspected intervals that actually overlap the query, then sort
+    // them by start. The forward sweep below only advances `current_start`, so it
+    // is correct ONLY when the intervals are in ascending-start order — but
+    // get_overlap_intervals emits them in read-combination order and
+    // FastIntervals::add stores them verbatim, so they can arrive unsorted (which
+    // made the sweep re-count or skip a region). Sorting makes the subtraction
+    // order-independent; no merge is needed because the cursor uses max(), which
+    // absorbs nested / mutually-overlapping inspected intervals.
+    let mut covering: Vec<(i64, i64)> = existing_starts
+        .iter()
+        .zip(existing_ends.iter())
+        .filter(|(&start, &end)| start <= query_end && end >= query_start)
+        .map(|(&start, &end)| (start, end))
         .collect();
-    
-    if !overlaps.iter().any(|&x| x) {
+
+    if covering.is_empty() {
         return vec![[query_start, query_end]];
     }
-    
-    // Pre-allocate result vector
+    covering.sort_unstable_by_key(|&(start, _)| start);
+
     let mut result = Vec::new();
     let mut current_start = query_start;
-    
-    for (i, &overlaps_i) in overlaps.iter().enumerate() {
-        if overlaps_i {
-            if existing_starts[i] > current_start {
-                result.push([current_start, existing_starts[i]]);
-            }
-            current_start = current_start.max(existing_ends[i]);
+    for (start, end) in covering {
+        if start > current_start {
+            result.push([current_start, start]);
         }
+        current_start = current_start.max(end);
     }
-    
+
     if current_start < query_end {
         result.push([current_start, query_end]);
     }
-    
+
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_uncovered_regions;
+    use crate::structs::FastIntervals;
+
+    fn intervals(pairs: &[(i64, i64)]) -> FastIntervals {
+        let mut fi = FastIntervals::new(pairs.len().max(1));
+        for &(s, e) in pairs {
+            fi.add(s, e);
+        }
+        fi
+    }
+
+    #[test]
+    fn uncovered_regions_independent_of_insertion_order() {
+        // Inspected intervals supplied OUT of coordinate order — the shape
+        // get_overlap_intervals can produce. Both orders must subtract identically.
+        // Pre-fix, the out-of-order case wrongly returned [[0,100],[150,200]],
+        // re-counting [10,50].
+        let want = vec![[0, 10], [50, 100], [150, 200]];
+        assert_eq!(find_uncovered_regions(&intervals(&[(100, 150), (10, 50)]), 0, 200), want);
+        assert_eq!(find_uncovered_regions(&intervals(&[(10, 50), (100, 150)]), 0, 200), want);
+    }
+
+    #[test]
+    fn uncovered_regions_handles_nested_and_fully_covered() {
+        // Nested inspected interval (20,25) inside (10,30): the max() cursor absorbs it.
+        assert_eq!(
+            find_uncovered_regions(&intervals(&[(10, 30), (20, 25)]), 0, 100),
+            vec![[0, 10], [30, 100]]
+        );
+        // Query fully covered → no uncovered regions.
+        assert_eq!(
+            find_uncovered_regions(&intervals(&[(0, 100)]), 10, 90),
+            Vec::<[i64; 2]>::new()
+        );
+        // No inspected interval overlaps the query → whole query uncovered.
+        assert_eq!(
+            find_uncovered_regions(&intervals(&[(500, 600)]), 0, 100),
+            vec![[0, 100]]
+        );
+    }
 }
 
 /// Check if any element in the array is false (-1 in this case)
