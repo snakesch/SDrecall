@@ -3,30 +3,50 @@ name = "phasing"
 version = "0.1.0"
 edition = "2021"
 
-# Release profile optimization is inherited from the workspace.
-
 [lib]
 name = "phasing"
 path = "src/lib.rs"
+crate-type = ["rlib"]
+doctest = false
 
 [[bin]]
 name = "phasing"
 path = "src/main.rs"
 
 [dependencies]
-# Core numerics — pinned to the same ndarray the other crates use (T3 plan).
-ndarray = "0.15"
+# BAM/SAM handling
+rust-htslib = { workspace = true }
+
+# Data structures
+ahash = "0.8"
+rustc-hash = "1.1"
+petgraph = "0.6"
+
+# Numerics
+ndarray = { version = "0.15", features = ["blas"] }
+half = { version = "2.6", features = ["num-traits", "bytemuck", "serde"] }
+statrs = "0.16"
+order-stat = "0.1"
+
+# I/O & temp files
+tempfile = "3.8"
+
+# Logging & parallelism
 log = "0.4"
 rayon = { workspace = true }
 
-# Binary (CLI / differential harness) I/O. Kept lib-free so a future T4 fuse can
-# depend on the library without dragging these in (they can move behind a feature).
+# CLI
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.11"
 anyhow = { workspace = true }
+
+# Shared types
+sdrecall-utils = { path = "../sdrecall-utils" }
+
+[dev-dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ndarray-npy = "0.8"
-clap = { version = "4", features = ["derive"] }
-env_logger = "0.11"
 
 [lints]
 workspace = true

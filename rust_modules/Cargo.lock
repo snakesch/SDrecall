@@ -291,25 +291,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "build_phasing_graph"
-version = "0.1.0"
-dependencies = [
- "ahash",
- "half",
- "log",
- "ndarray",
- "numpy",
- "order-stat",
- "petgraph 0.6.5",
- "pyo3",
- "pyo3-log",
- "rust-htslib",
- "rustc-hash 1.1.0",
- "statrs 0.16.1",
- "tempfile",
-]
-
-[[package]]
 name = "bv"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -730,7 +711,6 @@ dependencies = [
 name = "fp-control"
 version = "0.1.0"
 dependencies = [
- "build_phasing_graph",
  "clap",
  "haplotype_inspection",
  "log",
@@ -1629,15 +1609,24 @@ dependencies = [
 name = "phasing"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "anyhow",
  "clap",
  "env_logger",
+ "half",
  "log",
  "ndarray",
  "ndarray-npy",
+ "order-stat",
+ "petgraph 0.6.5",
  "rayon",
+ "rust-htslib",
+ "rustc-hash 1.1.0",
+ "sdrecall-utils",
  "serde",
  "serde_json",
+ "statrs 0.16.1",
+ "tempfile",
 ]
 
 [[package]]

@@ -22,11 +22,11 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use build_phasing_graph::bam_reading::{
+use phasing::bam_reading::{
     build_allele_depth_map, migrate_bam_to_sorted_intervals_grouped,
 };
-use build_phasing_graph::graph_builder::build_phasing_graph;
-use build_phasing_graph::structs::HaplotypeConfig;
+use phasing::graph_builder::build_phasing_graph;
+use phasing::structs::HaplotypeConfig;
 use clap::Parser;
 use fp_control::{run_fp_control, FpControlParams};
 use haplotype_inspection::identify_misaligned_haps::inspect_haplotypes;

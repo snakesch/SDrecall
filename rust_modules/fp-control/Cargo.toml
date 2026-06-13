@@ -25,11 +25,8 @@ path = "src/bin/fp_control.rs"
 # Release profile is defined once at the workspace root (rust_modules/Cargo.toml).
 
 [dependencies]
-# The three Phase-2c stage libraries this crate fuses. Path deps; depending on
-# build_phasing_graph / haplotype_inspection transitively pulls pyo3/numpy (their
-# cdylib deps) — acceptable transitional cruft for the fuse (removed when those
-# crates drop PyO3 at T9). `cargo test`/bins DO link under the SDrecall conda env.
-build_phasing_graph = { path = "../build_phasing_graph" }
+# Phase-2c stage libraries. `phasing` now includes graph construction (merged
+# from build_phasing_graph). `haplotype_inspection` is the inspection stage.
 phasing = { path = "../phasing" }
 haplotype_inspection = { path = "../haplotype_inspection" }
 

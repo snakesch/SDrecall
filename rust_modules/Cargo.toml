@@ -1,5 +1,5 @@
 [workspace]
-members = ["read_extraction", "build_phasing_graph", "haplotype_inspection", "phasing", "sdrecall-utils", "sdrecall-io", "nm-stats", "vcf-ops", "region-prep", "fp-control", "sd-prep", "sdrecall"]
+members = ["read_extraction", "haplotype_inspection", "phasing", "sdrecall-utils", "sdrecall-io", "nm-stats", "vcf-ops", "region-prep", "fp-control", "sd-prep", "sdrecall"]
 resolver = "2"
 
 # Optimize for release builds (important for Python modules)

@@ -41,12 +41,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use build_phasing_graph::bam_reading::{build_allele_depth_map, migrate_bam_to_sorted_intervals_grouped};
-use build_phasing_graph::graph_builder::build_phasing_graph;
-use build_phasing_graph::structs::HaplotypeConfig;
+use phasing::bam_reading::{build_allele_depth_map, migrate_bam_to_sorted_intervals_grouped};
+use phasing::graph_builder::build_phasing_graph as build_graph;
+use phasing::structs::HaplotypeConfig;
+use phasing::{phase, phasing_input_from_graph};
 use haplotype_inspection::identify_misaligned_haps::inspect_haplotypes;
-use ndarray::Array2;
-use phasing::{phase, PhasingInput};
 use sdrecall_utils::{Result, SdError};
 
 /// Parameters for one fused FP-control island run, mirroring the per-chunk
@@ -181,7 +180,7 @@ pub fn run_fp_control(
     .map_err(|e| SdError::Compute(format!("allele-depth map failed for {bam}: {e}")))?;
 
     let config = HaplotypeConfig::new(params.mean_read_length);
-    let graph = build_phasing_graph(&read_pair_map, &allele_depth_map, &header, &config)
+    let graph = build_graph(&read_pair_map, &allele_depth_map, &header, &config)
         .map_err(|e| SdError::Compute(format!("graph build failed for {bam}: {e}")))?;
 
     // Early-out #1: same gate as `build_phasing_graph_rust` (None → skip island).
@@ -269,61 +268,6 @@ pub fn run_fp_control(
     Ok(Some(FpControlOutput::from_sets(correct, mismap)))
 }
 
-/// Assemble the phasing-stage input from the graph result.
-///
-/// * `edges`: the phasing graph's undirected edges (`source.index()`,
-///   `target.index()`), exactly what `python_bindings::export_graph_result_to_python`
-///   exports and what `PhasingInput.edges` (positive-weight overlaps) expects.
-/// * `node_read_ids`: per-vertex read ids; drop the `None` mate so the shape is
-///   `Vec<Vec<String>>`.
-/// * `read_hap` / `read_err`: the per-read vectors, keyed by `"{qname}:{flag}"`
-///   (the same read-id key `node_read_ids` uses), converted from the graph's
-///   ahash maps to the std `HashMap` the phasing API takes.
-fn phasing_input_from_graph(
-    graph: &build_phasing_graph::structs::PhasingGraphResult,
-    weight_matrix: Array2<f32>,
-    edge_weight_cutoff: f32,
-) -> PhasingInput {
-    let edges: Vec<(i32, i32)> = graph
-        .graph
-        .edge_indices()
-        .filter_map(|e| {
-            graph
-                .graph
-                .edge_endpoints(e)
-                .map(|(s, t)| (s.index() as i32, t.index() as i32))
-        })
-        .collect();
-
-    let node_read_ids: Vec<Vec<String>> = graph
-        .node_read_ids
-        .iter()
-        .map(|(id1, id2)| match id2 {
-            Some(id2) => vec![id1.clone(), id2.clone()],
-            None => vec![id1.clone()],
-        })
-        .collect();
-
-    let read_hap: HashMap<String, Vec<i16>> = graph
-        .read_hap_vectors
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-    let read_err: HashMap<String, Vec<f32>> = graph
-        .read_error_vectors
-        .iter()
-        .map(|(k, v)| (k.clone(), v.clone()))
-        .collect();
-
-    PhasingInput {
-        weight_matrix,
-        edges,
-        edge_weight_cutoff,
-        node_read_ids,
-        read_hap,
-        read_err,
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -378,7 +322,7 @@ mod tests {
     /// vector maps through unchanged. Built on a tiny hand-made graph result.
     #[test]
     fn phasing_input_glue_shapes_match() {
-        use build_phasing_graph::structs::PhasingGraphResult;
+        use phasing::structs::PhasingGraphResult;
 
         let mut g = PhasingGraphResult::new();
         let a = g.graph.add_node(());

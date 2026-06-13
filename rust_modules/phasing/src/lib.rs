@@ -1,16 +1,321 @@
-//! Haplotype phasing — pure-Rust port of `fp_control/phasing.py` + the Greedy-Clique-Expansion
-//! core in `fp_control/gce_algorithm.py` (T3 of the SDrecall Rust migration).
+//! Standalone BAM phaser for paired short-read data.
 //!
-//! Given a phasing graph (weight matrix + edge set) it clusters read-pairs into haplotypes,
-//! producing the same two maps the Python pipeline emits:
-//!   * `vertex -> hap_id`        (`qname_hap_info`, keyed by vertex index)
-//!   * `hap_id -> {qname}`       (`hap_qname_info`)
+//! Given a BAM file and reference FASTA, builds a phasing graph from read-pair
+//! overlaps, clusters reads into haplotypes via Greedy-Clique-Expansion, and
+//! writes an HP-tagged BAM (`HP:Z:hap{N}` per read).
 //!
-//! The haplotype labels are arbitrary, so the validated invariant is the **partition** of
-//! qnames (compared up to relabeling against the dumped Python output).
+//! ## High-level API
+//!
+//! ```no_run
+//! use phasing::{phase_bam, PhaserParams};
+//! let out = phase_bam("in.bam", "ref.fa", "out.bam", &PhaserParams::default()).unwrap();
+//! ```
+//!
+//! ## Mid-level API (used by fp-control)
+//!
+//! The individual stages are public modules:
+//! - [`bam_reading`] — BAM → ReadPairMap + AlleleDepthMap
+//! - [`graph_builder`] — ReadPairMap → PhasingGraphResult
+//! - [`phasing`] — weight matrix → vertex→haplotype partition
+//! - [`hp_writer`] — partition → HP-tagged BAM
 
+// Graph construction (from build_phasing_graph)
+pub mod bam_reading;
+pub mod graph_builder;
+pub mod haplotype_determination;
+pub mod structs;
+
+// Phasing algorithm
 pub mod kernels;
 pub mod gce;
 pub mod phasing;
 
+// HP tag output
+pub mod hp_writer;
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+
 pub use phasing::{phase, qname_partition, PhasingInput, Round};
+
+use sdrecall_utils::{Result, SdError};
+
+/// Parameters for the standalone BAM phaser.
+#[derive(Clone, Debug)]
+pub struct PhaserParams {
+    pub reference_genome: String,
+    pub edge_weight_cutoff: f32,
+    pub mean_read_length: f32,
+    pub mapq_cutoff: u8,
+    pub basequal_median_cutoff: u8,
+    pub threads: u8,
+}
+
+impl Default for PhaserParams {
+    fn default() -> Self {
+        Self {
+            reference_genome: String::new(),
+            edge_weight_cutoff: 0.301,
+            mean_read_length: 148.0,
+            mapq_cutoff: 10,
+            basequal_median_cutoff: 10,
+            threads: 4,
+        }
+    }
+}
+
+/// Output from the standalone BAM phaser.
+#[derive(Clone, Debug)]
+pub struct PhaserOutput {
+    pub output_bam: PathBuf,
+    pub n_reads: usize,
+    pub n_haplotypes: usize,
+}
+
+/// Assemble the phasing-stage input from the graph result.
+///
+/// Extracts edges, flattens node_read_ids, converts ahash maps to std HashMap.
+/// Previously lived in fp-control as glue between the two separate crates.
+pub fn phasing_input_from_graph(
+    graph: &structs::PhasingGraphResult,
+    weight_matrix: ndarray::Array2<f32>,
+    edge_weight_cutoff: f32,
+) -> PhasingInput {
+    let edges: Vec<(i32, i32)> = graph
+        .graph
+        .edge_indices()
+        .filter_map(|e| {
+            graph
+                .graph
+                .edge_endpoints(e)
+                .map(|(s, t)| (s.index() as i32, t.index() as i32))
+        })
+        .collect();
+
+    let node_read_ids: Vec<Vec<String>> = graph
+        .node_read_ids
+        .iter()
+        .map(|(id1, id2)| match id2 {
+            Some(id2) => vec![id1.clone(), id2.clone()],
+            None => vec![id1.clone()],
+        })
+        .collect();
+
+    let read_hap: HashMap<String, Vec<i16>> = graph
+        .read_hap_vectors
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let read_err: HashMap<String, Vec<f32>> = graph
+        .read_error_vectors
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+
+    PhasingInput {
+        weight_matrix,
+        edges,
+        edge_weight_cutoff,
+        node_read_ids,
+        read_hap,
+        read_err,
+    }
+}
+
+/// Validate that the BAM contains paired short reads.
+///
+/// Reads the first ~1000 primary records and checks:
+/// - Most reads have the paired flag set
+/// - Median sequence length < 1000 bp (short-read threshold)
+fn validate_input(bam: &str) -> Result<()> {
+    use rust_htslib::bam::{self, Read};
+
+    let mut reader =
+        bam::Reader::from_path(bam).map_err(|e| SdError::Htslib(format!("cannot open {bam}: {e}")))?;
+
+    let mut paired_count = 0u32;
+    let mut total_count = 0u32;
+    let mut lengths: Vec<usize> = Vec::with_capacity(1000);
+
+    for result in reader.records() {
+        let rec = result.map_err(|e| SdError::Htslib(format!("BAM read error: {e}")))?;
+        if rec.is_secondary() || rec.is_supplementary() {
+            continue;
+        }
+        total_count += 1;
+        if rec.is_paired() {
+            paired_count += 1;
+        }
+        lengths.push(rec.seq_len());
+        if total_count >= 1000 {
+            break;
+        }
+    }
+
+    if total_count == 0 {
+        return Err(SdError::Compute("BAM file contains no primary alignments".into()));
+    }
+
+    let paired_frac = paired_count as f64 / total_count as f64;
+    if paired_frac < 0.9 {
+        return Err(SdError::Compute(format!(
+            "BAM does not appear to be paired-end ({:.0}% of first {total_count} reads are paired; need >=90%)",
+            paired_frac * 100.0
+        )));
+    }
+
+    lengths.sort_unstable();
+    let median_len = lengths[lengths.len() / 2];
+    if median_len >= 1000 {
+        return Err(SdError::Compute(format!(
+            "BAM appears to contain long reads (median length {median_len} bp >= 1000); \
+             this tool is designed for short-read paired-end data"
+        )));
+    }
+
+    log::info!(
+        "[validate_input] OK: {paired_count}/{total_count} paired, median read length {median_len} bp"
+    );
+    Ok(())
+}
+
+/// Build the vertex_idx → qname lookup from a ReadPairMap.
+fn build_vertex_qname(
+    read_pair_map: &structs::ReadPairMap,
+    n: usize,
+) -> Vec<String> {
+    let mut vertex_qname = vec![String::new(); n];
+    for (&qname_idx, rp) in &read_pair_map.readpair_dict {
+        if qname_idx < n {
+            vertex_qname[qname_idx] = rp.qname.clone();
+        }
+    }
+    vertex_qname
+}
+
+/// High-level API: BAM → HP-tagged BAM.
+///
+/// Validates input (short reads, paired-end), builds the phasing graph, phases
+/// reads into haplotypes, and writes an HP-tagged output BAM.
+pub fn phase_bam(
+    bam: &str,
+    _reference: &str,
+    output_bam: &str,
+    params: &PhaserParams,
+) -> Result<PhaserOutput> {
+    validate_input(bam)?;
+
+    // Stage 1: BAM → phasing graph
+    log::info!("[phase_bam] Stage 1: building phasing graph from {bam}");
+    let (read_pair_map, header) = bam_reading::migrate_bam_to_sorted_intervals_grouped(
+        bam,
+        params.mapq_cutoff,
+        params.basequal_median_cutoff,
+        true,
+        true,
+        params.threads,
+    )
+    .map_err(|e| SdError::Compute(format!("BAM read/pairing failed: {e}")))?;
+
+    let allele_depth_map = bam_reading::build_allele_depth_map(
+        bam,
+        &params.reference_genome,
+        params.mapq_cutoff,
+        params.basequal_median_cutoff,
+    )
+    .map_err(|e| SdError::Compute(format!("allele-depth map failed: {e}")))?;
+
+    let config = structs::HaplotypeConfig::new(params.mean_read_length);
+    let graph = graph_builder::build_phasing_graph(&read_pair_map, &allele_depth_map, &header, &config)
+        .map_err(|e| SdError::Compute(format!("graph build failed: {e}")))?;
+
+    let weight_matrix = match graph.weight_matrix {
+        Some(ref wm) => wm.clone(),
+        None => {
+            log::warn!("[phase_bam] no ALT alleles / empty weight matrix; writing unphased BAM");
+            let n_tagged = hp_writer::write_hp_tagged_bam(
+                bam,
+                output_bam,
+                &HashMap::new(),
+                &[],
+                params.threads,
+            )?;
+            return Ok(PhaserOutput {
+                output_bam: PathBuf::from(output_bam),
+                n_reads: n_tagged,
+                n_haplotypes: 0,
+            });
+        }
+    };
+
+    let n = graph.graph.node_count();
+    let vertex_qname = build_vertex_qname(&read_pair_map, n);
+
+    // Stage 2: phase
+    log::info!("[phase_bam] Stage 2: phasing {n} vertices");
+    let phasing_input = phasing_input_from_graph(&graph, weight_matrix, params.edge_weight_cutoff);
+    let vertex_hap = phase(&phasing_input);
+
+    let n_haplotypes = {
+        let mut hap_ids: Vec<i32> = vertex_hap.values().copied().collect();
+        hap_ids.sort_unstable();
+        hap_ids.dedup();
+        hap_ids.len()
+    };
+    log::info!("[phase_bam] phasing produced {n_haplotypes} haplotype clusters over {} vertices", vertex_hap.len());
+
+    // Stage 3: write HP-tagged BAM
+    log::info!("[phase_bam] Stage 3: writing HP-tagged BAM to {output_bam}");
+    let n_tagged = hp_writer::write_hp_tagged_bam(
+        bam,
+        output_bam,
+        &vertex_hap,
+        &vertex_qname,
+        params.threads,
+    )?;
+
+    Ok(PhaserOutput {
+        output_bam: PathBuf::from(output_bam),
+        n_reads: n_tagged,
+        n_haplotypes,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ndarray::Array2;
+
+    #[test]
+    fn phasing_input_glue_shapes_match() {
+        let mut g = structs::PhasingGraphResult::new();
+        let a = g.graph.add_node(());
+        let b = g.graph.add_node(());
+        let c = g.graph.add_node(());
+        g.graph.add_edge(a, b, 0.8);
+        g.graph.add_edge(b, c, 0.5);
+
+        g.node_read_ids = vec![
+            ("qA:65".to_string(), Some("qA:129".to_string())),
+            ("qB:65".to_string(), None),
+            ("qC:65".to_string(), Some("qC:129".to_string())),
+        ];
+        g.read_hap_vectors
+            .insert("qA:65".to_string(), vec![1, 1, 1]);
+        g.read_error_vectors
+            .insert("qA:65".to_string(), vec![0.01, 0.01, 0.01]);
+
+        let wm = Array2::<f32>::zeros((3, 3));
+        let pi = phasing_input_from_graph(&g, wm, 0.301);
+
+        assert_eq!(pi.edges, vec![(0, 1), (1, 2)]);
+        assert_eq!(
+            pi.node_read_ids[0],
+            vec!["qA:65".to_string(), "qA:129".to_string()]
+        );
+        assert_eq!(pi.node_read_ids[1], vec!["qB:65".to_string()]);
+        assert_eq!(pi.read_hap["qA:65"], vec![1, 1, 1]);
+        assert_eq!(pi.read_err["qA:65"], vec![0.01, 0.01, 0.01]);
+        assert_eq!(pi.weight_matrix.dim(), (3, 3));
+    }
+}
