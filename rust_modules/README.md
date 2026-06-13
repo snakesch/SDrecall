@@ -36,9 +36,8 @@ Two **foundation crates** hold the shared plumbing so no stage re-implements it:
 | `sdrecall-utils` | shared types, errors, logging, parallelism math — **no file I/O** | — (library) | `utils.py` / `log.py` / `const.py` helpers |
 | `sdrecall-io` | in-process BAM/BED/VCF/GraphML/TSV + insert-size I/O | — (library) | `utils.py` I/O, `insert_size.py` |
 | `read_extraction` | BAM → FASTQ (region/multi-align filtered) | — (lib + PyO3) | `realign_recall` read extraction |
-| `build_phasing_graph` | BAM → phasing graph + weight matrix | — (lib + PyO3) | `fp_control/graph_build.py` |
 | `haplotype_inspection` | consensus / similarity / BILC solve | — (lib + PyO3) | `fp_control/identify_misaligned_haps.py` |
-| `phasing` | graph phasing + GCE partition | bin = diff harness | `fp_control/phasing.py` + `gce_algorithm.py` |
+| `phasing` | BAM → phasing graph + weight matrix → GCE partition → HP-tagged BAM | bin = phaser + diff harness | `fp_control/graph_build.py` + `phasing.py` + `gce_algorithm.py` |
 | `region-prep` | per-RG fc/nfc realignment-region projection | `region-prep` | `prepare_masked_align_region.py` |
 | `fp-control` | **fused** Phase-2c: graph → phasing → inspect → BILC | `fp-control` | `realign_filter_per_cov.py` wiring |
 | `vcf-ops` | priority VCF merge + inhouse-common annotation | `vcf-ops` | `merge_variants_with_priority.py`, `identify_common_vars.py` |
@@ -46,11 +45,12 @@ Two **foundation crates** hold the shared plumbing so no stage re-implements it:
 | `sd-prep` | Phase-1 SD graph + region prep (**partial CLI**) | `sd-prep` (graph/mask) | `prepare_recall_regions.py` + `preparation/*` |
 | `sdrecall` | **top-level orchestrator** — threads all stages | `sdrecall` | `SDrecall` CLI + `realign_and_recall.py` + `misalignment_elimination.py` |
 
-`read_extraction`, `build_phasing_graph` and `haplotype_inspection` are the
-oldest crates and still ship a **PyO3 `cdylib`** so the in-flight Python pipeline
-can call them during differential validation; they expose pure-Rust `rlib` APIs
-too (this is what the orchestrator links). PyO3 is transitional and retired
-stage-by-stage.
+`read_extraction` and `haplotype_inspection` are the oldest crates and still ship
+a **PyO3 `cdylib`** so the in-flight Python pipeline can call them during
+differential validation; they expose pure-Rust `rlib` APIs too (this is what the
+orchestrator links). The graph builder absorbed from the former
+`build_phasing_graph` crate now lives in `phasing` (pure-Rust, no `cdylib`). PyO3
+is transitional and retired stage-by-stage.
 
 ---
 
@@ -189,7 +189,7 @@ cargo run -p nm-stats --release -- \
   edit-distance cutoff and the sampled mean) — same shape as the Python dump.
 
 #### `fp-control` — fused Phase-2c FP control (the headline hotspot)
-Runs `build_phasing_graph → phasing → haplotype_inspection` on one island BAM
+Runs `phasing` (graph build + GCE) → `haplotype_inspection` on one island BAM
 in a single in-process call.
 ```bash
 cargo run -p fp-control --release -- \
@@ -276,12 +276,13 @@ cargo run -p phasing --release -- --path <dump_root>/island_7 --single
   FASTQ files of reads overlapping the regions (`multi_aligned` toggles the
   multi-alignment recruitment filter).
 
-#### `build_phasing_graph` / `haplotype_inspection` — Phase-2c kernels (library + PyO3)
-The compute core of `fp-control`: BAM → phasing graph + weight matrix
-(`build_phasing_graph`) and consensus / similarity / BILC solve
-(`haplotype_inspection`). Called in-process by `fp-control`; still shipping a
-PyO3 `cdylib` for the transitional hybrid pipeline. No standalone stage CLI —
-exercise them via the `examples/` harnesses (next section).
+#### `phasing` / `haplotype_inspection` — Phase-2c kernels
+The compute core of `fp-control`: BAM → phasing graph + weight matrix → GCE
+partition (`phasing`, which absorbed the former `build_phasing_graph` crate) and
+consensus / similarity / BILC solve (`haplotype_inspection`). Called in-process
+by `fp-control`; `haplotype_inspection` still ships a PyO3 `cdylib` for the
+transitional hybrid pipeline, while `phasing` is pure-Rust with a standalone
+phaser binary + a differential `examples/` harness.
 
 ---
 

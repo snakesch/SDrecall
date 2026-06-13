@@ -40,24 +40,27 @@ mamba env create -f ./SDrecall.yml --channel-priority flexible
 mamba activate SDrecall
 ```
 
-#### Step 3: Install the Rust modules
+#### Step 3: Install the Rust read-extraction module
 
-SDrecall uses two Rust modules for performance-critical operations. After activating the SDrecall environment, install both modules:
+The Python pipeline uses a Rust module for fast read extraction. After
+activating the SDrecall environment, install it:
 
 ```bash
-# Install prebuilt wheels from PyPI (recommended)
-pip install build-phasing-graph rust-read-extraction
+# Install the prebuilt wheel from PyPI (recommended)
+pip install rust-read-extraction
 ```
 
 Alternatively, build from source (requires Rust toolchain already included in conda env):
 
 ```bash
-# Build phasing graph module
-maturin develop --manifest-path rust_modules/build_phasing_graph/Cargo.toml
-
 # Build read extraction module
 maturin develop --manifest-path rust_modules/read_extraction/Cargo.toml
 ```
+
+> Graph-based phasing — previously the separate `build_phasing_graph` PyO3
+> module — has been folded into the in-process Rust workspace (the `phasing`
+> crate); see the [Rust workspace](#rust-workspace-in-progress-full-rust-migration)
+> section below.
 
 #### Step 4: Verify installation (optional)
 
@@ -71,8 +74,8 @@ export PATH="$(pwd):$PATH"
 
 #### Notes
 
-- **build-phasing-graph**: Rust implementation for graph-based phasing (required)
 - **rust-read-extraction**: Fast BAM to FASTQ conversion with region filtering (optional, falls back to shell commands if not installed)
+- Graph-based phasing has moved into the in-process Rust workspace (the `phasing` crate); it is no longer a separately installed PyO3 wheel.
 - The BILC stage now weights paralogous sequence variants (PSVs) more heavily when scoring haplotypes, which significantly improves misalignment filtering.
 
 ### Using docker/singularity
