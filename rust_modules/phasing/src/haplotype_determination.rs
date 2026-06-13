@@ -586,11 +586,19 @@ fn is_sequencing_error(
             debug!("[is_sequencing_error] Using chromosome: '{}' for position {}", chrom, genomic_pos);
             if let Some(pos_data) = allele_depth_map.get(&chrom, genomic_pos as u32) {
                 let target_base = query_seq[qi];
-                let ad = AlleleDepthMap::get_allele_depth(pos_data, target_base as usize);
+                // query_seq is raw ASCII (record.seq().as_bytes()), so encode it to the
+                // A=0,T=1,C=2,G=3,N=4 allele index — via the SAME base_to_index that
+                // build_allele_depth_map used to fill the array — before indexing it.
+                // The old `target_base as usize` passed the ASCII code (65..=84, always >=5),
+                // so get_allele_depth always returned 0 → af always 0.0 → the allele-frequency
+                // test was a no-op. Python seq_err_det_stacked_bases keys the dict by the
+                // encoded base, so this restores parity.
+                let allele_idx = crate::bam_reading::base_to_index(target_base as char);
+                let ad = AlleleDepthMap::get_allele_depth(pos_data, allele_idx);
                 let dp = AlleleDepthMap::total_depth(pos_data);
-                
-                debug!("[is_sequencing_error] Base at position {}: encoded={}, which is {}, AD={}, DP={}", 
-                       genomic_pos, target_base, target_base as char, ad, dp);
+
+                debug!("[is_sequencing_error] Base at position {}: '{}' -> allele_idx={}, AD={}, DP={}",
+                       genomic_pos, target_base as char, allele_idx, ad, dp);
                 
                 if dp == 0 {
                     debug!("[is_sequencing_error] Zero depth -> NOT a sequencing error");
@@ -615,8 +623,13 @@ fn is_sequencing_error(
                 
                 return is_error;
             } else {
-                debug!("[is_sequencing_error] No allele depth data for {}:{}, indicating 0 depth of the allele, CAN BE a sequencing error", chrom, genomic_pos);
-                return true;
+                // No pileup entry at this position → no evidence of a low-AF artifact.
+                // Python seq_err_det_stacked_bases hits dp == 0 here and returns False
+                // (NOT a sequencing error → the mismatch is treated as a real variant).
+                // The old `return true` diverged, over-tolerating mismatches and merging
+                // reads Python keeps on separate haplotypes.
+                debug!("[is_sequencing_error] No allele depth data for {}:{} -> treat as REAL variant (Python dp==0 -> False)", chrom, genomic_pos);
+                return false;
             }
         }
         Ok(None) => {

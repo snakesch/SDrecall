@@ -560,10 +560,14 @@ pub fn build_allele_depth_map(
 
 /// Convert DNA base to array index (more efficient than HashMap lookups)
 #[inline]
-fn base_to_index(base: char) -> usize {
+/// Canonical base → allele-depth-array index used to BOTH populate and query
+/// `PositionAlleleDepth` ([A, T, C, G, N, total]). Keeping a single mapping
+/// guarantees the lookup in `is_sequencing_error` indexes the same slot that
+/// `build_allele_depth_map` filled.
+pub(crate) fn base_to_index(base: char) -> usize {
     match base.to_ascii_uppercase() {
         'A' => 0,
-        'T' => 1, 
+        'T' => 1,
         'C' => 2,
         'G' => 3,
         _ => 4,  // N or any other base
