@@ -87,6 +87,10 @@ pub fn annotate_hp_tags(
             "LOWQUAL".to_string()
         };
 
+        // push_aux returns BamAuxTagAlreadyPresent on a duplicate tag; drop any
+        // existing HP first (remove_aux errs only when absent -> ignored) so
+        // pre-tagged input doesn't abort the whole BAM.
+        let _ = record.remove_aux(b"HP");
         record.push_aux(b"HP", Aux::String(&hp_tag)).map_err(hts_err)?;
         writer.write(&record).map_err(hts_err)?;
     }

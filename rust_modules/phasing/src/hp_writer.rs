@@ -55,6 +55,11 @@ pub fn write_hp_tagged_bam(
             None => "unphased".to_string(),
         };
 
+        // Replace any pre-existing HP tag: rust-htslib's push_aux returns
+        // BamAuxTagAlreadyPresent on a duplicate tag, which would abort the whole
+        // BAM on pre-phased/annotated input. remove_aux errs only when the tag is
+        // absent, which we ignore.
+        let _ = record.remove_aux(b"HP");
         record
             .push_aux(b"HP", Aux::String(&hp_tag))
             .map_err(|e| SdError::Compute(format!("push HP tag: {e}")))?;
