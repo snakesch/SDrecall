@@ -225,6 +225,16 @@ This example is targeting Challenging Medical Relevant Genes from Genome In A Bo
 ## Code development and feature requests
 SDrecall is now ready for production. We welcome all kinds of suggestions and collaborations.
 
+### Rust workspace (in-progress full-Rust migration)
+The performance-critical stages — and, increasingly, the whole pipeline — are
+being ported to a self-contained Rust binary (`sdrecall`) organized as a Cargo
+workspace of `lib + bin` crates under [`rust_modules/`](rust_modules/). For the
+workspace architecture, the in-process orchestration model, and a copy-pasteable
+command + input/output contract for **every module**, see
+[`rust_modules/README.md`](rust_modules/README.md). Migration status and
+per-task validation evidence live in
+[`docs/analysis/RUST_MIGRATION_SUMMARY.md`](docs/analysis/RUST_MIGRATION_SUMMARY.md).
+
 ## Contact and correspondence
 Xingtian Yang (yangyxt@hku.hk), Louis She (snakesch@connect.hku.hk)
 
