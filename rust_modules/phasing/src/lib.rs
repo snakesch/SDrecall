@@ -41,9 +41,12 @@ pub use phasing::{phase, qname_partition, PhasingInput, Round};
 use sdrecall_utils::{Result, SdError};
 
 /// Parameters for the standalone BAM phaser.
+///
+/// The reference genome is **not** stored here — it is a required input passed
+/// directly to [`phase_bam`], so there is a single source of truth and no way
+/// to silently desync the argument from a struct field.
 #[derive(Clone, Debug)]
 pub struct PhaserParams {
-    pub reference_genome: String,
     pub edge_weight_cutoff: f32,
     pub mean_read_length: f32,
     pub mapq_cutoff: u8,
@@ -54,7 +57,6 @@ pub struct PhaserParams {
 impl Default for PhaserParams {
     fn default() -> Self {
         Self {
-            reference_genome: String::new(),
             edge_weight_cutoff: 0.301,
             mean_read_length: 148.0,
             mapq_cutoff: 10,
@@ -199,7 +201,7 @@ fn build_vertex_qname(
 /// reads into haplotypes, and writes an HP-tagged output BAM.
 pub fn phase_bam(
     bam: &str,
-    _reference: &str,
+    reference: &str,
     output_bam: &str,
     params: &PhaserParams,
 ) -> Result<PhaserOutput> {
@@ -219,7 +221,7 @@ pub fn phase_bam(
 
     let allele_depth_map = bam_reading::build_allele_depth_map(
         bam,
-        &params.reference_genome,
+        reference,
         params.mapq_cutoff,
         params.basequal_median_cutoff,
     )

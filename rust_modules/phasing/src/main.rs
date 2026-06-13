@@ -54,7 +54,6 @@ fn main() -> Result<()> {
     let args = Args::parse();
 
     let params = PhaserParams {
-        reference_genome: args.reference.clone(),
         edge_weight_cutoff: args.edge_weight_cutoff,
         mean_read_length: args.mean_read_length,
         mapq_cutoff: args.mapq_cutoff,
