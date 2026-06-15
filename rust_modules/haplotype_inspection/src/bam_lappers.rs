@@ -421,14 +421,18 @@ pub fn build_lapper_from_bam(
     for chrom in &chroms {
         let chrom_intervals = &qname_interval_dict[chrom];
         if !chrom_intervals.is_empty() {
-            let mut intervals: Vec<Interval<u32, u32>> = chrom_intervals
-                .iter()
-                .map(|(start, end, qname_idx)| Interval {
-                    start: *start as u32,
-                    stop: *end as u32,
-                    val: *qname_idx,
-                })
-                .collect();
+            let mut intervals: Vec<Interval<u32, u32>> =
+                Vec::with_capacity(chrom_intervals.len());
+            for (start, end, qname_idx) in chrom_intervals {
+                // Checked i64 → u32: human coordinates fit comfortably, but a
+                // >4 Gb contig (or a stray negative position) would silently
+                // truncate and corrupt the interval tree — fail loudly instead.
+                let start = u32::try_from(*start)
+                    .map_err(|_| format!("interval start {start} on {chrom} exceeds u32 range"))?;
+                let stop = u32::try_from(*end)
+                    .map_err(|_| format!("interval end {end} on {chrom} exceeds u32 range"))?;
+                intervals.push(Interval { start, stop, val: *qname_idx });
+            }
 
             intervals.sort_by_key(|iv| iv.start);
             lapper_dict.insert(chrom.clone(), Lapper::new(intervals));

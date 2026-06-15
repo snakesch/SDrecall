@@ -494,14 +494,19 @@ pub fn build_bam_index(bam_path: &Path, f: &NoisyFilter, threads: u8) -> Result<
         if ivs.is_empty() {
             continue;
         }
-        let mut lap_ivs: Vec<Interval<u32, QnameIdx>> = ivs
-            .iter()
-            .map(|(s, e, idx)| Interval {
-                start: *s as u32,
-                stop: *e as u32,
-                val: *idx,
-            })
-            .collect();
+        let mut lap_ivs: Vec<Interval<u32, QnameIdx>> = Vec::with_capacity(ivs.len());
+        for (s, e, idx) in ivs {
+            // Checked i64 → u32: human coordinates fit, but a >4 Gb contig (or a
+            // stray negative position) would silently truncate and corrupt the
+            // interval tree — fail loudly instead.
+            let start = u32::try_from(*s).map_err(|_| {
+                SdError::Compute(format!("interval start {s} on {chrom} exceeds u32 range"))
+            })?;
+            let stop = u32::try_from(*e).map_err(|_| {
+                SdError::Compute(format!("interval end {e} on {chrom} exceeds u32 range"))
+            })?;
+            lap_ivs.push(Interval { start, stop, val: *idx });
+        }
         lap_ivs.sort_by_key(|iv| iv.start);
         lapper.insert(chrom.clone(), Lapper::new(lap_ivs));
     }
