@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
-use sdrecall_utils::{Result, SdError};
+use sdrecall_utils::{clamp_threads_u8, Result, SdError};
 
 use crate::cli::{PrepareArgs, RealignArgs, RunArgs};
 use crate::island::IslandPaths;
@@ -403,7 +403,7 @@ fn merge_and_markdup_raw_bams(
 fn concat_raw_vcfs(paths: &Paths, per_rg_vcfs: &[PathBuf], threads: usize) -> Result<()> {
     log::info!("[concat] concatenating {} per-RG VCFs", per_rg_vcfs.len());
     let refs: Vec<&Path> = per_rg_vcfs.iter().map(|p| p.as_path()).collect();
-    sdrecall_io::concat_sort_vcfs(&refs, &paths.recall_raw_vcf_path(), true, threads as u8)?;
+    sdrecall_io::concat_sort_vcfs(&refs, &paths.recall_raw_vcf_path(), true, clamp_threads_u8(threads))?;
     log::info!("[concat] raw VCF → {:?}", paths.recall_raw_vcf_path());
     Ok(())
 }
@@ -563,7 +563,7 @@ fn process_one_island(
     let params = fp_control::FpControlParams {
         reference_genome: ref_genome.to_string(),
         mapq_cutoff: mq_cutoff,
-        threads: threads as u8,
+        threads: clamp_threads_u8(threads),
         ..Default::default()
     };
 
@@ -624,7 +624,7 @@ fn merge_island_outputs(
     crate::tools::samtools_merge(&bam_refs, &paths.pooled_filtered_bam_path(), threads)?;
 
     let vcf_refs: Vec<&Path> = clean_vcfs.iter().map(|p| p.as_path()).collect();
-    sdrecall_io::concat_sort_vcfs(&vcf_refs, &paths.recall_filtered_vcf_path(), true, threads as u8)?;
+    sdrecall_io::concat_sort_vcfs(&vcf_refs, &paths.recall_filtered_vcf_path(), true, clamp_threads_u8(threads))?;
 
     Ok(())
 }
@@ -645,7 +645,7 @@ fn merge_and_subset_final_vcf(paths: &Paths, threads: usize) -> Result<()> {
         qv_tag: Some("RAW"),
         rv_tag: Some("CLEAN"),
         modify_gt: false,
-        threads: threads as u8,
+        threads: clamp_threads_u8(threads),
         tmp_dir: &paths.tmp_dir,
     })?;
 
