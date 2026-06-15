@@ -215,7 +215,7 @@ fn build_fc_target(
     out_path: &Path,
 ) -> Result<(Vec<GenomicInterval>, i64)> {
     let inter = intersect(fc_intervals, target);
-    let slopped = slop(&inter, FC_SLOP, chrom_sizes);
+    let slopped = slop(&inter, FC_SLOP, chrom_sizes)?;
     // pybedtools .sort().merge() semantics (book-ended fusing); see R2-bis.
     let merged = merge_bookended(&slopped);
     let cov = coverage(&merged);

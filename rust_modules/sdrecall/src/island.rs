@@ -61,7 +61,7 @@ pub fn split_bams_into_islands(
     log::info!("[island] {} coverage islands detected", islands.len());
 
     // Step 4: pad each island coverage BED by 1000 bp (Python: slop + merge).
-    let padded = sdrecall_io::slop(&islands, 1000, chrom_sizes);
+    let padded = sdrecall_io::slop(&islands, 1000, chrom_sizes)?;
     let padded = sdrecall_io::sort_merge_bed(&padded, false);
 
     // Step 5: slice BAMs per island.
@@ -174,7 +174,7 @@ fn process_target_regions(
 ) -> Result<Vec<GenomicInterval>> {
     let target_regions = sdrecall_io::read_bed(target_bed)?;
     // Merge nearby target regions (within 2 × delimiter).
-    let slopped = sdrecall_io::slop(&target_regions, delimiter_size, chrom_sizes);
+    let slopped = sdrecall_io::slop(&target_regions, delimiter_size, chrom_sizes)?;
     let merged = sdrecall_io::sort_merge_bed(&slopped, false);
 
     let min_interval: i64 = 2000;

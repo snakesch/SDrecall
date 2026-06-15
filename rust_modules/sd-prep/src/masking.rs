@@ -165,7 +165,7 @@ pub fn mask_genome(
 
     let merged = sdrecall_io::sort_merge_bed(query_bed, false);
     // slop grows by `pad` on both sides, clamped to [0, contig_len].
-    let slopped = sdrecall_io::slop(&merged, pad, &contig_sizes);
+    let slopped = sdrecall_io::slop(&merged, pad, &contig_sizes)?;
     let padded = sdrecall_io::sort_merge_bed(&slopped, false);
 
     // ---- 2-3. fetch each interval, end-mask, build contigs ----

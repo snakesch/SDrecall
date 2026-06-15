@@ -82,6 +82,22 @@ pub fn read_bed(path: &Path) -> Result<Vec<GenomicInterval>> {
             line: lineno + 1,
             msg: format!("non-integer end {:?}", cols[2]),
         })?;
+        // Reject malformed coordinates up front: a negative or empty/inverted
+        // (`start >= end`) interval would otherwise silently corrupt the
+        // merge/slop/intersect sweeps downstream. Half-open BED is always
+        // `0 <= start < end`.
+        if start < 0 || end < 0 {
+            return Err(SdError::BedParse {
+                line: lineno + 1,
+                msg: format!("negative coordinate(s): start={start}, end={end}"),
+            });
+        }
+        if start >= end {
+            return Err(SdError::BedParse {
+                line: lineno + 1,
+                msg: format!("empty or inverted interval: start={start} >= end={end}"),
+            });
+        }
         let strand = match cols.get(5).copied() {
             Some("+") => Strand::Forward,
             Some("-") => Strand::Reverse,
@@ -241,30 +257,33 @@ pub fn intersect(a: &[GenomicInterval], b: &[GenomicInterval]) -> Vec<GenomicInt
 }
 
 /// Grow every interval by `by` bases on each side, clamped to `[0, chrom_size]`
-/// (`bedtools slop -b`). Intervals on a contig absent from `chrom_sizes` are
-/// clamped only at the low end (the high bound is unknown → left as `end + by`),
-/// and a warning is logged. Manual grow + clamp (the DESIGN-sanctioned slop path).
+/// (`bedtools slop -b`). Manual grow + clamp (the DESIGN-sanctioned slop path).
+///
+/// A contig absent from `chrom_sizes` is a hard error (`SdError::Compute`),
+/// matching `bedtools slop -g` (which errors on a chromosome missing from the
+/// genome file). Leaving the high bound unclamped would let an interval run past
+/// the true contig end and corrupt downstream fetch/coverage — fail loudly
+/// instead. Callers pass `chrom_sizes` derived from the reference `.fai`, so a
+/// miss means the BED references a contig not in the reference.
 pub fn slop(
     ivs: &[GenomicInterval],
     by: i64,
     chrom_sizes: &AHashMap<String, i64>,
-) -> Vec<GenomicInterval> {
+) -> Result<Vec<GenomicInterval>> {
     ivs.iter()
         .map(|iv| {
-            let start = (iv.start - by).max(0);
-            let end = match chrom_sizes.get(&iv.chrom) {
-                Some(&size) => (iv.end + by).min(size),
-                None => {
-                    log::warn!("slop: contig {:?} not in chrom_sizes; high bound unclamped", iv.chrom);
-                    iv.end + by
-                }
-            };
-            GenomicInterval {
+            let size = chrom_sizes.get(&iv.chrom).ok_or_else(|| {
+                SdError::Compute(format!(
+                    "slop: contig {:?} not found in chrom_sizes (.fai); cannot clamp the high bound",
+                    iv.chrom
+                ))
+            })?;
+            Ok(GenomicInterval {
                 chrom: iv.chrom.clone(),
-                start,
-                end,
+                start: (iv.start - by).max(0),
+                end: (iv.end + by).min(*size),
                 strand: iv.strand,
-            }
+            })
         })
         .collect()
 }
@@ -461,7 +480,7 @@ mod tests {
     fn slop_grows_and_clamps() {
         let ivs = vec![iv("chr1", 100, 200), iv("chr1", 5, 10)];
         let cs = sizes(&[("chr1", 250)]);
-        let r = slop(&ivs, 20, &cs);
+        let r = slop(&ivs, 20, &cs).unwrap();
         assert_eq!(r[0], iv("chr1", 80, 220));
         assert_eq!(r[1], iv("chr1", 0, 30)); // start clamped to 0
     }
@@ -470,8 +489,40 @@ mod tests {
     fn slop_clamps_high_to_chrom_size() {
         let ivs = vec![iv("chr1", 200, 245)];
         let cs = sizes(&[("chr1", 250)]);
-        let r = slop(&ivs, 20, &cs);
+        let r = slop(&ivs, 20, &cs).unwrap();
         assert_eq!(r[0], iv("chr1", 180, 250)); // end clamped to 250
+    }
+
+    #[test]
+    fn slop_errors_on_unknown_contig() {
+        // A contig missing from chrom_sizes (.fai) is a hard error (bedtools -g parity).
+        let ivs = vec![iv("chrZ", 100, 200)];
+        let cs = sizes(&[("chr1", 250)]);
+        assert!(slop(&ivs, 20, &cs).is_err());
+    }
+
+    // ── read_bed coordinate validation ─────────────────────────────────────────
+
+    #[test]
+    fn read_errors_on_inverted_interval() {
+        let tmp = tempfile::Builder::new().suffix(".bed").tempfile().unwrap();
+        std::fs::write(tmp.path(), "chr1\t200\t100\n").unwrap();
+        let err = read_bed(tmp.path()).unwrap_err();
+        assert!(matches!(err, SdError::BedParse { line: 1, .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn read_errors_on_empty_interval() {
+        let tmp = tempfile::Builder::new().suffix(".bed").tempfile().unwrap();
+        std::fs::write(tmp.path(), "chr1\t100\t100\n").unwrap();
+        assert!(read_bed(tmp.path()).is_err());
+    }
+
+    #[test]
+    fn read_errors_on_negative_coordinate() {
+        let tmp = tempfile::Builder::new().suffix(".bed").tempfile().unwrap();
+        std::fs::write(tmp.path(), "chr1\t-5\t100\n").unwrap();
+        assert!(read_bed(tmp.path()).is_err());
     }
 
     // ── complement ───────────────────────────────────────────────────────────
