@@ -135,7 +135,7 @@ pub fn annotate_inhouse_common(p: InhouseParams<'_>) -> Result<()> {
         let q = q_by_contig.get(&rid).cloned().unwrap_or_default();
         let c = c_by_contig.get(&rid).cloned().unwrap_or_default();
         let CoiterSets { matched, query_only, ref_only: _cohort_only } =
-            coiterate_sorted_vcfs(q, c, &op);
+            coiterate_sorted_vcfs(q, c, &op)?;
         // Write matched + query-only ONLY (cohort-only dropped — inhouse L426-469).
         for rec in matched.iter().chain(query_only.iter()) {
             writer

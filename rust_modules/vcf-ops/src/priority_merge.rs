@@ -162,7 +162,7 @@ pub fn merge_with_priority(p: MergeParams<'_>) -> Result<()> {
         }
         let q = q_by_contig.get(&rid).cloned().unwrap_or_default();
         let r = r_by_contig.get(&rid).cloned().unwrap_or_default();
-        let sets = coiterate_sorted_vcfs(q, r, &op);
+        let sets = coiterate_sorted_vcfs(q, r, &op)?;
         write_merge_sets(&mut writer, sets, &p)?;
     }
     drop(writer);

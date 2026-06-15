@@ -28,6 +28,7 @@
 //! write — replacing the Python `.pickable()` cross-process tuple round-trip.
 
 use rust_htslib::bcf;
+use sdrecall_utils::{Result, SdError};
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
@@ -109,7 +110,7 @@ impl KeyedRecords {
 fn drain_co_located(
     head: bcf::Record,
     stream: &mut std::vec::IntoIter<bcf::Record>,
-) -> (Vec<bcf::Record>, Option<bcf::Record>) {
+) -> Result<(Vec<bcf::Record>, Option<bcf::Record>)> {
     let mut co_located = vec![head];
     let mut downstream = None;
     for next in stream.by_ref() {
@@ -120,13 +121,17 @@ fn drain_co_located(
                 break;
             }
             Ordering::Greater => {
-                // Python raises ValueError("records are not sorted by position").
-                // Inputs are bcftools-sorted, so this is a programmer/data error.
-                panic!("co-iteration input is not sorted by position");
+                // Unreachable after the (pos, end) pre-sort in `coiterate_sorted_vcfs`;
+                // kept as a defensive invariant. Returns an error (the Python
+                // `ValueError`) rather than panicking, so a malformed stream cannot
+                // abort the whole sequential vcf-ops merge.
+                return Err(SdError::Vcf(
+                    "co-iteration input is not sorted by position".to_string(),
+                ));
             }
         }
     }
-    (co_located, downstream)
+    Ok((co_located, downstream))
 }
 
 /// Handle a same-location cluster: drain both streams, O(n·m) allele match, route
@@ -143,9 +148,9 @@ fn deal_with_same_loc(
     query_only: &mut KeyedRecords,
     ref_only: &mut KeyedRecords,
     op: &dyn LocusOp,
-) -> (Option<bcf::Record>, Option<bcf::Record>) {
-    let (q_loc, q_down) = drain_co_located(q_head, q_stream);
-    let (mut r_loc, r_down) = drain_co_located(r_head, r_stream);
+) -> Result<(Option<bcf::Record>, Option<bcf::Record>)> {
+    let (q_loc, q_down) = drain_co_located(q_head, q_stream)?;
+    let (mut r_loc, r_down) = drain_co_located(r_head, r_stream)?;
 
     // Track which ref records got matched (by index) so the rest go to ref_only.
     let mut r_matched = vec![false; r_loc.len()];
@@ -178,7 +183,7 @@ fn deal_with_same_loc(
         }
     }
 
-    (q_down, r_down)
+    Ok((q_down, r_down))
 }
 
 /// THE engine. Co-iterate two coordinate-sorted, single-contig record streams,
@@ -191,7 +196,18 @@ pub fn coiterate_sorted_vcfs(
     query_recs: Vec<bcf::Record>,
     ref_recs: Vec<bcf::Record>,
     op: &dyn LocusOp,
-) -> CoiterSets {
+) -> Result<CoiterSets> {
+    // `bcftools sort` only guarantees POS order; co-located records (same POS but
+    // different END — e.g. a SNV and a deletion at one position) can arrive in any
+    // END order. The drain step needs the finer `(pos, then end)` order, so we
+    // canonicalize it here with a STABLE sort: records that are fully equal on
+    // `(pos, end)` keep their input order, preserving the Python `set` first-seen
+    // dedup semantics.
+    let mut query_recs = query_recs;
+    let mut ref_recs = ref_recs;
+    query_recs.sort_by(position_cmp);
+    ref_recs.sort_by(position_cmp);
+
     let mut matched = KeyedRecords::new();
     let mut query_only = KeyedRecords::new();
     let mut ref_only = KeyedRecords::new();
@@ -210,11 +226,11 @@ pub fn coiterate_sorted_vcfs(
         for r in r_stream {
             ref_only.add(r);
         }
-        return CoiterSets {
+        return Ok(CoiterSets {
             matched: matched.recs,
             query_only: query_only.recs,
             ref_only: ref_only.recs,
-        };
+        });
     }
     if r_next.is_none() {
         if let Some(q) = q_next {
@@ -223,11 +239,11 @@ pub fn coiterate_sorted_vcfs(
         for q in q_stream {
             query_only.add(q);
         }
-        return CoiterSets {
+        return Ok(CoiterSets {
             matched: matched.recs,
             query_only: query_only.recs,
             ref_only: ref_only.recs,
-        };
+        });
     }
 
     // Main two-pointer loop. Invariant: q_next / r_next hold the current heads.
@@ -269,18 +285,18 @@ pub fn coiterate_sorted_vcfs(
             }
             Ordering::Equal => {
                 let (q_down, r_down) =
-                    deal_with_same_loc(q, r, &mut q_stream, &mut r_stream, &mut matched, &mut query_only, &mut ref_only, op);
+                    deal_with_same_loc(q, r, &mut q_stream, &mut r_stream, &mut matched, &mut query_only, &mut ref_only, op)?;
                 q_next = q_down.or_else(|| q_stream.next());
                 r_next = r_down.or_else(|| r_stream.next());
             }
         }
     }
 
-    CoiterSets {
+    Ok(CoiterSets {
         matched: matched.recs,
         query_only: query_only.recs,
         ref_only: ref_only.recs,
-    }
+    })
 }
 
 #[cfg(test)]
@@ -342,7 +358,7 @@ mod tests {
     fn query_only_stream() {
         let (w, _t) = writer();
         let q = vec![rec(&w, 100, "A", "T"), rec(&w, 200, "C", "G")];
-        let sets = coiterate_sorted_vcfs(q, vec![], &KeepQuery);
+        let sets = coiterate_sorted_vcfs(q, vec![], &KeepQuery).unwrap();
         assert_eq!(keys(&sets.query_only), vec![(100, "A".into(), "T".into()), (200, "C".into(), "G".into())]);
         assert!(sets.matched.is_empty() && sets.ref_only.is_empty());
     }
@@ -351,7 +367,7 @@ mod tests {
     fn ref_only_stream() {
         let (w, _t) = writer();
         let r = vec![rec(&w, 100, "A", "T"), rec(&w, 200, "C", "G")];
-        let sets = coiterate_sorted_vcfs(vec![], r, &KeepQuery);
+        let sets = coiterate_sorted_vcfs(vec![], r, &KeepQuery).unwrap();
         assert_eq!(keys(&sets.ref_only), vec![(100, "A".into(), "T".into()), (200, "C".into(), "G".into())]);
         assert!(sets.matched.is_empty() && sets.query_only.is_empty());
     }
@@ -361,7 +377,7 @@ mod tests {
         let (w, _t) = writer();
         let q = vec![rec(&w, 100, "A", "T")];
         let r = vec![rec(&w, 100, "A", "T")];
-        let sets = coiterate_sorted_vcfs(q, r, &KeepQuery);
+        let sets = coiterate_sorted_vcfs(q, r, &KeepQuery).unwrap();
         assert_eq!(keys(&sets.matched), vec![(100, "A".into(), "T".into())]);
         assert!(sets.query_only.is_empty() && sets.ref_only.is_empty());
     }
@@ -374,7 +390,7 @@ mod tests {
         let (w, _t) = writer();
         let q = vec![rec(&w, 100, "A", "T")];
         let r = vec![rec(&w, 100, "A", "G")];
-        let sets = coiterate_sorted_vcfs(q, r, &KeepQuery);
+        let sets = coiterate_sorted_vcfs(q, r, &KeepQuery).unwrap();
         assert!(sets.matched.is_empty());
         assert_eq!(keys(&sets.query_only), vec![(100, "A".into(), "T".into())]);
         assert_eq!(keys(&sets.ref_only), vec![(100, "A".into(), "G".into())]);
@@ -387,7 +403,7 @@ mod tests {
         let (w, _t) = writer();
         let q = vec![rec(&w, 100, "A", "T"), rec(&w, 100, "A", "C")];
         let r = vec![rec(&w, 100, "A", "C"), rec(&w, 100, "A", "G")];
-        let sets = coiterate_sorted_vcfs(q, r, &KeepQuery);
+        let sets = coiterate_sorted_vcfs(q, r, &KeepQuery).unwrap();
         assert_eq!(keys(&sets.matched), vec![(100, "A".into(), "C".into())]);
         assert_eq!(keys(&sets.query_only), vec![(100, "A".into(), "T".into())]);
         assert_eq!(keys(&sets.ref_only), vec![(100, "A".into(), "G".into())]);
@@ -399,7 +415,7 @@ mod tests {
         let (w, _t) = writer();
         let q = vec![rec(&w, 100, "A", "T"), rec(&w, 300, "A", "T")];
         let r = vec![rec(&w, 200, "C", "G"), rec(&w, 400, "C", "G")];
-        let sets = coiterate_sorted_vcfs(q, r, &KeepQuery);
+        let sets = coiterate_sorted_vcfs(q, r, &KeepQuery).unwrap();
         assert_eq!(keys(&sets.query_only), vec![(100, "A".into(), "T".into()), (300, "A".into(), "T".into())]);
         assert_eq!(keys(&sets.ref_only), vec![(200, "C".into(), "G".into()), (400, "C".into(), "G".into())]);
         assert!(sets.matched.is_empty());
@@ -414,7 +430,7 @@ mod tests {
         let (w, _t) = writer();
         let q = vec![rec(&w, 100, "A", "T")]; // stop 101
         let r = vec![rec(&w, 100, "ACGT", "A")]; // stop 104
-        let sets = coiterate_sorted_vcfs(q, r, &KeepQuery);
+        let sets = coiterate_sorted_vcfs(q, r, &KeepQuery).unwrap();
         assert!(sets.matched.is_empty());
         assert_eq!(keys(&sets.query_only), vec![(100, "A".into(), "T".into())]);
         assert_eq!(keys(&sets.ref_only), vec![(100, "ACGT".into(), "A".into())]);
@@ -426,9 +442,25 @@ mod tests {
         // Python `set` semantics).
         let (w, _t) = writer();
         let q = vec![rec(&w, 100, "A", "T"), rec(&w, 100, "A", "T")];
-        let sets = coiterate_sorted_vcfs(q, vec![], &KeepQuery);
+        let sets = coiterate_sorted_vcfs(q, vec![], &KeepQuery).unwrap();
         // Both are co-located + identical; with no ref they flush to query_only,
         // and the dedup keeps one.
         assert_eq!(sets.query_only.len(), 1);
+    }
+
+    #[test]
+    fn same_pos_descending_end_is_sorted_not_panicked() {
+        // Regression: a same-POS cluster arriving in descending-END order (which
+        // `bcftools sort` may emit, since it orders by POS only) previously tripped
+        // a panic in `drain_co_located`. The stable (pos, end) pre-sort must make
+        // this deterministic. query = deletion (stop 104) BEFORE SNV (stop 101) at
+        // pos 100; ref = the matching deletion → deletion matches, SNV is query-only.
+        let (w, _t) = writer();
+        let q = vec![rec(&w, 100, "ACGT", "A"), rec(&w, 100, "A", "T")]; // stop 104, then 101
+        let r = vec![rec(&w, 100, "ACGT", "A")]; // stop 104
+        let sets = coiterate_sorted_vcfs(q, r, &KeepQuery).unwrap();
+        assert_eq!(keys(&sets.matched), vec![(100, "ACGT".into(), "A".into())]);
+        assert_eq!(keys(&sets.query_only), vec![(100, "A".into(), "T".into())]);
+        assert!(sets.ref_only.is_empty());
     }
 }
