@@ -71,21 +71,37 @@ pub fn inspect_haplotypes_rust(
         iter.map(|item| item?.extract::<String>()).collect::<PyResult<HashSet<String>>>()?
     };
 
-    // Call Rust inspection logic
-    let (correct_qnames, mismap_qnames) = inspect_haplotypes(
-        &bam_path,
-        &intrinsic_bam_path,
-        &hap_qname_info_rs,
-        &qname_hap_info_rs,
-        &qname_to_node_rs,
-        &lowqual_qnames_rs,
-        compare_haplotype_meta_tab,
-        mean_read_length,
-        recall_mq_cutoff,
-        basequal_median_cutoff,
-    ).map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
-        format!("Rust haplotype inspection failed: {e}")
-    ))?;
+    // Own the meta-tab path so the compute closure borrows no Python memory.
+    let compare_haplotype_meta_tab = compare_haplotype_meta_tab.to_string();
+
+    // Call Rust inspection logic with the GIL RELEASED: all inputs are already
+    // converted to owned Rust types above, so the (multi-second) compute touches
+    // no Python objects and other Python threads can run meanwhile. `pyo3-log`
+    // re-acquires the GIL per log call internally, so logging from inside is safe.
+    //
+    // The closure must return an `Ungil` type, so the `Box<dyn Error>` is
+    // stringified HERE (inside the closure) rather than after `allow_threads`.
+    let (correct_qnames, mismap_qnames) = _py
+        .allow_threads(|| {
+            inspect_haplotypes(
+                &bam_path,
+                &intrinsic_bam_path,
+                &hap_qname_info_rs,
+                &qname_hap_info_rs,
+                &qname_to_node_rs,
+                &lowqual_qnames_rs,
+                &compare_haplotype_meta_tab,
+                mean_read_length,
+                recall_mq_cutoff,
+                basequal_median_cutoff,
+            )
+            .map_err(|e| e.to_string())
+        })
+        .map_err(|e| {
+            PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(format!(
+                "Rust haplotype inspection failed: {e}"
+            ))
+        })?;
 
     // Convert HashSet<String> → Vec<String> for Python
     let correct: Vec<String> = correct_qnames.into_iter().collect();
