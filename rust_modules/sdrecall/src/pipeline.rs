@@ -74,6 +74,7 @@ pub fn run_realign_only(args: &RealignArgs, paths: &Paths) -> Result<PathBuf> {
         args.common.threads,
         args.realign.numba_threads,
         args.common.mq_cutoff,
+        args.realign.strict_islands,
     )?;
     post_process_vcf(&sdrecall_vcf, &args.conventional, &args.cohort, paths)
 }
@@ -123,6 +124,7 @@ fn realign_and_recall(args: &RunArgs, paths: &Paths) -> Result<PathBuf> {
         args.common.threads,
         args.realign.numba_threads,
         args.common.mq_cutoff,
+        args.realign.strict_islands,
     )
 }
 
@@ -131,6 +133,7 @@ fn realign_and_recall_inner(
     threads: usize,
     numba_threads: usize,
     mq_cutoff: i32,
+    strict_islands: bool,
 ) -> Result<PathBuf> {
     log::info!(
         "[realign] start for sample={} (threads={threads})",
@@ -157,7 +160,7 @@ fn realign_and_recall_inner(
     concat_raw_vcfs(paths, &per_rg_vcfs, threads)?;
 
     // ── Step 6: misalignment elimination ────────────────────────────────
-    eliminate_misalignments(paths, threads, numba_threads, mq_cutoff)?;
+    eliminate_misalignments(paths, threads, numba_threads, mq_cutoff, strict_islands)?;
 
     // ── Step 7: priority-merge raw vs clean, subset to target ───────────
     merge_and_subset_final_vcf(paths, threads)?;
@@ -417,6 +420,7 @@ fn eliminate_misalignments(
     threads: usize,
     numba_threads: usize,
     mq_cutoff: i32,
+    strict_islands: bool,
 ) -> Result<()> {
     log::info!(
         "[fp-control] misalignment elimination for {}",
@@ -465,22 +469,18 @@ fn eliminate_misalignments(
         return Ok(());
     }
 
-    // NM Poisson cutoff (optional — errors are non-fatal).
-    let nm_cutoff = nm_stats::nm_distribution_poisson(&deduped, 0.01, 10000, threads as u8)
-        .map(|c| {
-            log::info!("[nm-stats] NM cutoff = {} (mean {:.2})", c.cutoff, c.mean);
-            c.cutoff
-        })
-        .unwrap_or_else(|e| {
-            log::warn!("[nm-stats] failed ({e}), using default cutoff 0 (no NM filter)");
-            0
-        });
-    let _ = nm_cutoff; // TODO: wire into per-island params when inspect uses it
+    // NM Poisson cutoff: NOT YET WIRED (T9). The Python pipeline applies an NM
+    // cutoff during per-island inspection; the Rust inspect path does not consume
+    // one yet. Rather than run a 10k-read scan whose result is discarded —
+    // pretending to apply a filter we don't — the scan is omitted until `nm_cutoff`
+    // is threaded into `fp_control::FpControlParams` and the per-island filter.
+    // `nm_stats::nm_distribution_poisson` stays available and unit-tested for that
+    // wiring.
 
     // Per-island fp-control (rayon parallel).
     let island_budget = ThreadBudget::new(threads, numba_threads as f64);
     let (clean_bams, clean_vcfs) =
-        fp_control_per_island(paths, &islands, island_budget, mq_cutoff)?;
+        fp_control_per_island(paths, &islands, island_budget, mq_cutoff, strict_islands)?;
 
     // Merge per-island outputs.
     merge_island_outputs(paths, &clean_bams, &clean_vcfs, threads)?;
@@ -488,11 +488,21 @@ fn eliminate_misalignments(
     Ok(())
 }
 
+/// One island's terminal outcome in the rayon fan-out.
+enum IslandOutcome {
+    Done(PathBuf, PathBuf),
+    /// `≤2` haplotypes — a legitimate non-result (not a failure), stays non-fatal.
+    Skipped,
+    /// Errored or panicked — recorded so the policy below can surface it.
+    Failed { id: String, reason: String },
+}
+
 fn fp_control_per_island(
     paths: &Paths,
     islands: &[IslandPaths],
     budget: ThreadBudget,
     mq_cutoff: i32,
+    strict_islands: bool,
 ) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
     log::info!(
         "[fp-control] processing {} islands ({} parallel, {} threads each)",
@@ -509,24 +519,29 @@ fn fp_control_per_island(
     let ref_genome_str = paths.ref_genome.to_string_lossy().to_string();
     let tpj = budget.threads_per_job;
 
-    let results: Vec<Option<(PathBuf, PathBuf)>> = pool.install(|| {
+    let outcomes: Vec<IslandOutcome> = pool.install(|| {
         islands
             .par_iter()
             .map(|island| {
-                // Wrap in catch_unwind per ROB-3.
+                // catch_unwind per ROB-3: a panic in one island must NOT abort the
+                // whole batch. The outcome is recorded and the failure policy is
+                // applied after the join.
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     process_one_island(island, &ref_genome_str, mq_cutoff as u8, tpj)
                 }));
 
                 match result {
-                    Ok(Ok(Some(paths))) => Some(paths),
+                    Ok(Ok(Some((bam, vcf)))) => IslandOutcome::Done(bam, vcf),
                     Ok(Ok(None)) => {
                         log::debug!("[fp-control] island {} skipped (≤2 haplotypes)", island.id);
-                        None
+                        IslandOutcome::Skipped
                     }
                     Ok(Err(e)) => {
-                        log::error!("[fp-control] island {} failed: {e}", island.id);
-                        None
+                        log::error!("[fp-control] island {} FAILED: {e}", island.id);
+                        IslandOutcome::Failed {
+                            id: island.id.to_string(),
+                            reason: format!("error: {e}"),
+                        }
                     }
                     Err(panic) => {
                         let msg = panic
@@ -534,8 +549,11 @@ fn fp_control_per_island(
                             .map(|s| s.to_string())
                             .or_else(|| panic.downcast_ref::<String>().cloned())
                             .unwrap_or_else(|| "unknown panic".to_string());
-                        log::error!("[fp-control] island {} panicked: {msg}", island.id);
-                        None
+                        log::error!("[fp-control] island {} PANICKED: {msg}", island.id);
+                        IslandOutcome::Failed {
+                            id: island.id.to_string(),
+                            reason: format!("panic: {msg}"),
+                        }
                     }
                 }
             })
@@ -544,11 +562,67 @@ fn fp_control_per_island(
 
     let mut bams = Vec::new();
     let mut vcfs = Vec::new();
-    for opt in results.into_iter().flatten() {
-        bams.push(opt.0);
-        vcfs.push(opt.1);
+    let mut failures: Vec<(String, String)> = Vec::new();
+    let mut skipped = 0usize;
+    for outcome in outcomes {
+        match outcome {
+            IslandOutcome::Done(bam, vcf) => {
+                bams.push(bam);
+                vcfs.push(vcf);
+            }
+            IslandOutcome::Skipped => skipped += 1,
+            IslandOutcome::Failed { id, reason } => failures.push((id, reason)),
+        }
     }
+
+    log::info!(
+        "[fp-control] islands: {} succeeded, {} skipped (≤2 haps), {} failed",
+        bams.len(),
+        skipped,
+        failures.len()
+    );
+
+    // Failure policy: tolerate by default (Python parity — failures yield a NaN
+    // sentinel and the run continues) but never silently. Always ERROR-log (above)
+    // + write a manifest; only abort when the operator opts into `--strict_islands`.
+    if !failures.is_empty() {
+        let manifest = write_failed_island_manifest(paths, &failures)?;
+        log::warn!(
+            "[fp-control] {} island(s) failed; their variants are NOT in the output. Manifest: {}",
+            failures.len(),
+            manifest.display()
+        );
+        if strict_islands {
+            return Err(SdError::Compute(format!(
+                "{} island(s) failed and --strict_islands is set; see {}",
+                failures.len(),
+                manifest.display()
+            )));
+        }
+    }
+
     Ok((bams, vcfs))
+}
+
+/// Write a TSV of failed islands (`island_id\treason`) into the recall-results
+/// dir so a tolerated (non-strict) failure is auditable, never silent. Returns
+/// the manifest path.
+fn write_failed_island_manifest(paths: &Paths, failures: &[(String, String)]) -> Result<PathBuf> {
+    let manifest = paths
+        .recall_results_dir
+        .join(format!("{}.failed_islands.tsv", paths.sample_id));
+    let mut body = String::from("island_id\treason\n");
+    for (id, reason) in failures {
+        body.push_str(id);
+        body.push('\t');
+        body.push_str(reason);
+        body.push('\n');
+    }
+    std::fs::write(&manifest, body).map_err(|e| SdError::Io {
+        path: manifest.display().to_string(),
+        source: e,
+    })?;
+    Ok(manifest)
 }
 
 fn process_one_island(

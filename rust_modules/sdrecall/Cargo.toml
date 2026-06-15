@@ -22,6 +22,9 @@ rust_read_extraction = { path = "../read_extraction", default-features = false }
 region-prep = { path = "../region-prep" }
 fp-control = { path = "../fp-control" }
 vcf-ops = { path = "../vcf-ops" }
+# Retained for the pending NM-cutoff wiring (T9); see pipeline.rs
+# `eliminate_misalignments`. The scan is intentionally not called yet so the
+# pipeline does not pretend to apply an NM filter it does not consume.
 nm-stats = { path = "../nm-stats" }
 
 # External.

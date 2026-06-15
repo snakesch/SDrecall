@@ -138,6 +138,14 @@ pub struct RealignmentArgs {
     /// path uses rayon, so this becomes the per-island inner-thread hint).
     #[arg(long = "numba_threads", default_value_t = 2)]
     pub numba_threads: usize,
+
+    /// Abort the run if any island's false-positive control fails or panics.
+    /// The default (`false`) mirrors the Python pipeline — per-island failures are
+    /// tolerated and the run continues — but unlike Python they are now
+    /// ERROR-logged and written to a `<sample>.failed_islands.tsv` manifest, so a
+    /// dropped island's variants are never lost silently.
+    #[arg(long = "strict_islands", default_value_t = false)]
+    pub strict_islands: bool,
 }
 
 /// Conventional-VCF merge arguments (Python `_add_conventional_vcf_args`,
