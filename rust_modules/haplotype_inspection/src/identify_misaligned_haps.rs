@@ -182,25 +182,27 @@ pub fn judge_misalignment_by_extreme_vardensity(seq: &Array1<i16>) -> (bool, f32
     let six_vard = count_window_var_density(seq, 65);
     let read_vard = count_window_var_density(seq, 74);
 
-    // Track the overall max local density across all three window sizes
+    // Track the overall max local density across all three window sizes.
+    // Densities are var-count / window-size (finite); a stray non-finite value is
+    // ignored (with a debug note) rather than panicking in `partial_cmp().unwrap()`.
     let mut max_density = 0.0f32;
-
-    if !five_vard.is_empty() {
-        if let Some(&d) = five_vard.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
-            if d > max_density {
-                max_density = d;
-            }
+    for vard in [&five_vard, &six_vard, &read_vard] {
+        let mut dropped_non_finite = false;
+        let local_max = vard
+            .iter()
+            .copied()
+            .filter(|x| {
+                let ok = x.is_finite();
+                if !ok {
+                    dropped_non_finite = true;
+                }
+                ok
+            })
+            .reduce(f32::max);
+        if dropped_non_finite {
+            debug!("[judge_misalignment_by_extreme_vardensity] ignored non-finite density value(s)");
         }
-    }
-    if !six_vard.is_empty() {
-        if let Some(&d) = six_vard.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
-            if d > max_density {
-                max_density = d;
-            }
-        }
-    }
-    if !read_vard.is_empty() {
-        if let Some(&d) = read_vard.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
+        if let Some(d) = local_max {
             if d > max_density {
                 max_density = d;
             }
@@ -922,9 +924,10 @@ pub fn cal_similarity_score(
 ///
 /// Example: `[3.0, 1.0, 3.0, 2.0]` → `[3, 1, 3, 2]`
 pub fn rank_unique_values(arr: &[f32]) -> Vec<i32> {
-    // Extract unique values and sort them
+    // Extract unique values and sort them. `total_cmp` is a total order (NaN sorts
+    // last, deterministically) so ranking never panics on a non-finite value.
     let mut unique_values: Vec<f32> = arr.to_vec();
-    unique_values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    unique_values.sort_by(|a, b| a.total_cmp(b));
     unique_values.dedup();
 
     // Rank each element by its position in sorted unique values (1-based)
@@ -1527,8 +1530,9 @@ pub fn summarize_enclosing_haps<'a>(
         chrom, start, end, region_haplotype_info.len()
     );
 
-    // Sort by overlap_coef descending
-    inspect_results.sort_by(|a, b| b.overlap_coef.partial_cmp(&a.overlap_coef).unwrap());
+    // Sort by overlap_coef descending. `total_cmp` is a total order (never panics
+    // on a non-finite coef; NaN sorts to the end of the descending order).
+    inspect_results.sort_by(|a, b| b.overlap_coef.total_cmp(&a.overlap_coef));
 
     if inspect_results.is_empty() {
         return None;

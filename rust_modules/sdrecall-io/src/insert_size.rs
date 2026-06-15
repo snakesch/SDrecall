@@ -124,7 +124,10 @@ fn stats_for_pass(insert_sizes: &[f64], num_samples: usize) -> Option<FragStats>
         return None;
     }
     let mut sorted = insert_sizes.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    // `total_cmp` is a total order (never panics on a non-finite TLEN; any NaN
+    // sorts to the end). TLEN-derived sizes are finite in practice — this is
+    // defensive.
+    sorted.sort_by(|a, b| a.total_cmp(b));
     let threshold = percentile_linear(&sorted, 99.0);
 
     // Python filters the ORIGINAL (insertion-order) list then truncates to
