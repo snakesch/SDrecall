@@ -94,13 +94,12 @@ fn spawn_collate_pipe(
 
     match bam::Reader::from_path(&fd_path) {
         Ok(reader) => {
-            // NOTE: `stdout` must stay alive for the fd to remain valid.
-            // It is moved into the Reader's underlying htsFile via hts_open,
-            // which dup's the fd, so the ChildStdout can be dropped after
-            // from_path succeeds — but to be safe we leak it into the child
-            // handle (the fd stays open as child.stdout is already taken).
-            // Ownership: child keeps the pipe alive until wait().
-            std::mem::forget(stdout); // prevent close — fd now owned by htslib
+            // htslib's hts_open already dup'd the pipe fd, so our ChildStdout copy
+            // is redundant: drop it to close that fd. `mem::forget` here would leak
+            // one pipe fd per call and exhaust the fd table under per-island
+            // fan-out. The child stays alive in the returned handle and is reaped
+            // by the `child.wait()` at the end of `build_lapper_from_bam`.
+            drop(stdout);
             info!("[spawn_collate_pipe] Opened BAM reader from pipe fd {fd}");
             Ok(Some((reader, child)))
         }
