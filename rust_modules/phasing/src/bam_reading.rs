@@ -19,6 +19,26 @@ fn should_skip_alignment(read: &Record) -> bool {
     read.is_secondary() || read.is_supplementary() || read.is_duplicate()
 }
 
+/// Median Phred score with `np.median` semantics: odd length → the middle
+/// element; even length → the mean of the two middle elements (NOT
+/// integer-truncated, e.g. median of `[15, 16]` is `15.5`). Mirrors
+/// `haplotype_inspection::fast_median` and the Python `numba_operators.fast_median`
+/// (`np.median`) so both BAM-read paths apply the `median <= cutoff` noise filter
+/// identically.
+fn median_phred(quals: &[u8]) -> f32 {
+    if quals.is_empty() {
+        return 0.0;
+    }
+    let mut sorted: Vec<u8> = quals.to_vec();
+    sorted.sort_unstable();
+    let mid = sorted.len() / 2;
+    if sorted.len() % 2 == 0 {
+        (sorted[mid - 1] as f32 + sorted[mid] as f32) / 2.0
+    } else {
+        sorted[mid] as f32
+    }
+}
+
 fn is_read_noisy(
     read: &Record,
     mapq_filter: u8,
@@ -80,17 +100,12 @@ fn is_read_noisy(
     
     // Base quality and soft-clip based checks (controlled by filter_noisy)
     if filter_noisy && !read.qual().is_empty() {
-        let mut qual_vec: Vec<u8> = read.qual().to_vec();
-        // Use order-stat crate for O(n) median calculation (most efficient)
-        let median_qual = if !qual_vec.is_empty() {
-            let len = qual_vec.len();
-            *order_stat::kth(&mut qual_vec, len / 2)
-        } else {
-            debug!("[is_read_noisy] median_qual_check - {} flagged noisy: empty qual vector", qname);
-            return true;
-        };
+        // np.median parity: average the two middle values for even-length quality
+        // arrays (see `median_phred`); the `order_stat::kth(len/2)` this replaced
+        // returned the upper-middle element, diverging from Python at the boundary.
+        let median_qual = median_phred(read.qual());
         
-        if median_qual <= basequal_median_filter {
+        if median_qual <= basequal_median_filter as f32 {
             debug!("[is_read_noisy] median_qual_check - {} flagged noisy: median baseQ {} <= threshold {}", qname, median_qual, basequal_median_filter);
             return true;
         }
@@ -602,5 +617,20 @@ fn count_low_qual_mismatches_cigar_eqx(read: &Record, qual_threshold: u8) -> usi
         }
     }
     count
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn median_phred_matches_np_median() {
+        // Odd length → the middle element.
+        assert_eq!(median_phred(&[10, 20, 30]), 20.0);
+        // Even length → mean of the two middles (the parity fix vs order_stat::kth).
+        assert_eq!(median_phred(&[15, 16]), 15.5);
+        assert_eq!(median_phred(&[30, 10, 20, 40]), 25.0); // unsorted even
+        assert_eq!(median_phred(&[]), 0.0);
+    }
 }
 

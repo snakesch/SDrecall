@@ -26,7 +26,6 @@ petgraph = "0.6"
 ndarray = { version = "0.15", features = ["blas"] }
 half = { version = "2.6", features = ["num-traits", "bytemuck", "serde"] }
 statrs = "0.16"
-order-stat = "0.1"
 
 # I/O & temp files
 tempfile = "3.8"
