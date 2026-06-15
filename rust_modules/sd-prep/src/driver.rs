@@ -24,7 +24,7 @@ use crate::traversal::extract_sd_paralog_pairs;
 use ahash::{AHashMap, AHashSet};
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
-use sdrecall_utils::{GenomicInterval, Result, SdError, Strand};
+use sdrecall_utils::{clamp_threads_u8, GenomicInterval, Result, SdError, Strand};
 use std::path::{Path, PathBuf};
 
 /// Tuning parameters for the Phase-1 pick (mirrors the Python `prepare_recall_regions`
@@ -608,7 +608,7 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
         params.high_quality_depth,
         params.minimum_depth,
         params.multialign_frac,
-        params.threads as u8,
+        clamp_threads_u8(params.threads),
     )?;
     log::info!("Multi-align BED has {} intervals", multi_align.len());
 

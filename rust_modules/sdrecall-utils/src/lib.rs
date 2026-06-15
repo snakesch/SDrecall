@@ -23,4 +23,4 @@ mod parallel;
 pub use error::{Result, SdError};
 pub use geometry::{GenomicInterval, HapId, QnameIdx, RegionKey, Strand};
 pub use logging::init_console_logger;
-pub use parallel::configure_parallelism;
+pub use parallel::{clamp_threads_u8, configure_parallelism};
