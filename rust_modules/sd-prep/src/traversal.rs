@@ -4,26 +4,27 @@
 //! (l.133-283) + `graph_traversal.py` (the per-qnode shortest-path walk +
 //! minimap2 candidate validation).
 //!
-//! ## Port status
+//! ## Port status (implemented)
 //!
 //! - [`sort_query_nodes`] — the load-balance sort (`degree × component_size`
 //!   descending) that ALSO fixes the coloring index order (graph_query.py
-//!   l.103-126). Ported and UNIT-TESTED — it is pure given the graph + component
-//!   labels, and is the parity-critical input to [`crate::grouping`].
-//! - [`prune_small_sds`] / [`prune_weak_po_edges`] — the two graph-pruning passes
-//!   (graph_query.py l.157-184): drop SD nodes with `size <= max(mean_read_len,
-//!   avg_frag - std)`, drop PO edges with `overlap_size < cutoff && 1/weight < 0.5`
-//!   and self-loops. Ported as pure predicates and UNIT-TESTED.
-//! - **`traverse_qnode` / `extract_sd_paralog_pairs` — STUBBED** (`TODO(T8)`):
-//!   the per-qnode overlap-subgraph partition + `summarize_shortest_paths_per_subgraph`
-//!   (route walk via `inspect_cnode_along_route` + minimap2 similarity). The graph
-//!   primitives it needs ARE done: `component_labels` (all-edge + overlap-only),
-//!   `dijkstra_route`, `HomoseqRegion::qnode_relative_region`. What remains is the
-//!   route-walk coordinate logic (`inspect_cnode_along_route`, graph_traversal.py
-//!   l.13-75) and the minimap2 FFI similarity ([`crate::masking`] / a minimap
-//!   wrapper). Stubbed because the minimap2-rs dependency is not yet wired (see
-//!   the crate report) and the route walk is large; the hard graph core it builds
-//!   on is complete + tested.
+//!   l.103-126). Pure given the graph + component labels; the parity-critical
+//!   input to [`crate::grouping`]. UNIT-TESTED.
+//! - [`prune_graph`] — the two graph-pruning passes (graph_query.py l.156-185):
+//!   drop small-SD nodes ([`is_small_sd`]: `size <= max(mean_read_len, avg_frag -
+//!   std)`), then drop self-loops and weak PO edges ([`should_prune_po_edge`]:
+//!   `overlap_size < cutoff && 1/weight < 0.5`). Applied at the top of
+//!   [`extract_sd_paralog_pairs`] so labeling/sorting see the pruned graph, as in
+//!   Python. The predicates are pure + UNIT-TESTED; `prune_graph` rebuilds a fresh
+//!   graph (the `DiGraph` is not stable, so `remove_node` is avoided).
+//! - [`extract_sd_paralog_pairs`] / `traverse_qnode` — the per-qnode component
+//!   walk + `summarize_shortest_paths_per_subgraph` (route walk via
+//!   [`inspect_cnode_along_route`] + minimap2 similarity through
+//!   [`crate::minimap::align_similarity`]). Implemented on the graph primitives
+//!   (`component_labels` all-edge + overlap-only, `dijkstra_route`,
+//!   `HomoseqRegion`); the connected-qnodes graph is built in Python insertion
+//!   order for coloring parity. Validated end-to-end by the
+//!   `validate_phase1_e2e` differential harness.
 
 use crate::graph_build::{EdgeAttr, EdgeKind, NodeKey, SdGraph};
 use crate::graph_core::{component_labels, dijkstra_route};
@@ -123,25 +124,102 @@ pub fn should_prune_po_edge(attr: &EdgeAttr, smaller_node_size: i64, cutoff: f64
     if !attr.is_overlap() {
         return false;
     }
+    // PO weight is `1/overlap_fraction ∈ [1, ∞)`; a non-finite or non-positive
+    // weight is degenerate (never produced by the builder, where Python would hit
+    // a ZeroDivisionError). Guard the division so it yields a definite `false`
+    // (keep the edge) instead of an `inf`/NaN that would make the predicate
+    // unpredictable once a NaN-policy is applied elsewhere.
+    if !attr.weight.is_finite() || attr.weight <= 0.0 {
+        return false;
+    }
     let inv_weight = 1.0 / attr.weight; // = overlap fraction
     let overlap_size = smaller_node_size as f64 * inv_weight;
     overlap_size < cutoff && inv_weight < 0.5
+}
+
+/// Prune the multiplex graph before traversal — port of `graph_query.py`
+/// l.156-185 (`extract_SD_paralog_pairs_from_graph`):
+///   1. drop **small-SD nodes** (`size <= cutoff`, [`is_small_sd`]) where
+///      `cutoff = max(mean_read_length, avg_frag - std)`;
+///   2. drop **self-loops** (`edge[0] == edge[1]`) and **weak PO edges**
+///      ([`should_prune_po_edge`]: `overlap_size < cutoff && 1/weight < 0.5`).
+///
+/// This MUST run before component labeling + `sort_query_nodes`, because the
+/// component sizes and degrees those use (and hence the coloring order) are
+/// computed on the **pruned** graph — exactly as Python prunes `directed_graph`
+/// before `to_undirected()` / `label_components` / `sort_query_nodes`.
+///
+/// `SdGraph.g` is a (non-stable) `DiGraph`, so `remove_node` would invalidate
+/// every later `NodeIndex` and desync the intern map. We therefore REBUILD a
+/// fresh graph from the surviving nodes + edges rather than removing in place.
+pub fn prune_graph(g: &SdGraph, frag: &FragParams) -> SdGraph {
+    let cutoff = frag.mean_read_length.max(frag.avg_frag - frag.std_frag);
+    let mut pruned = SdGraph::new();
+
+    // (1) carry over nodes that are NOT small SDs.
+    for v in g.g.node_indices() {
+        let key = &g.g[v];
+        if !is_small_sd(key.size(), frag.mean_read_length, frag.avg_frag, frag.std_frag) {
+            pruned.node(key.clone());
+        }
+    }
+
+    // (2) carry over edges whose BOTH endpoints survived, dropping self-loops and
+    // weak PO edges. PO edges point large→small, so the smaller node is the edge
+    // TARGET (`kb`), matching Python's `edge[1]`.
+    for e in g.g.edge_indices() {
+        let (a, b) = match g.g.edge_endpoints(e) {
+            Some(ends) => ends,
+            None => continue,
+        };
+        if a == b {
+            continue; // self-loop
+        }
+        let ka = &g.g[a];
+        let kb = &g.g[b];
+        if !pruned.has_node(ka) || !pruned.has_node(kb) {
+            continue; // an endpoint was removed as a small SD
+        }
+        let attr = g.g[e];
+        if should_prune_po_edge(&attr, kb.size(), cutoff) {
+            continue; // weak PO edge
+        }
+        let u = pruned.node(ka.clone());
+        let w = pruned.node(kb.clone());
+        pruned.g.add_edge(u, w, attr);
+    }
+
+    log::info!(
+        "Pruned multiplex graph (cutoff {:.1}): {} → {} nodes, {} → {} edges",
+        cutoff,
+        g.node_count(),
+        pruned.node_count(),
+        g.edge_count(),
+        pruned.edge_count(),
+    );
+    pruned
 }
 
 /// Reconstruct the **vertex sequence** of a dijkstra route from its edge indices.
 /// `dijkstra_route` returns ordered `EdgeIndex`es; this walks them from `src` to
 /// derive `[src, v1, v2, ..., tgt]` by following the endpoint that is not the
 /// current node at each step (the graph is treated undirected).
-fn route_vertices(g: &SdGraph, src: NodeIndex, edges: &[petgraph::graph::EdgeIndex]) -> Vec<NodeIndex> {
+fn route_vertices(
+    g: &SdGraph,
+    src: NodeIndex,
+    edges: &[petgraph::graph::EdgeIndex],
+) -> Result<Vec<NodeIndex>> {
     let mut verts = Vec::with_capacity(edges.len() + 1);
     verts.push(src);
     let mut cur = src;
     for &e in edges {
-        let (a, b) = g.g.edge_endpoints(e).expect("route edge exists");
+        let (a, b) = g.g.edge_endpoints(e).ok_or_else(|| {
+            SdError::Compute(format!("dijkstra route references a missing edge {e:?}"))
+        })?;
         cur = if a == cur { b } else { a };
         verts.push(cur);
     }
-    verts
+    Ok(verts)
 }
 
 /// The route-walk that derives the counterpart node's relative window + its
@@ -363,12 +441,11 @@ fn traverse_qnode(
             Some(r) => r,
             None => continue,
         };
-        if edges.is_empty() {
+        // Reject empty routes, and routes whose last edge is a PO edge.
+        let Some(&last_edge) = edges.last() else {
             continue;
-        }
-        // Reject: last edge is a PO edge.
-        let last = g.g[*edges.last().unwrap()];
-        if last.is_overlap() {
+        };
+        if g.g[last_edge].is_overlap() {
             continue;
         }
         // Reject: ≥2 adjacent PO-edge pairs (Python `len([...]) > 1`).
@@ -393,7 +470,7 @@ fn traverse_qnode(
         }
 
         // Walk the route → cnode window + route.
-        let verts = route_vertices(g, qnode_v, &edges);
+        let verts = route_vertices(g, qnode_v, &edges)?;
         let cnode = match inspect_cnode_along_route(g, &verts, &edges, frag) {
             Some(c) => c,
             None => continue,
@@ -473,6 +550,16 @@ pub fn extract_sd_paralog_pairs(
         std_frag,
         mean_read_length,
     };
+
+    // Prune small SDs + weak PO edges + self-loops BEFORE labeling/sorting. The
+    // component sizes and degrees that drive `sort_query_nodes` (and hence the
+    // coloring order) must be computed on the pruned graph, matching Python's
+    // prune-then-`to_undirected()`-then-`label_components` order. Small query
+    // nodes that get pruned simply have no vertex below (the `g.index.get` lookup
+    // returns `None`), as in Python.
+    let pruned = prune_graph(g, &frag);
+    let g = &pruned;
+
     // All-edge component labels (gt.label_components on the undirected graph).
     let comp_labels = component_labels(g, |_| true);
 
@@ -643,6 +730,69 @@ mod tests {
         assert!(!should_prune_po_edge(&sd, 300, 350.0));
     }
 
+    #[test]
+    fn should_prune_po_edge_guards_degenerate_weight() {
+        // Zero / non-finite weight must not panic or prune via inf/NaN arithmetic.
+        let zero = EdgeAttr { kind: EdgeKind::Overlap, weight: 0.0, nonoverlap_smaller: 0 };
+        assert!(!should_prune_po_edge(&zero, 100, 350.0));
+        let inf = EdgeAttr {
+            kind: EdgeKind::Overlap,
+            weight: f64::INFINITY,
+            nonoverlap_smaller: 0,
+        };
+        assert!(!should_prune_po_edge(&inf, 100, 350.0));
+    }
+
+    #[test]
+    fn prune_graph_drops_small_nodes_self_loops_and_weak_po() {
+        // cutoff = max(147, 500-150) = 350.
+        let big_a = NodeKey::new("chr1", 0, 1000, Strand::Forward); // size 1000 (keep)
+        let big_b = NodeKey::new("chr1", 2000, 3000, Strand::Forward); // size 1000 (keep)
+        let small = NodeKey::new("chr1", 5000, 5200, Strand::Forward); // size 200 (drop: small)
+        let po_tgt = NodeKey::new("chr1", 4000, 4400, Strand::Forward); // size 400 (keep as node)
+
+        let mut g = SdGraph::new();
+        let a = g.node(big_a.clone());
+        let b = g.node(big_b.clone());
+        let s = g.node(small.clone());
+        let t = g.node(po_tgt.clone());
+
+        // SD edge between survivors → kept.
+        g.g.add_edge(a, b, EdgeAttr { kind: EdgeKind::SegmentalDuplication, weight: 0.1, nonoverlap_smaller: 0 });
+        // SD edge into the small node → dropped (endpoint pruned).
+        g.g.add_edge(a, s, EdgeAttr { kind: EdgeKind::SegmentalDuplication, weight: 0.1, nonoverlap_smaller: 0 });
+        // Self-loop → dropped.
+        g.g.add_edge(a, a, EdgeAttr { kind: EdgeKind::SegmentalDuplication, weight: 0.1, nonoverlap_smaller: 0 });
+        // Weak PO edge a→t: weight 3.0 → inv 0.333 < 0.5, overlap_size 400*0.333 ≈ 133 < 350 → dropped.
+        g.g.add_edge(a, t, EdgeAttr { kind: EdgeKind::Overlap, weight: 3.0, nonoverlap_smaller: 0 });
+
+        let pruned = prune_graph(&g, &frag());
+
+        assert!(!pruned.has_node(&small), "small SD node should be dropped");
+        assert!(pruned.has_node(&big_a) && pruned.has_node(&big_b) && pruned.has_node(&po_tgt));
+        assert_eq!(pruned.node_count(), 3);
+
+        // Only the surviving SD edge a-b remains (self-loop, small-endpoint, weak-PO dropped).
+        assert_eq!(pruned.edge_count(), 1);
+        let au = pruned.index.get(&big_a).copied().unwrap();
+        let bu = pruned.index.get(&big_b).copied().unwrap();
+        assert!(pruned.g.find_edge(au, bu).is_some());
+    }
+
+    #[test]
+    fn prune_graph_keeps_strong_po_edge() {
+        // A PO edge with inv_weight 0.667 (≥ 0.5) survives even with a small overlap.
+        let a = NodeKey::new("chr1", 0, 1000, Strand::Forward);
+        let b = NodeKey::new("chr1", 2000, 3000, Strand::Forward);
+        let mut g = SdGraph::new();
+        let au = g.node(a.clone());
+        let bu = g.node(b.clone());
+        g.g.add_edge(au, bu, EdgeAttr { kind: EdgeKind::Overlap, weight: 1.5, nonoverlap_smaller: 0 });
+        let pruned = prune_graph(&g, &frag());
+        assert_eq!(pruned.node_count(), 2);
+        assert_eq!(pruned.edge_count(), 1);
+    }
+
     // ── route walk (inspect_cnode_along_route) ───────────────────────────────
 
     fn nk_full(chrom: &str, start: i64, end: i64, s: Strand) -> NodeKey {
@@ -672,7 +822,7 @@ mod tests {
         let v0 = g.index.get(&nk(0)).copied().unwrap();
         let v2 = g.index.get(&nk(2)).copied().unwrap();
         let (_, edges) = dijkstra_route(&g, v0, v2).unwrap();
-        let verts = route_vertices(&g, v0, &edges);
+        let verts = route_vertices(&g, v0, &edges).unwrap();
         assert_eq!(verts.len(), 3);
         assert_eq!(verts[0], v0);
         assert_eq!(*verts.last().unwrap(), v2);
@@ -690,7 +840,7 @@ mod tests {
         let qv = g.index.get(&q).copied().unwrap();
         let cv = g.index.get(&c).copied().unwrap();
         let (_, edges) = dijkstra_route(&g, qv, cv).unwrap();
-        let verts = route_vertices(&g, qv, &edges);
+        let verts = route_vertices(&g, qv, &edges).unwrap();
         let cnode = inspect_cnode_along_route(&g, &verts, &edges, &frag()).unwrap();
         assert_eq!(cnode.key, c);
         assert_eq!((cnode.rela_start, cnode.rela_end), (0, 2000));
@@ -715,7 +865,7 @@ mod tests {
         let qv = g.index.get(&q).copied().unwrap();
         let cv = g.index.get(&c).copied().unwrap();
         let (_, edges) = dijkstra_route(&g, qv, cv).unwrap();
-        let verts = route_vertices(&g, qv, &edges);
+        let verts = route_vertices(&g, qv, &edges).unwrap();
         let cnode = inspect_cnode_along_route(&g, &verts, &edges, &frag()).unwrap();
         assert_eq!((cnode.rela_start, cnode.rela_end), (0, 2000));
     }
@@ -733,7 +883,7 @@ mod tests {
         let qv = g.index.get(&q).copied().unwrap();
         let cv = g.index.get(&c).copied().unwrap();
         let (_, edges) = dijkstra_route(&g, qv, cv).unwrap();
-        let verts = route_vertices(&g, qv, &edges);
+        let verts = route_vertices(&g, qv, &edges).unwrap();
         let cnode = inspect_cnode_along_route(&g, &verts, &edges, &frag());
         assert!(cnode.is_none(), "tiny overlap window should drop the route");
     }

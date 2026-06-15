@@ -181,7 +181,12 @@ pub fn filter_umbrella_group(
     targets: &[(String, i64, i64)],
     coverage_threshold: f64,
 ) -> Vec<usize> {
-    assert_eq!(pairs.len(), targets.len(), "pairs/targets length mismatch");
+    // `pairs` and `targets` are built in lockstep from the same index list by the
+    // sole caller, so equal length is a structural invariant — a `debug_assert`
+    // catches a future misuse in dev/test without panicking a release run, and the
+    // `granular.len() == pairs.len()` branch below already degrades gracefully on
+    // any (impossible) mismatch.
+    debug_assert_eq!(pairs.len(), targets.len(), "pairs/targets length mismatch");
     let raw_remove = umbrella_to_remove(pairs, coverage_threshold);
 
     // Build granular pairs (refined against each row's own target).
