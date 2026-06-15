@@ -1,5 +1,5 @@
 use rust_htslib::{bam, bam::Read, bam::record::Aux};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, create_dir_all};
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -31,6 +31,27 @@ fn read_bed_regions(bed_path: &str) -> anyhow::Result<Vec<(String, u64, u64)>> {
         }
     }
     Ok(regions)
+}
+
+/// Sort + merge overlapping/adjacent regions (book-ended intervals fuse, like
+/// `bedtools sort | merge`). Collapsing overlapping input rows means a read pair
+/// is not fetched (and written) once per overlapping row, and it cuts BAM seeks.
+/// Straddling pairs (R1/R2 in two disjoint regions) are deduped separately by the
+/// written-qname set in [`bam_to_fastq`].
+fn merge_regions(mut regions: Vec<(String, u64, u64)>) -> Vec<(String, u64, u64)> {
+    regions.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    let mut merged: Vec<(String, u64, u64)> = Vec::with_capacity(regions.len());
+    for (chrom, start, end) in regions {
+        match merged.last_mut() {
+            Some((c, _s, e)) if *c == chrom && start <= *e => {
+                if end > *e {
+                    *e = end;
+                }
+            }
+            _ => merged.push((chrom, start, end)),
+        }
+    }
+    merged
 }
 
 /// Check if a read should be included based on multi-aligned filter.
@@ -72,8 +93,25 @@ fn aux_int(record: &bam::Record, tag: &[u8; 2]) -> Option<i32> {
     }
 }
 
-fn quality_to_string(qual: &[u8]) -> String {
-    qual.iter().map(|&q| (q + 33) as char).collect()
+/// Encode BAM Phred qualities as a Sanger-FASTQ quality line.
+///
+/// Valid Phred scores are `0..=93` (ASCII `!`..=`~`). `0xFF` is htslib's
+/// "qualities unavailable" sentinel and any value `> 93` is not representable in
+/// Sanger FASTQ; either is a hard error rather than a wrapped/invented character,
+/// because this FASTQ feeds realignment and a silent `0xFF + 33` wrap would emit
+/// corrupt quality scores (and panics in debug builds).
+fn quality_to_string(qual: &[u8], qname: &str) -> anyhow::Result<String> {
+    let mut out = String::with_capacity(qual.len());
+    for &q in qual {
+        if q > 93 {
+            return Err(anyhow::anyhow!(
+                "read {qname}: base quality {q} is not encodable as Sanger FASTQ \
+                 (expected 0..=93; 0xFF means the BAM has no stored qualities)"
+            ));
+        }
+        out.push((q + 33) as char);
+    }
+    Ok(out)
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -102,7 +140,9 @@ pub fn bam_to_fastq(
         create_dir_all(parent)?;
     }
 
-    let regions = read_bed_regions(region_bed)?;
+    // Merge overlapping/adjacent input rows so a pair is not extracted once per
+    // overlapping row (and to cut BAM seeks).
+    let regions = merge_regions(read_bed_regions(region_bed)?);
 
     let mut bam_reader = bam::IndexedReader::from_path(input_bam)
         .map_err(|e| anyhow::anyhow!("Failed to open BAM {input_bam}: {e}"))?;
@@ -115,6 +155,11 @@ pub fn bam_to_fastq(
     let r2_file = File::create(output_rreads)?;
     let mut r1_writer = BufWriter::new(r1_file);
     let mut r2_writer = BufWriter::new(r2_file);
+
+    // Global dedup across regions: a pair straddling two disjoint regions (R1 in
+    // one, R2 in another) is reconstructed in BOTH via the mate-fetch and would
+    // otherwise be written twice, inflating realignment depth. Emit each qname once.
+    let mut written: HashSet<Vec<u8>> = HashSet::new();
 
     for (chr, start, end) in &regions {
         let tid = header
@@ -174,8 +219,11 @@ pub fn bam_to_fastq(
             };
             if passes {
                 if let (Some(r1), Some(r2)) = (r1_opt, r2_opt) {
-                    write_fastq_record(&mut r1_writer, &r1)?;
-                    write_fastq_record(&mut r2_writer, &r2)?;
+                    // Skip if this qname was already emitted from an earlier region.
+                    if written.insert(r1.qname().to_vec()) {
+                        write_fastq_record(&mut r1_writer, &r1)?;
+                        write_fastq_record(&mut r2_writer, &r2)?;
+                    }
                 }
             }
         }
@@ -189,11 +237,56 @@ pub fn bam_to_fastq(
 fn write_fastq_record(w: &mut impl Write, rec: &bam::Record) -> anyhow::Result<()> {
     let name = std::str::from_utf8(rec.qname())
         .map_err(|e| anyhow::anyhow!("Read name is not valid UTF-8: {e}"))?;
+    // Encode quality first so an invalid score errors before any partial record
+    // is written to the buffer.
+    let qual = quality_to_string(rec.qual(), name)?;
     writeln!(w, "@{name}")?;
     writeln!(w, "{}", String::from_utf8_lossy(&rec.seq().as_bytes()))?;
     writeln!(w, "+")?;
-    writeln!(w, "{}", quality_to_string(rec.qual()))?;
+    writeln!(w, "{qual}")?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn quality_encodes_valid_phred_range() {
+        // 0 → '!' (33), 40 → 'I' (73), 93 → '~' (126): the Sanger FASTQ bounds.
+        assert_eq!(quality_to_string(&[0, 40, 93], "r1").unwrap(), "!I~");
+        assert_eq!(quality_to_string(&[], "r1").unwrap(), "");
+    }
+
+    #[test]
+    fn quality_rejects_missing_sentinel() {
+        // 0xFF is htslib's "qualities absent" marker — must error (not wrap to ' ').
+        let err = quality_to_string(&[30, 0xFF, 30], "read42").unwrap_err();
+        assert!(
+            err.to_string().contains("read42"),
+            "error should name the offending read: {err}"
+        );
+    }
+
+    #[test]
+    fn quality_rejects_out_of_range() {
+        // 94 is one past the Sanger cap and would still wrap-corrupt downstream.
+        assert!(quality_to_string(&[94], "r1").is_err());
+    }
+
+    #[test]
+    fn merge_regions_collapses_overlaps_and_sorts() {
+        let regions = vec![
+            ("chr1".to_string(), 50, 100),
+            ("chr1".to_string(), 10, 60),   // overlaps [50,100) → [10,100)
+            ("chr1".to_string(), 100, 120), // book-ended → fuse to [10,120)
+            ("chr2".to_string(), 5, 9),
+        ];
+        assert_eq!(
+            merge_regions(regions),
+            vec![("chr1".to_string(), 10, 120), ("chr2".to_string(), 5, 9)]
+        );
+    }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
