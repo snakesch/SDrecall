@@ -16,6 +16,8 @@
 //! the stages that need it arrive.
 
 mod error;
+#[macro_use]
+mod fatal;
 mod geometry;
 mod logging;
 mod parallel;
