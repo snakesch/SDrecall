@@ -100,6 +100,19 @@ pub fn passing_scatter_dist(rec: &bam::Record) -> Result<Option<f64>> {
 /// raw cutoff `0`, which the floor lifts to `4`; statrs rejects `lambda ≤ 0`, so
 /// we short-circuit to the same answer.
 pub fn poisson_cutoff(mean: f64, conf_level: f64) -> Result<u64> {
+    // Validate inputs before the search loop: a `conf_level` outside [0, 1] makes
+    // `target = 1 - conf_level` exceed 1.0, which the Poisson CDF never reaches →
+    // the `while` below would loop forever. A non-finite mean is likewise rejected.
+    if !(0.0..=1.0).contains(&conf_level) {
+        return Err(SdError::Compute(format!(
+            "poisson_cutoff: conf_level {conf_level} is out of range [0, 1]"
+        )));
+    }
+    if !mean.is_finite() {
+        return Err(SdError::Compute(format!(
+            "poisson_cutoff: mean {mean} is not finite"
+        )));
+    }
     if mean <= 0.0 {
         return Ok(4);
     }
@@ -311,6 +324,22 @@ mod tests {
         // mean 8, conf 0.001 → cutoff well above 4 (floor must not reduce it)
         let c = poisson_cutoff(8.0, 0.001).unwrap();
         assert!(c > 4, "expected cutoff > 4, got {c}");
+    }
+
+    #[test]
+    fn poisson_cutoff_rejects_bad_conf_level() {
+        // Out-of-range conf_level would make `target > 1` and loop forever.
+        assert!(poisson_cutoff(5.0, -0.1).is_err());
+        assert!(poisson_cutoff(5.0, 1.5).is_err());
+        // The boundaries are valid.
+        assert!(poisson_cutoff(5.0, 0.0).is_ok());
+        assert!(poisson_cutoff(5.0, 1.0).is_ok());
+    }
+
+    #[test]
+    fn poisson_cutoff_rejects_nonfinite_mean() {
+        assert!(poisson_cutoff(f64::NAN, 0.01).is_err());
+        assert!(poisson_cutoff(f64::INFINITY, 0.01).is_err());
     }
 
     // ── nm_distribution_poisson (end-to-end on a synthetic BAM) ──────────────
