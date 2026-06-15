@@ -308,11 +308,14 @@ fn collate_to_tempfile(bam_path: &Path, threads: u8) -> Result<Option<NamedTempF
             source: e,
         })?;
     if !out.status.success() {
-        log::warn!(
-            "samtools collate to temp failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        return Ok(None);
+        // samtools IS available (checked above) but collate failed — a hard error,
+        // not a silent downgrade to the in-memory path. Only an ABSENT samtools
+        // (the early `Ok(None)`) is a legitimate capability fallback.
+        return Err(SdError::Htslib(format!(
+            "samtools collate to temp failed (exit {}): {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
     }
     Ok(Some(tf))
 }
