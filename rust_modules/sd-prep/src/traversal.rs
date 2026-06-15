@@ -34,7 +34,7 @@ use bio::alphabets::dna::revcomp;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use rustc_hash::FxHashMap;
-use sdrecall_utils::{Result, SdError};
+use sdrecall_utils::{fatal_invariant, Result, SdError};
 use std::path::Path;
 
 /// The fragment-size + read-length scalars threaded through the route walk — one
@@ -204,22 +204,33 @@ pub fn prune_graph(g: &SdGraph, frag: &FragParams) -> SdGraph {
 /// `dijkstra_route` returns ordered `EdgeIndex`es; this walks them from `src` to
 /// derive `[src, v1, v2, ..., tgt]` by following the endpoint that is not the
 /// current node at each step (the graph is treated undirected).
-fn route_vertices(
-    g: &SdGraph,
-    src: NodeIndex,
-    edges: &[petgraph::graph::EdgeIndex],
-) -> Result<Vec<NodeIndex>> {
+///
+/// # Invariant
+///
+/// Every `EdgeIndex` in `edges` was produced by `dijkstra_route` on the same
+/// immutable `&SdGraph`. The graph cannot have been mutated between the dijkstra
+/// call and this one (both take `&SdGraph`), so `edge_endpoints` returning `None`
+/// is structurally impossible — it would require either a petgraph soundness bug
+/// or memory corruption. We abort on violation rather than propagating a
+/// recoverable error that would be silently swallowed upstream.
+fn route_vertices(g: &SdGraph, src: NodeIndex, edges: &[petgraph::graph::EdgeIndex]) -> Vec<NodeIndex> {
     let mut verts = Vec::with_capacity(edges.len() + 1);
     verts.push(src);
     let mut cur = src;
     for &e in edges {
-        let (a, b) = g.g.edge_endpoints(e).ok_or_else(|| {
-            SdError::Compute(format!("dijkstra route references a missing edge {e:?}"))
-        })?;
+        let (a, b) = g.g.edge_endpoints(e).unwrap_or_else(|| {
+            fatal_invariant!(
+                "dijkstra route references edge {:?} absent from the graph \
+                 (graph has {} nodes, {} edges) — this is a bug in graph_core or memory corruption",
+                e,
+                g.node_count(),
+                g.edge_count()
+            )
+        });
         cur = if a == cur { b } else { a };
         verts.push(cur);
     }
-    Ok(verts)
+    verts
 }
 
 /// The route-walk that derives the counterpart node's relative window + its
@@ -470,7 +481,7 @@ fn traverse_qnode(
         }
 
         // Walk the route → cnode window + route.
-        let verts = route_vertices(g, qnode_v, &edges)?;
+        let verts = route_vertices(g, qnode_v, &edges);
         let cnode = match inspect_cnode_along_route(g, &verts, &edges, frag) {
             Some(c) => c,
             None => continue,
@@ -822,7 +833,7 @@ mod tests {
         let v0 = g.index.get(&nk(0)).copied().unwrap();
         let v2 = g.index.get(&nk(2)).copied().unwrap();
         let (_, edges) = dijkstra_route(&g, v0, v2).unwrap();
-        let verts = route_vertices(&g, v0, &edges).unwrap();
+        let verts = route_vertices(&g, v0, &edges);
         assert_eq!(verts.len(), 3);
         assert_eq!(verts[0], v0);
         assert_eq!(*verts.last().unwrap(), v2);
@@ -840,7 +851,7 @@ mod tests {
         let qv = g.index.get(&q).copied().unwrap();
         let cv = g.index.get(&c).copied().unwrap();
         let (_, edges) = dijkstra_route(&g, qv, cv).unwrap();
-        let verts = route_vertices(&g, qv, &edges).unwrap();
+        let verts = route_vertices(&g, qv, &edges);
         let cnode = inspect_cnode_along_route(&g, &verts, &edges, &frag()).unwrap();
         assert_eq!(cnode.key, c);
         assert_eq!((cnode.rela_start, cnode.rela_end), (0, 2000));
@@ -865,7 +876,7 @@ mod tests {
         let qv = g.index.get(&q).copied().unwrap();
         let cv = g.index.get(&c).copied().unwrap();
         let (_, edges) = dijkstra_route(&g, qv, cv).unwrap();
-        let verts = route_vertices(&g, qv, &edges).unwrap();
+        let verts = route_vertices(&g, qv, &edges);
         let cnode = inspect_cnode_along_route(&g, &verts, &edges, &frag()).unwrap();
         assert_eq!((cnode.rela_start, cnode.rela_end), (0, 2000));
     }
@@ -883,7 +894,7 @@ mod tests {
         let qv = g.index.get(&q).copied().unwrap();
         let cv = g.index.get(&c).copied().unwrap();
         let (_, edges) = dijkstra_route(&g, qv, cv).unwrap();
-        let verts = route_vertices(&g, qv, &edges).unwrap();
+        let verts = route_vertices(&g, qv, &edges);
         let cnode = inspect_cnode_along_route(&g, &verts, &edges, &frag());
         assert!(cnode.is_none(), "tiny overlap window should drop the route");
     }
