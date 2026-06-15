@@ -450,9 +450,11 @@ pub fn build_allele_depth_map(
         }
         
         let chrom = fields[0];
-        let pos: u32 = match fields[1].parse::<u32>() {
-            Ok(p) => p - 1, // Convert to 0-based
-            Err(_) => continue,
+        // pileup POS is 1-based; `checked_sub(1)` converts to 0-based and skips a
+        // malformed POS==0 that would otherwise wrap to u32::MAX in release builds.
+        let pos: u32 = match fields[1].parse::<u32>().ok().and_then(|p| p.checked_sub(1)) {
+            Some(p) => p,
+            None => continue,
         };
         let ref_allele = fields[2];
         let alt_alleles = fields[3];
@@ -460,8 +462,10 @@ pub fn build_allele_depth_map(
         
         // Even if ALT is empty, still record REF depth/DP (positions with no ALT)
         
-        // Parse AD values
-        let ad_values: Vec<u16> = ad_str
+        // Parse AD values. u32 (not u16): the per-allele depths and especially
+        // their sum (`total_depth`) can exceed 65535 in ultra-high-coverage
+        // pileups, which would overflow u16 (panic in debug, wrap in release).
+        let ad_values: Vec<u32> = ad_str
             .split(',')
             .filter_map(|s| s.parse().ok())
             .collect();
@@ -471,7 +475,7 @@ pub fn build_allele_depth_map(
         }
         
         let ref_depth = ad_values[0];
-        let total_depth: u16 = ad_values.iter().sum();
+        let total_depth: u32 = ad_values.iter().sum();
         
         if total_depth == 0 {
             continue;

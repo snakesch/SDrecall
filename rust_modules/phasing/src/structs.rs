@@ -248,8 +248,12 @@ impl ReadPairMap {
 }
 
 /// Simple array for allele depths: [A, T, C, G, N, total_depth]
-/// Much simpler than a custom struct for just storing 6 u16 values
-pub type PositionAlleleDepth = [u16; 6];
+/// Much simpler than a custom struct for just storing 6 depth values.
+/// `u32` (not `u16`): the total-depth slot is a SUM of per-allele depths, which
+/// can exceed 65535 in ultra-high-coverage pileups (amplicon/targeted) and would
+/// otherwise overflow. Per-allele depths are stored in the same width for
+/// consistency; values for normal coverage are unchanged (parity-neutral).
+pub type PositionAlleleDepth = [u32; 6];
 
 /// Efficient nested structure for chromosome -> position -> allele depths
 /// Uses specialized HashMaps for better performance
@@ -291,19 +295,19 @@ impl AlleleDepthMap {
 /// Helper functions for working with PositionAlleleDepth arrays
 impl AlleleDepthMap {
     /// Create a new allele depth array with total depth
-    pub fn new_position_data(total_depth: u16) -> PositionAlleleDepth {
+    pub fn new_position_data(total_depth: u32) -> PositionAlleleDepth {
         [0, 0, 0, 0, 0, total_depth] // [A, T, C, G, N, total]
     }
     
     /// Set allele depth at given index
-    pub fn set_allele_depth(data: &mut PositionAlleleDepth, allele_index: usize, depth: u16) {
+    pub fn set_allele_depth(data: &mut PositionAlleleDepth, allele_index: usize, depth: u32) {
         if allele_index < 5 {
             data[allele_index] = depth;
         }
     }
     
     /// Get allele depth at given index
-    pub fn get_allele_depth(data: &PositionAlleleDepth, allele_index: usize) -> u16 {
+    pub fn get_allele_depth(data: &PositionAlleleDepth, allele_index: usize) -> u32 {
         if allele_index < 5 {
             data[allele_index]
         } else {
@@ -312,7 +316,7 @@ impl AlleleDepthMap {
     }
     
     /// Get total depth
-    pub fn total_depth(data: &PositionAlleleDepth) -> u16 {
+    pub fn total_depth(data: &PositionAlleleDepth) -> u32 {
         data[5]
     }
     
