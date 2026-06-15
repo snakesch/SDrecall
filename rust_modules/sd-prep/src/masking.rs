@@ -204,7 +204,15 @@ pub fn mask_genome(
     }
 
     // ---- 5. write 60-wrapped FASTA to a temp, then md5-gate ----
-    let tmp = format!("{}.{}.tmp.fasta", out.display(), std::process::id());
+    // pid + atomic seq: the seq makes the temp name collision-free even if two
+    // rayon workers ever mask to the same `out` (pid alone is shared across the
+    // pool's threads).
+    let tmp = {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        format!("{}.{}.{}.tmp.fasta", out.display(), std::process::id(), seq)
+    };
     write_wrapped_fasta(std::path::Path::new(&tmp), &contigs)?;
     md5_gated_replace(std::path::Path::new(&tmp), out)?;
     // Build the .fai for the masked genome so downstream intrinsic alignment can

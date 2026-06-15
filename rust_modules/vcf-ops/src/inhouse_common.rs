@@ -153,8 +153,14 @@ pub fn annotate_inhouse_common(p: InhouseParams<'_>) -> Result<()> {
     Ok(())
 }
 
+/// A process-unique temp path under `tmp_dir`: `{pid}.{seq}.{name}` (see the
+/// twin in `priority_merge`). The atomic `seq` makes concurrent calls within one
+/// process collision-free. The caller cleans up.
 fn tmp_path(tmp_dir: &Path, name: &str) -> std::path::PathBuf {
-    tmp_dir.join(format!("{}.{}", std::process::id(), name))
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    tmp_dir.join(format!("{}.{}.{}", std::process::id(), seq, name))
 }
 
 #[cfg(test)]

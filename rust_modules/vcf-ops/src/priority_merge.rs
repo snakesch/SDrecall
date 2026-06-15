@@ -228,9 +228,15 @@ fn werr(e: rust_htslib::errors::Error) -> SdError {
     SdError::Vcf(format!("write record: {e}"))
 }
 
-/// A unique-ish temp path under `tmp_dir` (pid-stamped). The caller cleans up.
+/// A process-unique temp path under `tmp_dir`: `{pid}.{seq}.{name}`. The pid
+/// disambiguates concurrent SDrecall processes sharing a tmp dir; the atomic
+/// `seq` disambiguates concurrent calls WITHIN one process, so a future
+/// rayon-over-contigs cannot collide on a fixed `name`. The caller cleans up.
 fn tmp_path(tmp_dir: &Path, name: &str) -> std::path::PathBuf {
-    tmp_dir.join(format!("{}.{}", std::process::id(), name))
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    tmp_dir.join(format!("{}.{}.{}", std::process::id(), seq, name))
 }
 
 #[cfg(test)]
