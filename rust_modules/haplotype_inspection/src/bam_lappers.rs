@@ -555,6 +555,11 @@ fn is_read_noisy(
         return true;
     }
 
+    // Python (bam_ncls.is_read_noisy) drops QC-fail reads.
+    if read.is_quality_check_failed() {
+        return true;
+    }
+
     if read.mapq() < mapq_filter {
         return true;
     }
@@ -566,14 +571,12 @@ fn is_read_noisy(
             return true;
         }
 
-        // Ensure mate on same reference
-        if let (Some(ref_name), Some(next_ref_name)) = (
-            get_reference_name(read, header),
-            get_next_reference_name(read, header),
-        ) {
-            if ref_name != next_ref_name {
-                return true;
-            }
+        // Ensure mate on same reference. Python compares reference_name !=
+        // next_reference_name, which also flags a read whose mate reference is
+        // unset (None) — so compare the Options directly rather than requiring
+        // both to be Some.
+        if get_reference_name(read, header) != get_next_reference_name(read, header) {
+            return true;
         }
 
         // Check proper pair flag (warning only, not filtering)

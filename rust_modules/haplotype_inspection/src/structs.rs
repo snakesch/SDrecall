@@ -43,7 +43,8 @@ pub struct EnrichedRecord {
     pub hap_max_sim_scores: f64,  // rounded to 0.1
     pub hap_max_psvs: i32,
     // Computed during coefficient calculation
-    pub varc_rank: i32,
+    pub varc_rank: i32,         // sim-score rank (Python "varc_rank"); read by the BILC solver
+    pub rank: i32,              // coefficient rank (Python "rank" column); TSV/debug only
     pub interval_coefficient: f64,
     pub coefficient: f64,
 }

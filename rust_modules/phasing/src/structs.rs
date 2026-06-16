@@ -499,7 +499,7 @@ impl HaplotypeConfig {
     pub fn new(mean_read_length: f32) -> Self {
         // Create score array equivalent to Python: [mean_read_length + mean_read_length * i for i in range(50)]
         let score_array: Vec<f32> = (0..50)
-            .map(|i| mean_read_length + mean_read_length * (i as f32 + 1.0))
+            .map(|i| mean_read_length + mean_read_length * (i as f32))
             .collect();
             
         Self {

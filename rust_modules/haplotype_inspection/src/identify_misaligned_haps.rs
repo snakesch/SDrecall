@@ -2208,6 +2208,7 @@ pub fn inspect_haplotypes(
                     hap_max_sim_scores: sim_score_rounded,
                     hap_max_psvs: *hap_max_psvs.get(&hap_id).unwrap_or(&0),
                     varc_rank: 0,
+                    rank: 0,
                     interval_coefficient: 0.0,
                     coefficient: 0.0,
                 });
@@ -2308,8 +2309,11 @@ pub fn inspect_haplotypes(
                 .map(|&i| ((total_records[i].coefficient * 100.0).round() / 100.0) as f32)
                 .collect();
             let ranks = rank_unique_values(&coeff_arr);
+            // Python stores the coefficient rank in a SEPARATE "rank" column
+            // (lines 1401-1406); the BILC solver keys off varc_rank (the
+            // sim-score rank set in step (a)), so keep varc_rank intact here.
             for (j, &i) in indices.iter().enumerate() {
-                total_records[i].varc_rank = ranks[j];
+                total_records[i].rank = ranks[j];
             }
         }
 
@@ -2434,15 +2438,15 @@ fn write_haplotype_meta_tsv(
     // Header
     let _ = writeln!(w, "chrom\tstart\tend\ttotal_depth\thap_id\thap_depth\tvar_count\t\
                          indel_count\tpsv_count\textreme_vard\tscatter_hap\thap_var_count\t\
-                         hap_max_sim_scores\thap_max_psvs\tcoefficient\tvarc_rank\t\
+                         hap_max_sim_scores\thap_max_psvs\tcoefficient\tvarc_rank\trank\t\
                          interval_coefficient\tmismap\tcorrect_map");
     for r in records {
-        let _ = writeln!(w, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+        let _ = writeln!(w, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             r.chrom, r.start, r.end, r.total_depth, r.hap_id, r.hap_depth,
             r.var_count, r.indel_count, r.psv_count,
             r.extreme_vard, r.scatter_hap, r.hap_var_count,
             r.hap_max_sim_scores, r.hap_max_psvs,
-            r.coefficient, r.varc_rank, r.interval_coefficient,
+            r.coefficient, r.varc_rank, r.rank, r.interval_coefficient,
             mismap_hids.contains(&r.hap_id),
             correct_map_hids.contains(&r.hap_id));
     }
