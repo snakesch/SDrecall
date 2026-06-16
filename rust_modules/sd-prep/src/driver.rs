@@ -385,10 +385,21 @@ fn write_filtered_sd_map(path: &Path, rows: &[BinSdRow]) -> Result<()> {
     Ok(())
 }
 
-/// One realignment group: its query nodes + the per-qnode counterpart cnodes.
-struct RgGroup {
-    qnodes: Vec<NodeKey>,
+/// One sub-cluster of a realignment group: a single FC (query) node paired with
+/// its own counterpart cnodes. The sub-cluster's index is its position in
+/// [`RgGroup::subclusters`] — matching the Python `cluster_idx`
+/// (`build_beds_and_masked_genomes.py` l.26-32), which is the FC/NFC tag suffix.
+struct RgSubcluster {
+    fc: NodeKey,
     counterparts: Vec<HomoseqRegion>,
+}
+
+/// One realignment group: its sub-clusters. Each sub-cluster keeps its FC node
+/// paired with ITS counterparts (we deliberately do NOT flatten, so the per-
+/// sub-cluster `FC:/NFC:` tags and the `qnode_relative_region` projection that
+/// `region-prep` needs can be written out — `build_beds` l.174-189).
+struct RgGroup {
+    subclusters: Vec<RgSubcluster>,
 }
 
 /// Collapse the coloring groups into RG clusters — the analog of
@@ -401,25 +412,30 @@ fn build_rg_groups(
 ) -> Vec<RgGroup> {
     let mut groups: Vec<RgGroup> = Vec::new();
     for group in color_groups {
-        // Keep only qnodes that actually have counterparts (build_beds l.28-32).
-        let mut qnodes: Vec<NodeKey> = Vec::new();
-        let mut counterparts: Vec<HomoseqRegion> = Vec::new();
+        // One sub-cluster per qnode that actually has counterparts, in the group's
+        // qnode order — this position IS the Python `cluster_idx` (build_beds
+        // l.27-32).
+        let mut subclusters: Vec<RgSubcluster> = Vec::new();
         for q in group {
             if let Some(cs) = sd_paralog_pairs.get(q) {
-                qnodes.push(q.clone());
-                counterparts.extend(cs.iter().cloned());
+                subclusters.push(RgSubcluster {
+                    fc: q.clone(),
+                    counterparts: cs.clone(),
+                });
             }
         }
-        if qnodes.is_empty() || counterparts.is_empty() {
+        if subclusters.is_empty() {
             continue;
         }
-        groups.push(RgGroup { qnodes, counterparts });
+        groups.push(RgGroup { subclusters });
     }
-    // Load-balance sort: by (sum qnode sizes) * (count counterparts), descending.
+    // Load-balance sort: (sum of FC-node sizes) * (total counterpart count),
+    // descending — the same key as Python (build_beds l.36).
     groups.sort_by(|a, b| {
         let key = |g: &RgGroup| -> i64 {
-            let qsz: i64 = g.qnodes.iter().map(|k| k.size()).sum();
-            qsz * g.counterparts.len() as i64
+            let qsz: i64 = g.subclusters.iter().map(|s| s.fc.size()).sum();
+            let ccnt: i64 = g.subclusters.iter().map(|s| s.counterparts.len() as i64).sum();
+            qsz * ccnt
         };
         key(b).cmp(&key(a))
     });
@@ -468,6 +484,77 @@ fn write_bed6(path: &Path, ivs: &[GenomicInterval]) -> Result<()> {
     Ok(())
 }
 
+/// Write the per-RG 7-column "all related homo regions" BED — a faithful port of
+/// `build_beds_and_masked_genomes.py` l.174-189.
+///
+/// Layout per row: `chrom  start  end  col4  col5  strand  TAG`, where:
+/// - FC (query) rows: `col4 = col5 = "."`, `TAG = FC:{label}_{idx}`, coordinates
+///   are the FC node's own (chrom/start/end/strand).
+/// - NFC (counterpart) rows: coordinates are the counterpart's `fix_coord` window;
+///   `col4/col5` are that counterpart projected into its sub-cluster FC node's
+///   frame via [`HomoseqRegion::qnode_relative_region`] (`"NaN"` if the projection
+///   collapses, byte-identical to Python); `TAG = NFC:{label}_{idx}`.
+///
+/// `idx` is the sub-cluster's position. All FC rows are written first (across
+/// every sub-cluster), then all NFC rows — matching the Python write order. The
+/// file is deliberately NOT merged: region-prep splits it by the per-sub-cluster
+/// tags and reads `col4/col5`.
+fn write_all_region_bed(path: &Path, label: &str, subclusters: &[RgSubcluster]) -> Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let f = std::fs::File::create(path).map_err(|e| SdError::Io {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    let mut w = std::io::BufWriter::new(f);
+    let io = |e: std::io::Error| SdError::Io {
+        path: path.display().to_string(),
+        source: e,
+    };
+
+    // FC rows first, across all sub-clusters.
+    for (idx, sc) in subclusters.iter().enumerate() {
+        writeln!(
+            w,
+            "{}\t{}\t{}\t.\t.\t{}\tFC:{}_{}",
+            sc.fc.chrom,
+            sc.fc.start,
+            sc.fc.end,
+            strand_str(sc.fc.strand),
+            label,
+            idx
+        )
+        .map_err(io)?;
+    }
+    // Then NFC rows, projected into each sub-cluster's FC frame.
+    for (idx, sc) in subclusters.iter().enumerate() {
+        for c in &sc.counterparts {
+            let (chrom, start, end, strand) = c.fix_coord();
+            let (col4, col5) = match c.qnode_relative_region(&sc.fc) {
+                Some((s, e)) => (s.to_string(), e.to_string()),
+                None => ("NaN".to_string(), "NaN".to_string()),
+            };
+            writeln!(
+                w,
+                "{}\t{}\t{}\t{}\t{}\t{}\tNFC:{}_{}",
+                chrom,
+                start,
+                end,
+                col4,
+                col5,
+                strand_str(strand),
+                label,
+                idx
+            )
+            .map_err(io)?;
+        }
+    }
+    w.flush().map_err(io)?;
+    Ok(())
+}
+
 /// The realignment-group output paths the driver writes (per-RG).
 #[derive(Clone, Debug)]
 pub struct RgOutputs {
@@ -507,25 +594,33 @@ fn establish_rg(
     let masked_genome = dir.join(format!("{label}.masked.fasta"));
     let intrinsic_bam = dir.join(format!("{label}.intrinsic.bam"));
 
-    // query BED.
-    let query_ivs = write_query_bed(&query_bed, &group.qnodes)?;
+    // query BED: one row per sub-cluster FC node (build_beds l.148-156).
+    let qnode_keys: Vec<NodeKey> = group.subclusters.iter().map(|s| s.fc.clone()).collect();
+    let query_ivs = write_query_bed(&query_bed, &qnode_keys)?;
 
     // counterpart BED: each cnode's fix_coord window (build_beds l.159-166).
     let mut counter_ivs: Vec<GenomicInterval> = Vec::new();
-    for c in &group.counterparts {
-        let (chrom, start, end, strand) = c.fix_coord();
-        if end > start {
-            counter_ivs.push(GenomicInterval::with_strand(chrom, start, end, strand));
+    for sc in &group.subclusters {
+        for c in &sc.counterparts {
+            let (chrom, start, end, strand) = c.fix_coord();
+            if end > start {
+                counter_ivs.push(GenomicInterval::with_strand(chrom, start, end, strand));
+            }
         }
     }
     let counter_merged = sdrecall_io::sort_merge_bed(&counter_ivs, true);
     write_bed6(&counterparts_bed, &counter_merged)?;
 
-    // all-regions BED = query ∪ counterpart intervals (build_beds l.174-189).
+    // all-regions BED: the 7-column FC/NFC-tagged, per-sub-cluster, projected
+    // format that region-prep consumes (build_beds l.174-189). NOT merged — the
+    // tags + col4/col5 projection must survive.
+    write_all_region_bed(&all_regions_bed, label, &group.subclusters)?;
+
+    // Merged all-region intervals (query ∪ counterpart) for the intrinsic
+    // alignment below, which needs the regions but not the FC/NFC tags.
     let mut all_ivs = query_ivs.clone();
     all_ivs.extend(counter_merged.iter().cloned());
     let all_merged = sdrecall_io::sort_merge_bed(&all_ivs, false);
-    write_bed6(&all_regions_bed, &all_merged)?;
 
     // masked genome (md5-gated FASTA).
     crate::masking::mask_genome(
@@ -725,6 +820,39 @@ mod tests {
         // mixed strands unchanged.
         let (a, b) = (Strand::Forward, Strand::Reverse);
         assert_eq!((a, b), (Strand::Forward, Strand::Reverse));
+    }
+
+    #[test]
+    fn all_region_bed_is_7col_fc_then_nfc_tagged() {
+        use crate::homoseq::HomoseqRegion;
+        use petgraph::graph::NodeIndex;
+
+        // sub-cluster 0: one FC node + one counterpart; sub-cluster 1: FC only.
+        // The counterpart's route is empty, so qnode_relative_region returns None
+        // and col4/col5 fall back to "NaN" (byte-faithful to Python l.100).
+        let cp = HomoseqRegion::new(
+            NodeKey::new("chr2", 500, 600, Strand::Reverse),
+            NodeIndex::new(0),
+        );
+        let subclusters = vec![
+            RgSubcluster {
+                fc: NodeKey::new("chr2", 100, 200, Strand::Forward),
+                counterparts: vec![cp],
+            },
+            RgSubcluster {
+                fc: NodeKey::new("chr3", 900, 950, Strand::Forward),
+                counterparts: vec![],
+            },
+        ];
+        let tmp = tempfile::Builder::new().suffix(".bed").tempfile().unwrap();
+        write_all_region_bed(tmp.path(), "RG0", &subclusters).unwrap();
+        let got = std::fs::read_to_string(tmp.path()).unwrap();
+        // FC rows first (both sub-clusters, in index order), then NFC rows; each
+        // row is 7 tab-separated columns with a per-sub-cluster FC:/NFC: tag.
+        let expected = "chr2\t100\t200\t.\t.\t+\tFC:RG0_0\n\
+                        chr3\t900\t950\t.\t.\t+\tFC:RG0_1\n\
+                        chr2\t500\t600\tNaN\tNaN\t-\tNFC:RG0_0\n";
+        assert_eq!(got, expected);
     }
 
     #[test]

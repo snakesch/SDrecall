@@ -48,14 +48,18 @@ pub fn stat_all_rg_region_size(
     Ok(rgs)
 }
 
-/// Parse an all-homo-regions BED file. Returns (FC subgroup IDs, total span).
+/// Parse an all-homo-regions BED file. Returns (FC sub-cluster IDs, total span).
 ///
-/// The BED6 file has lines like:
-///   chr1  1000  2000  .  .  FC:0
-///   chr1  3000  4000  .  .  NFC:0
+/// The file is the 7-column tagged BED sd-prep writes
+/// (`build_beds_and_masked_genomes.py` l.174-189):
+///   chr1  1000  2000  .    .    +  FC:RG0_0
+///   chr1  3000  5000  100  300  -  NFC:RG0_0
 ///
-/// FC rows indicate fully-covered subgroups; we extract the unique FC
-/// subgroup indices as sequential IDs, mirroring the Python `fc_bedf` logic.
+/// The sub-cluster id is the suffix of each `FC:{label}_{sub}` tag in the tag
+/// column (col 6) — read straight from the tag (matching region-prep's
+/// `RgTag::parse`), NOT inferred by counting rows. They are returned in
+/// first-seen order (which is sub-cluster order, since sd-prep writes FC rows in
+/// index order).
 fn parse_all_regions_bed(path: &Path) -> Result<(Vec<String>, i64)> {
     let file = std::fs::File::open(path).map_err(|e| SdError::Io {
         path: path.display().to_string(),
@@ -63,7 +67,7 @@ fn parse_all_regions_bed(path: &Path) -> Result<(Vec<String>, i64)> {
     })?;
     let reader = BufReader::new(file);
 
-    let mut fc_count: usize = 0;
+    let mut subgroup_ids: Vec<String> = Vec::new();
     let mut total_span: i64 = 0;
 
     for line in reader.lines() {
@@ -75,7 +79,7 @@ fn parse_all_regions_bed(path: &Path) -> Result<(Vec<String>, i64)> {
             continue;
         }
         let cols: Vec<&str> = line.split('\t').collect();
-        if cols.len() < 3 {
+        if cols.len() < 7 {
             continue;
         }
 
@@ -83,17 +87,18 @@ fn parse_all_regions_bed(path: &Path) -> Result<(Vec<String>, i64)> {
         let end: i64 = cols[2].parse().unwrap_or(0);
         total_span += end - start;
 
-        // The last column contains "FC:N" or "NFC:N" (strand field in BED6).
-        if let Some(last) = cols.last() {
-            if last.starts_with("FC:") {
-                fc_count += 1;
+        // Tag column (col 6): "FC:{label}_{sub}" / "NFC:{label}_{sub}". Take the
+        // sub-cluster id from the FC tag suffix (the part after the first '_' of
+        // the body), exactly as region-prep's RgTag::parse splits it.
+        if let Some(body) = cols[6].strip_prefix("FC:") {
+            if let Some((_label, sub)) = body.split_once('_') {
+                let sub = sub.to_string();
+                if !subgroup_ids.contains(&sub) {
+                    subgroup_ids.push(sub);
+                }
             }
         }
     }
-
-    // Python: sub_ids = [i for i in range(fc_bedf.shape[0])] after drop_duplicates.
-    // We use a simple sequential count here.
-    let subgroup_ids: Vec<String> = (0..fc_count).map(|i| i.to_string()).collect();
 
     Ok((subgroup_ids, total_span))
 }
@@ -108,10 +113,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bed = dir.path().join("RG0_related_homo_regions.bed");
         {
+            // 7-column tagged format (chrom start end col4 col5 strand TAG).
             let mut f = std::fs::File::create(&bed).unwrap();
-            writeln!(f, "chr1\t1000\t2000\t.\t.\tFC:0").unwrap();
-            writeln!(f, "chr1\t3000\t5000\t.\t.\tNFC:0").unwrap();
-            writeln!(f, "chr1\t6000\t7000\t.\t.\tFC:1").unwrap();
+            writeln!(f, "chr1\t1000\t2000\t.\t.\t+\tFC:RG0_0").unwrap();
+            writeln!(f, "chr1\t3000\t5000\t100\t300\t-\tNFC:RG0_0").unwrap();
+            writeln!(f, "chr1\t6000\t7000\t.\t.\t+\tFC:RG0_1").unwrap();
         }
         let (ids, span) = parse_all_regions_bed(&bed).unwrap();
         assert_eq!(ids, vec!["0", "1"]);
@@ -125,12 +131,12 @@ mod tests {
         let bed1 = dir.path().join("RG1.bed");
         {
             let mut f = std::fs::File::create(&bed0).unwrap();
-            writeln!(f, "chr1\t0\t100\t.\t.\tFC:0").unwrap();
+            writeln!(f, "chr1\t0\t100\t.\t.\t+\tFC:RG0_0").unwrap();
         }
         {
             let mut f = std::fs::File::create(&bed1).unwrap();
-            writeln!(f, "chr1\t0\t5000\t.\t.\tFC:0").unwrap();
-            writeln!(f, "chr1\t6000\t8000\t.\t.\tFC:1").unwrap();
+            writeln!(f, "chr1\t0\t5000\t.\t.\t+\tFC:RG1_0").unwrap();
+            writeln!(f, "chr1\t6000\t8000\t.\t.\t+\tFC:RG1_1").unwrap();
         }
         let rgs = stat_all_rg_region_size(
             &["RG0".into(), "RG1".into()],
