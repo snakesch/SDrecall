@@ -11,7 +11,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use phasing::{phase_bam, PhaserParams};
+use phasing::{phase_bam_with_intrinsic, PhaserParams};
 
 #[derive(Parser, Debug)]
 #[command(about = "Standalone BAM phaser for paired short-read data")]
@@ -27,6 +27,13 @@ struct Args {
     /// Output HP-tagged BAM path.
     #[arg(long)]
     output: String,
+
+    /// Optional intrinsic BAM (paralog reference alignments). When supplied, its
+    /// allele-depth pileup drives paralogous-sequence-variant (PSV) detection in
+    /// the edge-weight formula (Python `intrinsic_ad_dict`); omit it to disable PSV
+    /// deductions (the standalone-phaser default).
+    #[arg(long)]
+    intrinsic_bam: Option<String>,
 
     /// Edge-weight cutoff for phasing clique rounds.
     #[arg(long, default_value_t = 0.301)]
@@ -62,8 +69,14 @@ fn main() -> Result<()> {
     };
 
     let t0 = Instant::now();
-    let out = phase_bam(&args.bam, &args.reference, &args.output, &params)
-        .context("phase_bam failed")?;
+    let out = phase_bam_with_intrinsic(
+        &args.bam,
+        &args.reference,
+        &args.output,
+        args.intrinsic_bam.as_deref(),
+        &params,
+    )
+    .context("phase_bam failed")?;
 
     let elapsed = t0.elapsed();
     println!(

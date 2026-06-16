@@ -882,11 +882,18 @@ pub fn determine_same_haplotype(
     end: i64,
     chrom: &str,
     allele_depth_map: &AlleleDepthMap,
+    intrinsic_ad_map: &AlleleDepthMap,
     config: &HaplotypeConfig,
     read_hap_vectors: &mut AHashMap<String, ReadHaplotypeVector>,
     read_error_vectors: &mut AHashMap<String, ReadErrorVector>, 
     read_ref_pos_dict: &mut AHashMap<String, (i64, i64)>,
 ) -> Result<(HaplotypeResult, Option<f32>), Box<dyn std::error::Error>> {
+    // `allele_depth_map`  : MAIN-bam AD (Python `nested_ad_dict`) → sequencing-error
+    //                       tolerance check (`tolerate_mismatches_*`).
+    // `intrinsic_ad_map`  : INTRINSIC-bam AD (Python `intrinsic_ad_dict`) → PSV
+    //                       detection inside the edge-weight formula
+    //                       (`psv_shared_snvs`). May be empty (standalone phaser /
+    //                       Python's `intrinsic_ad_dict = {}`) → psv_snv_count == 0.
     // Extract qnames from records
     let qname1 = std::str::from_utf8(read1.qname())?;
     let qname2 = std::str::from_utf8(read2.qname())?;
@@ -918,7 +925,14 @@ pub fn determine_same_haplotype(
     // OPTIMIZATION: Compute once, use in both identical and tolerable mismatch cases
     let hap_vec1 = get_hap_vector(read1, read_hap_vectors)?;
     let hap_vec2 = get_hap_vector(read2, read_hap_vectors)?;
-    
+
+    // Slice both haplotype vectors to the overlap interval ONCE. The edge-weight
+    // formula (overlap_span / indel_num / shared SNVs) and the mismatch analysis
+    // in BOTH branches operate on these interval-restricted vectors, so computing
+    // them here avoids the previous triple re-slicing.
+    let interval_hap1 = slice_hap_vector(&hap_vec1, read1.pos(), start, end);
+    let interval_hap2 = slice_hap_vector(&hap_vec2, read2.pos(), start, end);
+
     // Step 4: Compare sequences for exact match
     if compare_sequences(&interval_seq1, &interval_seq2) {
         // SEQUENCES ARE IDENTICAL: Same haplotype (likely)
@@ -933,43 +947,24 @@ pub fn determine_same_haplotype(
 		debug!("[determine_same_haplotype] Within this interval, the query seq for {} is {:?}, the query seq for {} is {:?}", read1_id, interval_seq1, read2_id, interval_seq2);
         
         // Sequences are identical - likely same haplotype
-        
-        // Step 5: Slice haplotype vectors to interval (using pre-computed vectors)
-        let interval_hap1 = slice_hap_vector(&hap_vec1, read1.pos(), start, end);
-        let interval_hap2 = slice_hap_vector(&hap_vec2, read2.pos(), start, end);
-        
-        // Step 6: Count shared variants for weight calculation
-        let (snv1, indel1, _) = count_variants(&interval_hap1);
-        let (snv2, indel2, _) = count_variants(&interval_hap2);
-        
-        // Use minimum counts as shared variants (conservative estimate)
-        let shared_snvs = snv1.min(snv2);
-        let shared_indels = indel1.min(indel2);
-        
-        debug!("[determine_same_haplotype] Variant counts: read1(snv={}, indel={}), read2(snv={}, indel={}), shared(snv={}, indel={})", 
-            snv1, indel1, snv2, indel2, shared_snvs, shared_indels);
-        
-        // Calculate weight based on overlap and shared variants
-        let overlap_length = end - start;
-        let mut weight = overlap_length as f32;
-        
-        // Add weight for shared variants using score array
-        for i in 0..shared_snvs.min(config.score_array.len()) {
-            weight += config.score_array[i];
-        }
-        
-        // Add weight for shared indels
-        weight += shared_indels as f32 * config.mean_read_length * 3.0;
-        
-        debug!("[determine_same_haplotype] Weight calculation: base={} + variant_bonus={:.2} + indel_bonus={:.2} = {:.2}", 
-               overlap_length,
-               (0..shared_snvs.min(config.score_array.len())).map(|i| config.score_array[i]).sum::<f32>(),
-               shared_indels as f32 * config.mean_read_length * 3.0,
-               weight);
-        
-        // Normalize weight
+        //
+        // Edge weight — faithful port of Python `determine_same_haplotype`
+        // (fp_control/pairwise_read_inspection.py lines 689-697):
+        //   weight = overlap_span + sum(score_arr[:shared_snv_count])
+        //          + mean_read_length * (shared_snv_count - psv_snv_count) * 0.75
+        //          + mean_read_length * 3 * indel_num
+        // where overlap_span / indel_num are taken over the EQUAL positions of the
+        // two interval hap-vectors and shared_snv_count is the base-agnostic count
+        // of co-located SNVs (see `compute_edge_weight_base`).
+        let weight = compute_edge_weight_base(
+            &interval_hap1, &interval_hap2, start,
+            &seq1, &ref_pos1, &seq2, &ref_pos2,
+            chrom, intrinsic_ad_map, config,
+        );
+
+        // Normalize weight (Python applies `weight/(mean_read_length*10)` in graph_build).
         let normalized_weight = weight / (config.mean_read_length * 10.0);
-        
+
         debug!("[determine_same_haplotype] Final weight: {:.6} (normalized from {:.2})", normalized_weight, weight);
         
         // No need for error vectors when sequences are identical
@@ -995,11 +990,8 @@ pub fn determine_same_haplotype(
         
         // Note: Empty sequence check is now done before compare_sequences() call
         // This branch is only reached when both sequences are non-empty but differ
-        
-        // Slice haplotype vectors to the interval for mismatch analysis
-        let interval_hap1 = slice_hap_vector(&hap_vec1, read1.pos(), start, end);
-        let interval_hap2 = slice_hap_vector(&hap_vec2, read2.pos(), start, end);
-        
+        // (interval_hap1 / interval_hap2 were sliced once near the top).
+
         // Find mismatch positions using haplotype vectors (CORRECT APPROACH)
         let mut mismatch_positions = find_mismatch_positions_from_hap_vectors(
             &interval_hap1, &interval_hap2, start, end
@@ -1011,8 +1003,11 @@ pub fn determine_same_haplotype(
             return Ok((HaplotypeResult::Different, None));
         }
 
-        // Further check the shared SNV positions to see if they share the same ALT allele
-        let (matching_shared_snv_pos, discrepant_shared_snv_pos) = stat_shared_snv_matches(
+        // Further check the shared SNV positions to see if they share the same ALT allele.
+        // `matching_shared_snv_pos` is no longer the weight's shared-SNV source (the
+        // weight now uses Python's base-agnostic count via `psv_shared_snvs`); we keep
+        // this call only for `discrepant_shared_snv_pos` (in-trans variant detection).
+        let (_matching_shared_snv_pos, discrepant_shared_snv_pos) = stat_shared_snv_matches(
             &interval_hap1, &interval_hap2, start, &seq1, &ref_pos1, &seq2, &ref_pos2, read1, read2
         )?;
 
@@ -1071,43 +1066,21 @@ pub fn determine_same_haplotype(
             // All mismatches are sequencing errors - treat as same haplotype with penalty
             
             debug!("[determine_same_haplotype] All mismatches tolerable as sequencing errors - calculating weight with penalty");
-            
-            // Slice haplotype vectors for weight calculation (using pre-computed vectors)
-            let interval_hap1 = slice_hap_vector(&hap_vec1, read1.pos(), start, end);
-            let interval_hap2 = slice_hap_vector(&hap_vec2, read2.pos(), start, end);
-            
-            // Here we really need to identify the shared SNVs and indels
-            // Not by pick the smaller SNV/Indel count in either haplotype
-            let (snv1, indel1, _) = count_variants(&interval_hap1);
-            let (snv2, indel2, _) = count_variants(&interval_hap2);
-            let shared_snvs = matching_shared_snv_pos.len();
-            let shared_indels = indel1.min(indel2);
-            
-            debug!("[determine_same_haplotype] Variant counts: read1(snv={}, indel={}), read2(snv={}, indel={}), shared(snv={}, indel={})", 
-                   snv1, indel1, snv2, indel2, shared_snvs, shared_indels);
-            
-            // Calculate weight with penalty for tolerated mismatches
-            let overlap_length = end - start;
-            let mut weight = overlap_length as f32;
-            
-            // Add weight for shared variants
-            for i in 0..shared_snvs.min(config.score_array.len()) {
-                weight += config.score_array[i];
-            }
-            weight += shared_indels as f32 * config.mean_read_length * 5.0;
-            
-            debug!("[determine_same_haplotype] Weight before penalty: {:.2} (overlap={}, variant_bonus={:.2}, indel_bonus={:.2})", 
-                   weight, overlap_length, 
-                   (0..shared_snvs.min(config.score_array.len())).map(|i| config.score_array[i]).sum::<f32>(),
-                   shared_indels as f32 * config.mean_read_length * 3.0);
-            
-            // Apply penalty for tolerated sequencing errors (like Python: weight - tolerated_count * 20)
-            weight -= tolerated_count as f32 * 20.0;
-            // Pick max between 0 and weight
-            weight = weight.max(0.0);
-            
-            debug!("[determine_same_haplotype] Penalty applied: -{} x 20.0 = -{:.1}", tolerated_count, tolerated_count as f32 * 20.0);
-            
+
+            // Edge weight: identical Python formula as the IDENTICAL path
+            // (lines 689-697), then the tolerated-mismatch penalty
+            // `weight = weight - tolerated_count * 20` (Python line 738), clamped at 0.
+            let base_weight = compute_edge_weight_base(
+                &interval_hap1, &interval_hap2, start,
+                &seq1, &ref_pos1, &seq2, &ref_pos2,
+                chrom, intrinsic_ad_map, config,
+            );
+
+            let weight = (base_weight - tolerated_count as f32 * 20.0).max(0.0);
+
+            debug!("[determine_same_haplotype] Penalty applied: base={:.2} - {} x 20.0 -> {:.2}",
+                   base_weight, tolerated_count, weight);
+
             // Normalize weight
             let normalized_weight = weight / (config.mean_read_length * 10.0);
             
@@ -1132,14 +1105,169 @@ pub fn determine_same_haplotype(
 }
 
 
-/// **RUST IMPLEMENTATION OF PYTHON'S `stat_shared_snv_matches()` FUNCTION**
-/// 
+/// Raw (un-normalized, pre-penalty) edge weight between two reads in their overlap
+/// interval — a faithful port of the weight block of Python `determine_same_haplotype`
+/// (fp_control/pairwise_read_inspection.py lines 689-697):
+///
+/// ```text
+/// identical_idx  = positions where interval_hap1 == interval_hap2   (elementwise)
+/// identical_part = interval_hap1[identical_idx]
+/// overlap_span   = identical_part.size                  # count of EQUAL positions
+/// indel_num      = count_continuous_indel_blocks(identical_part)
+/// (psv, shared)  = psv_shared_snvs(...)
+/// weight = overlap_span + sum(score_arr[:shared])
+///        + mean_read_length * (shared - psv) * 0.75
+///        + mean_read_length * 3 * indel_num
+/// ```
+///
+/// The three subtleties this encodes (vs. the previous Rust approximation):
+/// - the base is `overlap_span` = the number of **EQUAL** positions, NOT the full
+///   `end - start` span;
+/// - `indel_num` is counted over the **EQUAL** positions (`identical_part`) only;
+/// - `shared` is the **base-agnostic** count of co-located SNVs (both hap-vectors
+///   `-4`), not `min(snv1, snv2)` nor the alt-base-matching subset.
+#[allow(clippy::too_many_arguments)]
+fn compute_edge_weight_base(
+    interval_hap1: &[i16],
+    interval_hap2: &[i16],
+    interval_start: i64,
+    seq1: &[u8],
+    ref_pos1: &[i64],
+    seq2: &[u8],
+    ref_pos2: &[i64],
+    chrom: &str,
+    intrinsic_ad_map: &AlleleDepthMap,
+    config: &HaplotypeConfig,
+) -> f32 {
+    let min_len = interval_hap1.len().min(interval_hap2.len());
+
+    // identical_part: the hap values at positions where the two vectors are EQUAL.
+    let mut identical_part: Vec<i16> = Vec::with_capacity(min_len);
+    for i in 0..min_len {
+        if interval_hap1[i] == interval_hap2[i] {
+            identical_part.push(interval_hap1[i]);
+        }
+    }
+    let overlap_span = identical_part.len();
+    let indel_num = count_indel_blocks(&identical_part);
+
+    let (psv_snv_count, shared_snv_count) = psv_shared_snvs(
+        interval_hap1,
+        interval_hap2,
+        interval_start,
+        seq1,
+        ref_pos1,
+        seq2,
+        ref_pos2,
+        chrom,
+        intrinsic_ad_map,
+    );
+
+    let mut weight = overlap_span as f32;
+    // numba_sum(score_arr[:shared_snv_count]) — Python slices past the end safely,
+    // so cap at the array length.
+    let take = shared_snv_count.min(config.score_array.len());
+    for s in config.score_array.iter().take(take) {
+        weight += *s;
+    }
+    // Non-PSV shared SNVs (novel variants both reads carry, unsupported by the
+    // intrinsic-bam AD) boost the weight; PSVs (paralog-expected) do not.
+    weight += config.mean_read_length * (shared_snv_count as f32 - psv_snv_count as f32) * 0.75;
+    weight += config.mean_read_length * 3.0 * indel_num as f32;
+
+    debug!(
+        "[compute_edge_weight_base] overlap_span={}, shared_snv={}, psv_snv={}, indel_num={} -> raw weight={:.2}",
+        overlap_span, shared_snv_count, psv_snv_count, indel_num, weight
+    );
+
+    weight
+}
+
+/// Faithful port of Python `psv_shared_snvs`
+/// (fp_control/pairwise_read_inspection.py lines 475-559).
+///
+/// Returns `(psv_snv_count, shared_snv_count)`:
+/// - `shared_snv_count`: number of positions where BOTH interval hap-vectors are
+///   `-4` (a shared SNV site), **base-agnostic** (Python `numba_find_shared_snvs`).
+/// - `psv_snv_count`: of those, the count that are *paralogous sequence variants* —
+///   both reads carry the SAME non-N alt base AND that alt allele is supported
+///   (allele depth > 0) at this position in the **INTRINSIC-bam** allele-depth map.
+///
+/// `intrinsic_ad_map` mirrors Python's `intrinsic_ad_dict` (built by `stat_ad_to_dict`
+/// over the intrinsic BAM). When empty (standalone phaser, or Python's
+/// `intrinsic_ad_dict = {}`), `psv_snv_count` is always 0 and every shared SNV gets
+/// the full `mean_read_length * 0.75` boost.
+///
+/// Representational note: Python's inner dict only stores ALT (and DP) keys, never
+/// the REF base, whereas the Rust `PositionAlleleDepth` array also carries the REF
+/// slot. This never diverges because `alt1` here is the read's base at a `-4` (SNV)
+/// site — i.e. a mismatch to the reference — so it is never the REF allele; we only
+/// ever query a non-REF slot.
+#[allow(clippy::too_many_arguments)]
+fn psv_shared_snvs(
+    interval_hap1: &[i16],
+    interval_hap2: &[i16],
+    interval_start: i64,
+    seq1: &[u8],
+    ref_pos1: &[i64],
+    seq2: &[u8],
+    ref_pos2: &[i64],
+    chrom: &str,
+    intrinsic_ad_map: &AlleleDepthMap,
+) -> (usize, usize) {
+    let min_len = interval_hap1.len().min(interval_hap2.len());
+
+    let mut shared_snv_count = 0usize;
+    let mut psv_snv_count = 0usize;
+
+    for i in 0..min_len {
+        // Shared SNV site iff both hap-vectors are -4 (base-agnostic count).
+        if interval_hap1[i] != -4 || interval_hap2[i] != -4 {
+            continue;
+        }
+        shared_snv_count += 1;
+
+        let genomic_pos = interval_start + i as i64;
+        if genomic_pos < 0 {
+            continue;
+        }
+
+        // Read base at this position in each read (encoded A=0,T=1,C=2,G=3,N=4).
+        let (alt1, alt2) = match (
+            get_base_at_position(seq1, ref_pos1, genomic_pos),
+            get_base_at_position(seq2, ref_pos2, genomic_pos),
+        ) {
+            (Some(a), Some(b)) => (a, b),
+            // Position falls in a deletion / is not covered in one read → skip,
+            // mirroring Python skipping when get_interval_seq returns empty.
+            _ => continue,
+        };
+
+        // Both reads must carry the same, non-N alt base (Python: alt1 == alt2 != N).
+        if alt1 != alt2 || alt1 == 4 {
+            continue;
+        }
+
+        // PSV iff this alt allele is supported (AD > 0) in the intrinsic-bam map.
+        if let Some(pos_data) = intrinsic_ad_map.get(chrom, genomic_pos as u32) {
+            if AlleleDepthMap::get_allele_depth(pos_data, alt1 as usize) > 0 {
+                psv_snv_count += 1;
+            }
+        }
+    }
+
+    (psv_snv_count, shared_snv_count)
+}
+
+
 /// Extract positions where two overlapping reads share the same SNV and require that the
 /// alternate bases are exactly the same in both reads. No allele depth data is used here.
-/// This is a critical function for proper edge weight calculation that was missing in the simplified Rust version.
-/// 
-/// Equivalent to Python's psv_shared_snvs() function in fp_control/pairwise_read_inspection.py lines 471-555
-/// 
+///
+/// This is a Rust-specific in-trans-variant detector — distinct from the actual
+/// `psv_shared_snvs` port above. Its `discrepant_shared_snv_positions` output feeds
+/// the mismatch analysis (shared SNV sites with *different* alt bases = in-trans),
+/// while the edge weight's shared-SNV count comes from `psv_shared_snvs` instead.
+///
 /// Returns (matching_shared_snv_positions, discrepant_shared_snv_positions) where:
 /// - matching_shared_snv_positions: genomic positions where both reads have SNVs with identical alt bases
 /// - discrepant_shared_snv_positions: genomic positions where both reads have SNVs but with different alt bases
@@ -1337,5 +1465,263 @@ mod hap_vector_tests {
             extract_hap_vector(&rec(vec![Cigar::Equal(3), Cigar::Del(2), Cigar::Equal(3)])),
             vec![1, 1, 1, -6, -6, 1, 1, 1]
         );
+    }
+}
+
+/// Tests for the Python-faithful edge-weight formula (T3 fixes #6 + #4):
+///   weight = overlap_span                                  # EQUAL-position count
+///          + sum(score_arr[:shared_snv_count])             # shared_snv base-agnostic
+///          + mean_read_length * (shared_snv - psv) * 0.75  # intrinsic-AD PSV term
+///          + mean_read_length * 3 * indel_num              # indels over EQUAL positions
+/// covering `compute_edge_weight_base` / `psv_shared_snvs` directly and both
+/// branches of `determine_same_haplotype` end-to-end.
+#[cfg(test)]
+mod weight_tests {
+    use super::*;
+    use crate::structs::{AlleleDepthMap, HaplotypeConfig};
+    use ahash::AHashMap;
+    use rust_htslib::bam::record::{Cigar, CigarString};
+    use rust_htslib::bam::Record;
+
+    const MRL: f32 = 148.0;
+
+    fn cfg() -> HaplotypeConfig {
+        HaplotypeConfig::new(MRL)
+    }
+
+    /// Encoded read fully aligned (one ref-consuming base per query base) starting
+    /// at `start`: builds (encoded_seq, reference_positions_full) the way
+    /// `extract_query_seq` would for an all-`=`/`X` CIGAR.
+    fn aligned(bases: &[u8], start: i64) -> (Vec<u8>, Vec<i64>) {
+        let ref_pos: Vec<i64> = (0..bases.len() as i64).map(|i| start + i).collect();
+        (bases.to_vec(), ref_pos)
+    }
+
+    /// Intrinsic AD map carrying a single supported allele (`base_idx`, depth>0) at
+    /// `(chrom, pos)` — the Rust analogue of one `intrinsic_ad_dict[pos][base]` entry.
+    fn intrinsic_with(chrom: &str, pos: u32, base_idx: usize, depth: u32) -> AlleleDepthMap {
+        let mut m = AlleleDepthMap::new();
+        let mut data = AlleleDepthMap::new_position_data(depth.max(1));
+        AlleleDepthMap::set_allele_depth(&mut data, base_idx, depth);
+        m.insert(chrom, pos, data);
+        m
+    }
+
+    // ---- compute_edge_weight_base (the shared core of BOTH paths) -------------
+
+    /// FIX #6 (base = overlap_span): the base is the count of EQUAL positions, NOT
+    /// the full `end - start` span. Here 3 of 4 positions are equal (idx1 differs
+    /// 1 vs -4), so the base is 3, not 4. No shared SNVs / indels here.
+    #[test]
+    fn base_is_equal_position_count_not_full_span() {
+        let h1 = [1, 1, 1, 1];
+        let h2 = [1, -4, 1, 1];
+        let (s1, r1) = aligned(&[0, 0, 0, 0], 100);
+        let (s2, r2) = aligned(&[0, 0, 0, 0], 100);
+        let w = compute_edge_weight_base(
+            &h1, &h2, 100, &s1, &r1, &s2, &r2, "chr1", &AlleleDepthMap::new(), &cfg(),
+        );
+        assert!((w - 3.0).abs() < 1e-3, "expected overlap_span base 3.0, got {w}");
+    }
+
+    /// FIX #6 (indel_num over EQUAL positions): two indel blocks (a `-6` run and a
+    /// positive insertion marker) within the identical part → `mrl*3*2`.
+    #[test]
+    fn indel_blocks_counted_over_identical_part() {
+        let h1 = [1, 1, -6, -6, 1, 8, 1];
+        let h2 = [1, 1, -6, -6, 1, 8, 1];
+        let (s, r) = aligned(&[0; 7], 100);
+        let w = compute_edge_weight_base(
+            &h1, &h2, 100, &s, &r, &s, &r, "chr1", &AlleleDepthMap::new(), &cfg(),
+        );
+        // overlap_span 7 + 0 SNV + 0 PSV term + mrl*3*2
+        let expect = 7.0 + MRL * 3.0 * 2.0;
+        assert!((w - expect).abs() < 1e-2, "expected {expect}, got {w}");
+    }
+
+    /// FIX #6 (shared_snv base-agnostic) + FIX #4 (PSV term, intrinsic supported):
+    /// both positions are co-located SNVs (-4/-4) so shared_snv_count == 2 even
+    /// though only one position has matching alt bases. With the intrinsic AD
+    /// supporting the matching alt base, psv == 1, so the PSV term is mrl*(2-1)*0.75.
+    #[test]
+    fn shared_snv_base_agnostic_with_psv_deduction() {
+        let h1 = [-4, -4];
+        let h2 = [-4, -4];
+        // pos100: both T(1) (matching); pos101: T(1) vs C(2) (mismatched alt)
+        let (s1, r1) = aligned(&[1, 1], 100);
+        let (s2, r2) = aligned(&[1, 2], 100);
+        let intr = intrinsic_with("chr1", 100, 1, 5); // T supported at pos100
+        let w = compute_edge_weight_base(
+            &h1, &h2, 100, &s1, &r1, &s2, &r2, "chr1", &intr, &cfg(),
+        );
+        // overlap_span 2 + score_arr[0]+score_arr[1] + mrl*(2-1)*0.75 + 0
+        let expect = 2.0 + (MRL + 2.0 * MRL) + MRL * 1.0 * 0.75;
+        assert!((w - expect).abs() < 1e-2, "expected {expect}, got {w}");
+    }
+
+    /// FIX #4 (empty intrinsic ⇒ psv == 0): the same shared SNVs with NO intrinsic
+    /// support give the full `mrl*(2-0)*0.75` boost (standalone-phaser behaviour /
+    /// Python `intrinsic_ad_dict = {}`).
+    #[test]
+    fn empty_intrinsic_gives_zero_psv() {
+        let h1 = [-4, -4];
+        let h2 = [-4, -4];
+        let (s1, r1) = aligned(&[1, 1], 100);
+        let (s2, r2) = aligned(&[1, 1], 100);
+        let w = compute_edge_weight_base(
+            &h1, &h2, 100, &s1, &r1, &s2, &r2, "chr1", &AlleleDepthMap::new(), &cfg(),
+        );
+        let expect = 2.0 + (MRL + 2.0 * MRL) + MRL * 2.0 * 0.75;
+        assert!((w - expect).abs() < 1e-2, "expected {expect}, got {w}");
+    }
+
+    /// Unequal-length interval hap vectors are compared over `min_len` only (a
+    /// guard against a truncated slice). hap2 is shorter, so only its 3 positions
+    /// are scored: overlap_span 3, one shared SNV at idx0 (T/T, unsupported), no
+    /// indels → 3 + score_arr[0] + mrl*(1-0)*0.75.
+    #[test]
+    fn unequal_length_hap_vectors_compare_over_min_len() {
+        let h1 = [-4, 1, 1, 1, 1];
+        let h2 = [-4, 1, 1];
+        let (s1, r1) = aligned(&[1, 0, 0, 0, 0], 100);
+        let (s2, r2) = aligned(&[1, 0, 0], 100);
+        let w = compute_edge_weight_base(
+            &h1, &h2, 100, &s1, &r1, &s2, &r2, "chr1", &AlleleDepthMap::new(), &cfg(),
+        );
+        let expect = 3.0 + MRL + MRL * 0.75;
+        assert!((w - expect).abs() < 1e-2, "expected {expect}, got {w}");
+    }
+
+    // ---- psv_shared_snvs (counts) --------------------------------------------
+
+    /// shared_snv_count is base-agnostic (both -4) = 2; psv_snv_count counts only
+    /// the matching-alt position that is intrinsic-supported = 1.
+    #[test]
+    fn psv_counts_shared_and_supported() {
+        let h1 = [-4, -4];
+        let h2 = [-4, -4];
+        let (s1, r1) = aligned(&[1, 1], 100);
+        let (s2, r2) = aligned(&[1, 2], 100);
+        let intr = intrinsic_with("chr1", 100, 1, 3);
+        let (psv, shared) = psv_shared_snvs(&h1, &h2, 100, &s1, &r1, &s2, &r2, "chr1", &intr);
+        assert_eq!((psv, shared), (1, 2));
+        // Without intrinsic support, psv collapses to 0 (shared unchanged).
+        let (psv0, shared0) =
+            psv_shared_snvs(&h1, &h2, 100, &s1, &r1, &s2, &r2, "chr1", &AlleleDepthMap::new());
+        assert_eq!((psv0, shared0), (0, 2));
+    }
+
+    /// N alt bases and supported-but-discordant alt bases never become PSVs, but
+    /// they are still counted in shared_snv_count (base-agnostic).
+    #[test]
+    fn psv_skips_n_and_discordant_alt() {
+        let h1 = [-4, -4];
+        let h2 = [-4, -4];
+        // pos100: N(4) vs N(4) → skipped for PSV; pos101: T(1) vs T(1) supported → PSV
+        let (s1, r1) = aligned(&[4, 1], 100);
+        let (s2, r2) = aligned(&[4, 1], 100);
+        let intr = intrinsic_with("chr1", 101, 1, 7);
+        let (psv, shared) = psv_shared_snvs(&h1, &h2, 100, &s1, &r1, &s2, &r2, "chr1", &intr);
+        assert_eq!((psv, shared), (1, 2));
+    }
+
+    // ---- determine_same_haplotype end-to-end (both paths) --------------------
+
+    fn make_record(
+        qname: &[u8],
+        cigar: Vec<Cigar>,
+        seq: &[u8],
+        quals: &[u8],
+        pos: i64,
+        flags: u16,
+    ) -> Record {
+        let cs = CigarString(cigar);
+        let mut r = Record::new();
+        r.set(qname, Some(&cs), seq, quals);
+        r.set_pos(pos);
+        r.set_tid(0);
+        r.set_mapq(60);
+        r.set_flags(flags);
+        r
+    }
+
+    fn empty_maps() -> (
+        AHashMap<String, Vec<i16>>,
+        AHashMap<String, Vec<f32>>,
+        AHashMap<String, (i64, i64)>,
+    ) {
+        (AHashMap::new(), AHashMap::new(), AHashMap::new())
+    }
+
+    /// IDENTICAL path: two reads with an identical `5=1X4=` alignment (one shared
+    /// SNV, no intrinsic support). The normalized weight equals the Python formula
+    /// `(overlap_span 10 + score_arr[0] + mrl*1*0.75) / (mrl*10)`.
+    #[test]
+    fn identical_path_weight_matches_formula() {
+        let cigar = vec![Cigar::Equal(5), Cigar::Diff(1), Cigar::Equal(4)];
+        let seq = b"AAAAATAAAA"; // alt 'T' at the X (idx 5)
+        let quals = [30u8; 10];
+        let r1 = make_record(b"rA", cigar.clone(), seq, &quals, 100, 65);
+        let r2 = make_record(b"rB", cigar, seq, &quals, 100, 65);
+
+        let ad = AlleleDepthMap::new();
+        let intr = AlleleDepthMap::new();
+        let config = cfg();
+        let (mut hv, mut ev, mut rp) = empty_maps();
+
+        let (res, w) = determine_same_haplotype(
+            &r1, &r2, 100, 110, "chr1", &ad, &intr, &config, &mut hv, &mut ev, &mut rp,
+        )
+        .expect("determine_same_haplotype failed");
+
+        assert_eq!(res, HaplotypeResult::Same);
+        let raw = 10.0 + MRL + MRL * 0.75; // 269.0
+        let expect = raw / (MRL * 10.0);
+        let got = w.expect("identical path should return a weight");
+        assert!((got - expect).abs() < 1e-5, "expected {expect}, got {got}");
+    }
+
+    /// TOLERATED path: read1 carries a single low-quality SNV (`15=1X14=`, baseQ 5)
+    /// vs read2's plain `30=`; the main-bam AD flags it a sequencing error so the
+    /// pair is tolerated. Weight = (overlap_span 29 − 1×20) / (mrl*10).
+    #[test]
+    fn tolerated_path_weight_applies_penalty() {
+        let mut seq1 = vec![b'A'; 30];
+        seq1[15] = b'T'; // alt at the X
+        let mut quals1 = [30u8; 30];
+        quals1[15] = 5; // low base quality → candidate sequencing error
+        let r1 = make_record(
+            b"rA",
+            vec![Cigar::Equal(15), Cigar::Diff(1), Cigar::Equal(14)],
+            &seq1,
+            &quals1,
+            100,
+            65,
+        );
+        let seq2 = vec![b'A'; 30];
+        let quals2 = [30u8; 30];
+        let r2 = make_record(b"rB", vec![Cigar::Equal(30)], &seq2, &quals2, 100, 129);
+
+        // Main-bam AD: at 0-based pos 115 the alt 'T'(idx1) has AD 1 over DP 100
+        // (af 0.01 ≤ 0.02 and ad==1, dp≥10) → is_sequencing_error == true.
+        let mut ad = AlleleDepthMap::new();
+        let mut data = AlleleDepthMap::new_position_data(100);
+        AlleleDepthMap::set_allele_depth(&mut data, 1, 1);
+        ad.insert("chr1", 115, data);
+
+        let intr = AlleleDepthMap::new();
+        let config = cfg();
+        let (mut hv, mut ev, mut rp) = empty_maps();
+
+        let (res, w) = determine_same_haplotype(
+            &r1, &r2, 100, 130, "chr1", &ad, &intr, &config, &mut hv, &mut ev, &mut rp,
+        )
+        .expect("determine_same_haplotype failed");
+
+        assert_eq!(res, HaplotypeResult::Same, "mismatch should be tolerated");
+        let raw = (29.0 - 20.0_f32).max(0.0); // base overlap_span 29, minus 1 tolerated*20
+        let expect = raw / (MRL * 10.0);
+        let got = w.expect("tolerated path should return a weight");
+        assert!((got - expect).abs() < 1e-5, "expected {expect}, got {got}");
     }
 }

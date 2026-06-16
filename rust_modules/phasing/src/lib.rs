@@ -225,6 +225,34 @@ pub fn build_and_phase(
     reference: &str,
     params: &PhaserParams,
 ) -> Result<Option<PhasedReads>> {
+    // Standalone path: no intrinsic BAM, so paralogous-sequence-variant detection
+    // is disabled (empty intrinsic AD map → psv_snv_count == 0), matching Python's
+    // `intrinsic_ad_dict = {}` default in `graph_build.py`.
+    build_and_phase_with_intrinsic(bam, reference, None, params)
+}
+
+/// Like [`build_and_phase`], but also threads an optional **intrinsic BAM** whose
+/// allele-depth map drives paralogous-sequence-variant (PSV) detection in the
+/// edge-weight formula (Python `intrinsic_ad_dict`; see
+/// `haplotype_determination::psv_shared_snvs`).
+///
+/// `intrinsic_bam = None` ⇒ an empty intrinsic AD map ⇒ `psv_snv_count == 0` for
+/// every shared SNV (the standalone-phaser behaviour, and Python's default when no
+/// intrinsic dict is supplied). The fused FP-control pipeline (which *does* have an
+/// intrinsic BAM, mirroring the original `graph_build.py` that built both
+/// `nested_ad_dict` and `intrinsic_ad_dict`) should call this with
+/// `Some(intrinsic_bam)` so the phasing weights match the Python production
+/// pipeline.
+///
+/// The intrinsic AD map is built by the same `build_allele_depth_map`
+/// (`bcftools mpileup … | bcftools query`) used for the main map — i.e. exactly
+/// Python's `stat_ad_to_dict` over the intrinsic BAM.
+pub fn build_and_phase_with_intrinsic(
+    bam: &str,
+    reference: &str,
+    intrinsic_bam: Option<&str>,
+    params: &PhaserParams,
+) -> Result<Option<PhasedReads>> {
     let (read_pair_map, header) = bam_reading::migrate_bam_to_sorted_intervals_grouped(
         bam,
         params.mapq_cutoff,
@@ -243,9 +271,30 @@ pub fn build_and_phase(
     )
     .map_err(|e| SdError::Compute(format!("allele-depth map failed for {bam}: {e}")))?;
 
+    // Intrinsic-bam allele-depth map (Python `intrinsic_ad_dict`). Built with the
+    // same mpileup filters as the main map (Python `stat_ad_to_dict` hardcodes
+    // `-q 10 -Q 10`; PhaserParams default to 10/10). Absent intrinsic BAM (or one
+    // with no ALT alleles) → empty map → no PSV deductions.
+    let intrinsic_ad_map = match intrinsic_bam {
+        Some(ib) => bam_reading::build_allele_depth_map(
+            ib,
+            reference,
+            params.mapq_cutoff,
+            params.basequal_median_cutoff,
+        )
+        .map_err(|e| SdError::Compute(format!("intrinsic allele-depth map failed for {ib}: {e}")))?,
+        None => structs::AlleleDepthMap::new(),
+    };
+
     let config = structs::HaplotypeConfig::new(params.mean_read_length);
-    let graph = graph_builder::build_phasing_graph(&read_pair_map, &allele_depth_map, &header, &config)
-        .map_err(|e| SdError::Compute(format!("graph build failed for {bam}: {e}")))?;
+    let graph = graph_builder::build_phasing_graph(
+        &read_pair_map,
+        &allele_depth_map,
+        &intrinsic_ad_map,
+        &header,
+        &config,
+    )
+    .map_err(|e| SdError::Compute(format!("graph build failed for {bam}: {e}")))?;
 
     let weight_matrix = match graph.weight_matrix {
         Some(ref wm) => wm.clone(),
@@ -266,18 +315,34 @@ pub fn build_and_phase(
 
 /// High-level API: BAM → HP-tagged BAM.
 ///
-/// Validates input (short reads, paired-end), builds + phases the graph via
-/// [`build_and_phase`], and writes an HP-tagged output BAM.
+/// No-intrinsic-BAM convenience wrapper over [`phase_bam_with_intrinsic`]
+/// (paralogous-sequence-variant detection disabled → Python `intrinsic_ad_dict = {}`).
 pub fn phase_bam(
     bam: &str,
     reference: &str,
     output_bam: &str,
     params: &PhaserParams,
 ) -> Result<PhaserOutput> {
+    phase_bam_with_intrinsic(bam, reference, output_bam, None, params)
+}
+
+/// Like [`phase_bam`], but threads an optional **intrinsic BAM** so the phasing
+/// edge weights include the paralogous-sequence-variant (PSV) term
+/// (Python `intrinsic_ad_dict`; see [`build_and_phase_with_intrinsic`] and
+/// `haplotype_determination::psv_shared_snvs`). `intrinsic_bam = None` reproduces
+/// the standalone-phaser behaviour (no PSV deductions), so the CLI can opt in via
+/// `--intrinsic-bam` for Python-parity differential runs.
+pub fn phase_bam_with_intrinsic(
+    bam: &str,
+    reference: &str,
+    output_bam: &str,
+    intrinsic_bam: Option<&str>,
+    params: &PhaserParams,
+) -> Result<PhaserOutput> {
     validate_input(bam)?;
 
     log::info!("[phase_bam] building + phasing graph from {bam}");
-    let phased = match build_and_phase(bam, reference, params)? {
+    let phased = match build_and_phase_with_intrinsic(bam, reference, intrinsic_bam, params)? {
         Some(p) => p,
         None => {
             log::warn!("[phase_bam] no ALT alleles / empty weight matrix; writing unphased BAM");

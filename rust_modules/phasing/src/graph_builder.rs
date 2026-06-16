@@ -177,6 +177,7 @@ fn qname_idx_to_node_index(qname_idx: usize) -> NodeIndex {
 pub fn build_phasing_graph(
     read_pair_map: &ReadPairMap,
     allele_depth_map: &AlleleDepthMap,
+    intrinsic_ad_map: &AlleleDepthMap,
     header: &rust_htslib::bam::HeaderView,
     config: &HaplotypeConfig) -> Result<PhasingGraphResult, Box<dyn std::error::Error>> {
     
@@ -340,6 +341,7 @@ pub fn build_phasing_graph(
                         uncovered_end,
                         &chrom,
                         allele_depth_map,
+                        intrinsic_ad_map,
                         config,
                         &mut result.read_hap_vectors,
                         &mut result.read_error_vectors,
