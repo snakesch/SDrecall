@@ -11,7 +11,7 @@
 // Use the library crate for cross-module imports
 use haplotype_inspection::bam_lappers::{build_lapper_from_bam, query_overlapping_reads};
 use haplotype_inspection::pairwise_read_inspection::{
-    extract_error_vector, extract_hap_vector, read_id,
+    extract_error_vector, extract_hap_vector, read_id, HAP_PAD, is_snv, is_deletion,
 };
 use haplotype_inspection::identify_misaligned_haps::{
     assemble_consensus, record_hap_err_vectors_per_region,
@@ -90,8 +90,8 @@ fn main() {
     let mut total_failed = 0usize;
 
     for &read in &reads {
-        let hap = extract_hap_vector(read);
-        let err = extract_error_vector(read);
+        let hap = extract_hap_vector(read).expect("CIGAR must be in =/X mode (--eqx)");
+        let err = extract_error_vector(read).expect("CIGAR must be in =/X mode (--eqx)");
 
         let (hap_ok, hap_details) = validate_hap_against_cigar(read, &hap);
         let (err_ok, err_details) = validate_err_against_cigar(read, &err);
@@ -151,7 +151,8 @@ fn main() {
     let mut err_cache: HashMap<String, Array1<f32>> = HashMap::new();
 
     let (spans, hap_arrays, err_arrays) =
-        record_hap_err_vectors_per_region(&reads, &mut hap_cache, &mut err_cache);
+        record_hap_err_vectors_per_region(&reads, &mut hap_cache, &mut err_cache)
+            .expect("CIGAR must be in =/X mode (--eqx)");
 
     let batch_time = batch_start.elapsed();
 
@@ -185,11 +186,11 @@ fn main() {
     // Verify each row's non-padding length matches individual extraction
     let mut row_len_mismatches = 0usize;
     for (i, &read) in reads.iter().enumerate() {
-        let individual_hap = extract_hap_vector(read);
+        let individual_hap = extract_hap_vector(read).expect("CIGAR must be in =/X mode (--eqx)");
         let individual_len = individual_hap.len();
 
         let row = hap_arrays.row(i);
-        let row_nonpad = row.iter().filter(|&&v| v != -10).count();
+        let row_nonpad = row.iter().filter(|&&v| v != HAP_PAD).count();
 
         if row_nonpad != individual_len {
             row_len_mismatches += 1;
@@ -257,7 +258,8 @@ fn main() {
         let mut hp_hap_cache: HashMap<String, Array1<i16>> = HashMap::new();
         let mut hp_err_cache: HashMap<String, Array1<f32>> = HashMap::new();
         let (hp_spans, hp_hap_arrays, hp_err_arrays) =
-            record_hap_err_vectors_per_region(&hp_reads, &mut hp_hap_cache, &mut hp_err_cache);
+            record_hap_err_vectors_per_region(&hp_reads, &mut hp_hap_cache, &mut hp_err_cache)
+                .expect("CIGAR must be in =/X mode (--eqx)");
 
         // Run assemble_consensus
         let consensus = assemble_consensus(&hp_hap_arrays, &hp_err_arrays, &hp_spans);
@@ -265,8 +267,8 @@ fn main() {
         // Print consensus stats
         let consensus_len = consensus.len();
         let n_match = consensus.iter().filter(|&&v| v == 1).count();
-        let n_snv = consensus.iter().filter(|&&v| v == -4).count();
-        let n_del = consensus.iter().filter(|&&v| v == -6).count();
+        let n_snv = consensus.iter().filter(|&&v| is_snv(v)).count();
+        let n_del = consensus.iter().filter(|&&v| is_deletion(v)).count();
         let n_ins = consensus.iter().filter(|&&v| v > 1).count();
 
         // Compute global ref span for this HP group
@@ -424,8 +426,8 @@ fn format_vector_f32(v: &Array1<f32>, limit: usize) -> String {
 /// Walk CIGAR and validate hap_vector consistency.
 ///
 /// For each CIGAR operation, checks that the corresponding hap_vector positions
-/// contain the expected encoding. Accounts for insertion markers that can
-/// overwrite the first position of the next ref-consuming operation.
+/// contain the expected golden encoding (deletion = -10). Accounts for insertion
+/// markers summed onto the first position of the next ref-consuming operation (`> 1`).
 ///
 /// Returns `(passed, details)`.
 fn validate_hap_against_cigar(record: &Record, hap: &Array1<i16>) -> (bool, String) {
@@ -521,8 +523,8 @@ fn validate_hap_against_cigar(record: &Record, hap: &Array1<i16>) -> (bool, Stri
                             ));
                         }
                         pending_insertion = false;
-                    } else if val != -6 {
-                        errors.push(format!("pos {pos} expected -6 (D), got {val}"));
+                    } else if val != -10 {
+                        errors.push(format!("pos {pos} expected -10 (D), got {val}"));
                     }
                 }
                 ref_pos += n;

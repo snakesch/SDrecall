@@ -8,12 +8,18 @@
 //! - `count_snv`, `count_continuous_indel_blocks`, `count_var`, `count_continuous_blocks`
 //! - `encode_base`
 //!
-//! Haplotype encoding:
-//!    1  = reference match
-//!   -4  = SNV
-//!   -6  = deletion
-//!   >1  = insertion marker (length × 4, placed at first pos of next ref-consuming op)
-//! > -10  = padding (NaN / not-a-value)
+//! Haplotype encoding (golden — summation insertion scheme, decided 2026-06-11):
+//! - `1`   = reference match (CIGAR `=`)
+//! - `-4`  = SNV (CIGAR `X`)
+//! - `-10` = deletion (CIGAR `D`, per deleted ref position) — [`HAP_DEL`]
+//! - `>1`  = insertion present at this base: `base + 10*L` (L = inserted length),
+//!   **summed** onto the prepending ref-consuming base (match `1` or mismatch `-4`)
+//! - `-20` = padding (not-a-value) — [`HAP_PAD`]
+//!
+//! Decode: `value > 1` ⟹ insertion; `structural = round_to_nearest_10(value)` (= `10*L`);
+//! `delta = value − structural ∈ {+1 match, −4 mismatch, 0 pure deletion}`. A mismatch under
+//! an insertion ends in digit 6 (`6, 16, …`); a match under an insertion ends in 1 (`11, 21, …`).
+//! See [`is_snv`], [`is_indel`], [`insertion_len`] for the canonical decoders all consumers reuse.
 //!
 //! Error probabilities (qual_arrays) are float32 values in [0, 1] where smaller = better quality.
 //!
@@ -28,7 +34,116 @@ use rust_htslib::bam::record::Cigar;
 use ndarray::Array1;
 use std::collections::HashMap;
 use std::sync::LazyLock;
+use std::fmt;
 use log::debug;
+
+
+// ─── Golden encoding constants & decoders ─────────────────────────────────────
+//
+// All consumers (consensus, similarity, shared-variant, counting) MUST decode the
+// hap vector through these so the scheme stays internally consistent (no scattered
+// magic numbers). See the module-level docs and `docs/analysis/module_vector_encoding.md`
+// (§ "Golden encoding").
+
+/// Padding sentinel for unused positions in fixed-size hap arrays.
+///
+/// Sits one indel-unit below the most-negative real signal (deletion `-10`); a real
+/// value can never reach `-20` (insertion compounds are positive, and two stacked
+/// deletions are excluded by the no-adjacent-indel invariant). Chosen to avoid the
+/// collision with the golden deletion value `-10` (which was the *old* padding value).
+pub const HAP_PAD: i16 = -20;
+
+/// Deletion signal, written once per deleted reference position (CIGAR `D`).
+pub const HAP_DEL: i16 = -10;
+
+/// Unit added per inserted base in the summation insertion encoding (`base + 10*L`).
+pub const INDEL_UNIT: i16 = 10;
+
+/// Round an i16 to the nearest multiple of 10 (ties away from zero). For golden hap
+/// values the structural part is always an exact multiple of 10, so this recovers it:
+/// `structural = round_to_nearest_10(value)` = `10*L` for insertions, `-10` for a
+/// deletion, `0` for a pure point signal.
+#[inline]
+pub fn round_to_nearest_10(v: i16) -> i16 {
+    if v >= 0 {
+        ((v + 5) / 10) * 10
+    } else {
+        -(((-v + 5) / 10) * 10)
+    }
+}
+
+/// Is this position a real (non-padding) value?
+#[inline]
+pub fn is_real(v: i16) -> bool {
+    v != HAP_PAD
+}
+
+/// Is this position a deletion?
+#[inline]
+pub fn is_deletion(v: i16) -> bool {
+    v == HAP_DEL
+}
+
+/// Does this position carry an insertion (`base + 10*L`, `L >= 1`)?
+#[inline]
+pub fn has_insertion(v: i16) -> bool {
+    v > 1
+}
+
+/// Inserted length encoded at this position (`0` if no insertion). Recovered as
+/// `round_to_nearest_10(value) / 10` so a match-under-insertion (`1+10L`) and a
+/// mismatch-under-insertion (`-4+10L`) of the same length compare equal.
+#[inline]
+pub fn insertion_len(v: i16) -> i16 {
+    if has_insertion(v) {
+        round_to_nearest_10(v) / INDEL_UNIT
+    } else {
+        0
+    }
+}
+
+/// Is this position an SNV (mismatch)? Either a pure SNV (`-4`) or a compound
+/// mismatch hidden under an insertion, whose value ends in digit 6 (`6, 16, 26, …`)
+/// because `delta = -4` and `-4 mod 10 = 6`.
+#[inline]
+pub fn is_snv(v: i16) -> bool {
+    v == -4 || (v > 1 && v % INDEL_UNIT == 6)
+}
+
+/// Is this position part of an indel block? A deletion (`-10`) or any insertion
+/// (`> 1`, which catches both `…1` match-ins and `…6` mismatch-ins compounds).
+#[inline]
+pub fn is_indel(v: i16) -> bool {
+    v == HAP_DEL || v > 1
+}
+
+/// Error returned by the CIGAR-walking extractors when the alignment is not in the
+/// strict `=`/`X` mode this pipeline requires (minimap2 `--eqx`). Propagated as a
+/// typed error (never a panic) so a malformed alignment fails fast at the job
+/// boundary rather than crashing or silently mis-encoding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CigarError {
+    /// CIGAR contains an `M` op (op 0); requires `=`/`X` mode (`--eqx`).
+    UnsupportedMatchOp,
+    /// The alignment consumes zero reference bases (degenerate CIGAR).
+    EmptyRefConsumption,
+}
+
+impl fmt::Display for CigarError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CigarError::UnsupportedMatchOp => write!(
+                f,
+                "CIGAR requires =/X mode but contains M (op 0). Use --eqx when aligning."
+            ),
+            CigarError::EmptyRefConsumption => {
+                write!(f, "Reference consumption length is 0 for CIGAR")
+            }
+        }
+    }
+}
+
+impl std::error::Error for CigarError {}
 
 
 // ─── Helper functions ─────────────────────────────────────────────────────────
@@ -70,28 +185,27 @@ fn phred_to_prob(phred: u8) -> f32 {
 ///
 /// Borrows the Record read-only; only needs CIGAR access. No copy of the Record is made.
 ///
-/// # Encoding
+/// # Encoding (golden — summation insertion scheme)
 /// -  `1`  = reference match (`=` / RefSkip)
 /// - `-4`  = SNV (`X` mismatch)
-/// - `-6`  = deletion (`D`)
-/// - `>1`  = insertion marker (`length × 4`), placed at the first position of the
-///   next reference-consuming operation after the insertion
+/// - `-10` = deletion (`D`, per deleted ref position) — [`HAP_DEL`]
+/// - `>1`  = insertion present: `base + 10*L`, **summed** onto the prepending
+///   ref-consuming base (`1` match or `-4` mismatch) — i.e. match+ins ends in `1`
+///   (`11, 21, …`), mismatch+ins ends in `6` (`6, 16, …`).
 ///
-/// # Panics
-/// - If the CIGAR contains `M` (op 0) — requires `=`/`X` mode (--eqx).
-/// - If the reference-consuming length is 0.
-pub fn extract_hap_vector(record: &Record) -> Array1<i16> {
+/// # Errors (DivA — typed, never a panic)
+/// - [`CigarError::UnsupportedMatchOp`] if the CIGAR contains `M` (op 0) — requires
+///   `=`/`X` mode (`--eqx`). Propagated so a malformed alignment fails fast.
+/// - [`CigarError::EmptyRefConsumption`] if the reference-consuming length is 0.
+pub fn extract_hap_vector(record: &Record) -> Result<Array1<i16>, CigarError> {
     let cigar = record.cigar();
 
-    // Single pass: compute ref_len and assert no M ops
+    // Single pass: compute ref_len and reject M ops (DivA: typed error, not a panic)
     let mut ref_len: usize = 0;
     for c in cigar.iter() {
         match c {
             Cigar::Match(_) => {
-                panic!(
-                    "CIGAR requires =/X mode but contains M (op 0). \
-                     Use --eqx when aligning."
-                );
+                return Err(CigarError::UnsupportedMatchOp);
             }
             Cigar::Equal(len) | Cigar::Diff(len) | Cigar::Del(len) | Cigar::RefSkip(len) => {
                 ref_len += *len as usize;
@@ -99,7 +213,9 @@ pub fn extract_hap_vector(record: &Record) -> Array1<i16> {
             _ => {}
         }
     }
-    assert!(ref_len > 0, "Reference consumption length is 0 for CIGAR");
+    if ref_len == 0 {
+        return Err(CigarError::EmptyRefConsumption);
+    }
     debug!("[extract_hap_vector] ref_len={} cigar_ops={}", ref_len, cigar.len());
 
     let mut hapvector: Vec<i16> = Vec::with_capacity(ref_len);
@@ -115,7 +231,8 @@ pub fn extract_hap_vector(record: &Record) -> Array1<i16> {
                 if pending_ins == 0 {
                     hapvector.extend(std::iter::repeat_n(1i16, n));
                 } else {
-                    hapvector.push(pending_ins);
+                    // Golden summation: insertion adds onto the match base (1).
+                    hapvector.push(1 + pending_ins);
                     hapvector.extend(std::iter::repeat_n(1i16, n.saturating_sub(1)));
                     pending_ins = 0;
                 }
@@ -126,7 +243,8 @@ pub fn extract_hap_vector(record: &Record) -> Array1<i16> {
                 if pending_ins == 0 {
                     hapvector.extend(std::iter::repeat_n(1i16, n));
                 } else {
-                    hapvector.push(pending_ins);
+                    // Golden summation: insertion adds onto the match base (1).
+                    hapvector.push(1 + pending_ins);
                     hapvector.extend(std::iter::repeat_n(1i16, n.saturating_sub(1)));
                     pending_ins = 0;
                 }
@@ -141,7 +259,9 @@ pub fn extract_hap_vector(record: &Record) -> Array1<i16> {
                 if pending_ins == 0 {
                     hapvector.extend(std::iter::repeat_n(-4i16, n));
                 } else {
-                    hapvector.push(pending_ins);
+                    // Golden summation: insertion adds onto the mismatch base (-4).
+                    // The compound base ends in digit 6 (recoverable as both SNV + ins).
+                    hapvector.push(-4 + pending_ins);
                     if n > 1 {
                         hapvector.extend(std::iter::repeat_n(-4i16, n - 1));
                     }
@@ -150,25 +270,32 @@ pub fn extract_hap_vector(record: &Record) -> Array1<i16> {
                 query_pos += n;
             }
             // ── Ins (I, op 1) ──────────────────────────────────────
-            // Defer insertion marker to next ref-consuming operation.
+            // Defer the insertion increment (10 × length) to the next
+            // ref-consuming operation, where it is summed onto that base.
             Cigar::Ins(len) => {
                 let n = *len as usize;
                 query_pos += n;
-                // Python: if index > 0
+                // Python: if index > 0 (an insertion at vector start has nothing to attach to)
                 if !hapvector.is_empty() {
-                    pending_ins = (n as i16) * 4;
-                    debug!("[extract_hap_vector] insertion len={} marker={} at ref_pos={}", n, pending_ins, hapvector.len());
+                    pending_ins = (n as i16) * INDEL_UNIT;
+                    debug!("[extract_hap_vector] insertion len={} increment={} at ref_pos={}", n, pending_ins, hapvector.len());
                 }
             }
             // ── Del (D, op 2) ──────────────────────────────────────
             Cigar::Del(len) => {
                 let n = *len as usize;
                 if pending_ins == 0 {
-                    hapvector.extend(std::iter::repeat_n(-6i16, n));
+                    hapvector.extend(std::iter::repeat_n(HAP_DEL, n));
                 } else {
+                    // Del adjacent to an insertion is the one decode loophole
+                    // (`-10 + 10*L` would be ambiguous). The aligner prevents it
+                    // (emits consecutive mismatches instead); if it ever occurs we
+                    // keep the positive insertion marker (`10*L`, still `> 1`) so the
+                    // position still registers as one indel block, then the remaining
+                    // deletion positions carry HAP_DEL.
                     hapvector.push(pending_ins);
                     if n > 1 {
-                        hapvector.extend(std::iter::repeat_n(-6i16, n - 1));
+                        hapvector.extend(std::iter::repeat_n(HAP_DEL, n - 1));
                     }
                     pending_ins = 0;
                 }
@@ -185,7 +312,7 @@ pub fn extract_hap_vector(record: &Record) -> Array1<i16> {
     // Suppress unused warning — query_pos mirrors Python's tracking
     let _ = query_pos;
 
-    Array1::from_vec(hapvector)
+    Ok(Array1::from_vec(hapvector))
 }
 
 // ─── Error vector extraction ──────────────────────────────────────────────────
@@ -208,21 +335,19 @@ pub fn extract_hap_vector(record: &Record) -> Array1<i16> {
 /// This differs from the hap vector where the insertion marker is placed at the
 /// **first position of the next** ref-consuming operation.
 ///
-/// # Panics
-/// - If the CIGAR contains `M` (op 0) — requires `=`/`X` mode.
-pub fn extract_error_vector(record: &Record) -> Array1<f32> {
+/// # Errors
+/// - [`CigarError::UnsupportedMatchOp`] if the CIGAR contains `M` (op 0) — requires
+///   `=`/`X` mode (`--eqx`).
+pub fn extract_error_vector(record: &Record) -> Result<Array1<f32>, CigarError> {
     let cigar = record.cigar();
     let qual = record.qual();
 
-    // Single pass: compute ref span and assert no M ops
+    // Single pass: compute ref span and reject M ops (typed error, not a panic)
     let mut ref_span: usize = 0;
     for c in cigar.iter() {
         match c {
             Cigar::Match(_) => {
-                panic!(
-                    "CIGAR requires =/X mode but contains M (op 0). \
-                     Use --eqx when aligning."
-                );
+                return Err(CigarError::UnsupportedMatchOp);
             }
             Cigar::Equal(len) | Cigar::Diff(len) | Cigar::Del(len) | Cigar::RefSkip(len) => {
                 ref_span += *len as usize;
@@ -296,7 +421,7 @@ pub fn extract_error_vector(record: &Record) -> Array1<f32> {
         ref_span
     );
 
-    Array1::from_vec(err_vector)
+    Ok(Array1::from_vec(err_vector))
 }
 
 // ─── Combined extraction ──────────────────────────────────────────────────────
@@ -307,38 +432,40 @@ pub fn extract_error_vector(record: &Record) -> Array1<f32> {
 ///
 /// # Returns
 /// `(hap_vector, err_vector, reference_start, reference_end)`
-pub fn extract_hap_err_vectors(record: &Record) -> (Array1<i16>, Array1<f32>, i64, i64) {
-    let hap_vector = extract_hap_vector(record);
-    let err_vector = extract_error_vector(record);
+pub fn extract_hap_err_vectors(
+    record: &Record,
+) -> Result<(Array1<i16>, Array1<f32>, i64, i64), CigarError> {
+    let hap_vector = extract_hap_vector(record)?;
+    let err_vector = extract_error_vector(record)?;
     let ref_start = record.pos();
     let ref_end = record.cigar().end_pos();
     debug!(
         "[extract_hap_err_vectors] hap_len={} err_len={} ref_start={} ref_end={}",
         hap_vector.len(), err_vector.len(), ref_start, ref_end
     );
-    (hap_vector, err_vector, ref_start, ref_end)
+    Ok((hap_vector, err_vector, ref_start, ref_end))
 }
 // ============================================================================
 // Variant Counting Functions
 // Ports from pairwise_read_inspection.py
 // ============================================================================
 
-/// Count SNV positions (encoded as -4) in the haplotype array.
-/// Each SNV is counted separately, even if consecutive.
+/// Count SNV positions in the haplotype array — pure SNVs (`-4`) **plus** compound
+/// mismatches hidden under an insertion (`base + 10*L`, ending in digit 6). Each SNV
+/// is counted separately, even if consecutive. See [`is_snv`].
 ///
-/// Ports from pairwise_read_inspection.py lines 44-51
+/// Golden change vs. the old overwrite encoding: a mismatch under an insertion is no
+/// longer lost (the old `4*L` overwrite dropped the `-4`), so compounds now count.
 #[inline]
 pub fn count_snv(array: &Array1<i16>) -> i32 {
-    array.iter().filter(|&&v| v == -4).count() as i32
+    array.iter().filter(|&&v| is_snv(v)).count() as i32
 }
 
-/// Count continuous indel blocks (deletions -6 or insertions >1).
-/// Consecutive indels of any type are counted as a single block.
-///
-/// Ports from pairwise_read_inspection.py lines 60-67
+/// Count continuous indel blocks (deletions `-10` or insertions `>1`).
+/// Consecutive indels of any type are counted as a single block. See [`is_indel`].
 pub fn count_continuous_indel_blocks(array: &Array1<i16>) -> i32 {
-    // Create boolean array: is_var = (array == -6) | (array > 1)
-    let is_var = array.mapv(|v| v == -6 || v > 1);
+    // Boolean mask: deletion (HAP_DEL = -10) or any insertion (> 1, incl. compounds).
+    let is_var = array.mapv(is_indel);
     count_continuous_blocks(&is_var)
 }
 
@@ -437,24 +564,22 @@ pub struct ReadQseqData {
 /// # Returns
 /// `ReadQseqData` containing all four arrays.
 ///
-/// # Panics
-/// If the CIGAR contains `M` (op 0) — requires `=`/`X` mode (--eqx).
-pub fn extract_read_qseqs(record: &Record) -> ReadQseqData {
+/// # Errors
+/// [`CigarError::UnsupportedMatchOp`] if the CIGAR contains `M` (op 0) — requires
+/// `=`/`X` mode (`--eqx`).
+pub fn extract_read_qseqs(record: &Record) -> Result<ReadQseqData, CigarError> {
     let cigar = record.cigar();
     let seq = record.seq();
     let qual = record.qual();
     let ref_start = record.pos(); // 0-based
 
-    // Compute ref span and query length from CIGAR
+    // Compute ref span and query length from CIGAR (reject M ops: typed error)
     let mut ref_span: usize = 0;
     let mut query_len: usize = 0;
     for c in cigar.iter() {
         match c {
             Cigar::Match(_) => {
-                panic!(
-                    "CIGAR requires =/X mode but contains M (op 0). \
-                     Use --eqx when aligning."
-                );
+                return Err(CigarError::UnsupportedMatchOp);
             }
             Cigar::Equal(len) | Cigar::Diff(len) => {
                 ref_span += *len as usize;
@@ -536,12 +661,12 @@ pub fn extract_read_qseqs(record: &Record) -> ReadQseqData {
         ref_to_query.len(), query_to_ref.len(), qseq_encoded.len(), qseq_qualities.len()
     );
 
-    ReadQseqData {
+    Ok(ReadQseqData {
         ref_to_query,
         query_to_ref,
         qseq_encoded,
         qseq_qualities,
-    }
+    })
 }
 
 /// Extract query sequence data with caching by read ID.
@@ -558,12 +683,14 @@ pub fn extract_read_qseqs(record: &Record) -> ReadQseqData {
 pub fn extract_read_qseqs_cached(
     record: &Record,
     cache: &mut HashMap<String, ReadQseqData>,
-) -> ReadQseqData {
+) -> Result<ReadQseqData, CigarError> {
     let rid = read_id(record);
-    cache
-        .entry(rid)
-        .or_insert_with(|| extract_read_qseqs(record))
-        .clone()
+    if let Some(cached) = cache.get(&rid) {
+        return Ok(cached.clone());
+    }
+    let data = extract_read_qseqs(record)?;
+    cache.insert(rid, data.clone());
+    Ok(data)
 }
 
 #[cfg(test)]
@@ -620,7 +747,7 @@ mod tests {
         let qual = &[30, 30, 30, 30, 30];
         let record = make_record(cigar, seq, qual, 100);
 
-        let hap = extract_hap_vector(&record);
+        let hap = extract_hap_vector(&record).unwrap();
         assert_eq!(hap.to_vec(), vec![1i16; 5]);
     }
 
@@ -636,7 +763,7 @@ mod tests {
         let qual = &[30; 6];
         let record = make_record(cigar, seq, qual, 100);
 
-        let hap = extract_hap_vector(&record);
+        let hap = extract_hap_vector(&record).unwrap();
         assert_eq!(hap.to_vec(), vec![1, 1, 1, -4, 1, 1]);
     }
 
@@ -652,14 +779,15 @@ mod tests {
         let qual = &[30; 6];
         let record = make_record(cigar, seq, qual, 100);
 
-        let hap = extract_hap_vector(&record);
-        assert_eq!(hap.to_vec(), vec![1, 1, 1, -6, -6, 1, 1, 1]);
+        let hap = extract_hap_vector(&record).unwrap();
+        // Golden deletion = -10 (HAP_DEL), per deleted ref position.
+        assert_eq!(hap.to_vec(), vec![1, 1, 1, -10, -10, 1, 1, 1]);
     }
 
     #[test]
     fn test_hap_vector_with_insertion() {
         // CIGAR: 3=2I3= → 6 ref positions, 8 query bases
-        // Insertion marker: 2 * 4 = 8, placed at first pos of next = (position 3)
+        // Golden: 2bp insertion summed onto the match base → 1 + 2*10 = 21, at position 3
         let cigar = CigarString(vec![
             Cigar::Equal(3),
             Cigar::Ins(2),
@@ -669,15 +797,17 @@ mod tests {
         let qual = &[30; 8];
         let record = make_record(cigar, seq, qual, 100);
 
-        let hap = extract_hap_vector(&record);
-        // [1, 1, 1, 8, 1, 1] — insertion marker at pos 3
-        assert_eq!(hap.to_vec(), vec![1, 1, 1, 8, 1, 1]);
+        let hap = extract_hap_vector(&record).unwrap();
+        // [1, 1, 1, 21, 1, 1] — match(1) + 2bp ins(20) summed at pos 3
+        assert_eq!(hap.to_vec(), vec![1, 1, 1, 21, 1, 1]);
     }
 
     #[test]
     fn test_hap_vector_insertion_before_deletion() {
         // CIGAR: 3=1I2D3= → 8 ref positions
-        // Insertion marker: 1 * 4 = 4, placed at first pos of Del (position 3)
+        // Golden del-adjacent-to-ins loophole: the insertion increment (1*10=10)
+        // is kept (still > 1, so the position registers as an indel), then the
+        // remaining deletion positions carry HAP_DEL (-10).
         let cigar = CigarString(vec![
             Cigar::Equal(3),
             Cigar::Ins(1),
@@ -688,15 +818,15 @@ mod tests {
         let qual = &[30; 7];
         let record = make_record(cigar, seq, qual, 100);
 
-        let hap = extract_hap_vector(&record);
-        // [1, 1, 1, 4, -6, 1, 1, 1] — ins marker at pos 3, then 1 del, then matches
-        assert_eq!(hap.to_vec(), vec![1, 1, 1, 4, -6, 1, 1, 1]);
+        let hap = extract_hap_vector(&record).unwrap();
+        // [1, 1, 1, 10, -10, 1, 1, 1] — ins increment at pos 3, then 1 del, then matches
+        assert_eq!(hap.to_vec(), vec![1, 1, 1, 10, -10, 1, 1, 1]);
     }
 
     #[test]
     fn test_hap_vector_insertion_before_mismatch() {
         // CIGAR: 3=1I1X2= → 6 ref positions
-        // Insertion marker: 1 * 4 = 4, placed at first pos of X (position 3)
+        // Golden: 1bp insertion summed onto the mismatch base → -4 + 1*10 = 6 (compound).
         let cigar = CigarString(vec![
             Cigar::Equal(3),
             Cigar::Ins(1),
@@ -707,9 +837,9 @@ mod tests {
         let qual = &[30; 7];
         let record = make_record(cigar, seq, qual, 100);
 
-        let hap = extract_hap_vector(&record);
-        // Insertion marker overwrites the single mismatch position
-        assert_eq!(hap.to_vec(), vec![1, 1, 1, 4, 1, 1]);
+        let hap = extract_hap_vector(&record).unwrap();
+        // Compound base: -4 (mismatch) + 10 (1bp ins) = 6 (recoverable as both SNV + indel)
+        assert_eq!(hap.to_vec(), vec![1, 1, 1, 6, 1, 1]);
     }
 
     #[test]
@@ -723,7 +853,7 @@ mod tests {
         let qual = &[30; 5];
         let record = make_record(cigar, seq, qual, 100);
 
-        let hap = extract_hap_vector(&record);
+        let hap = extract_hap_vector(&record).unwrap();
         assert_eq!(hap.to_vec(), vec![1, 1, 1]);
     }
 
@@ -738,9 +868,31 @@ mod tests {
         let qual = &[30; 5];
         let record = make_record(cigar, seq, qual, 100);
 
-        let hap = extract_hap_vector(&record);
+        let hap = extract_hap_vector(&record).unwrap();
         // Insertion at the start is dropped; just 3 matches
         assert_eq!(hap.to_vec(), vec![1, 1, 1]);
+    }
+
+    #[test]
+    fn test_hap_vector_rejects_m_op() {
+        // DivA: an M op (op 0) is rejected via a typed error that propagates,
+        // never a panic (minimap2 --eqx always emits =/X, so M means a bad alignment).
+        let cigar = CigarString(vec![Cigar::Match(5)]);
+        let seq = b"ACGTG";
+        let qual = &[30; 5];
+        let record = make_record(cigar, seq, qual, 100);
+        assert_eq!(
+            extract_hap_vector(&record).unwrap_err(),
+            CigarError::UnsupportedMatchOp
+        );
+        assert!(matches!(
+            extract_error_vector(&record),
+            Err(CigarError::UnsupportedMatchOp)
+        ));
+        assert!(matches!(
+            extract_read_qseqs(&record),
+            Err(CigarError::UnsupportedMatchOp)
+        ));
     }
 
     #[test]
@@ -751,7 +903,7 @@ mod tests {
         let qual = &[30u8, 20, 10, 40, 30];
         let record = make_record(cigar, seq, qual, 100);
 
-        let err = extract_error_vector(&record);
+        let err = extract_error_vector(&record).unwrap();
         assert_eq!(err.len(), 5);
         assert!((err[0] - phred_to_prob(30)).abs() < 1e-7);
         assert!((err[1] - phred_to_prob(20)).abs() < 1e-7);
@@ -772,7 +924,7 @@ mod tests {
         let qual = &[30, 20, 25, 35];
         let record = make_record(cigar, seq, qual, 100);
 
-        let err = extract_error_vector(&record);
+        let err = extract_error_vector(&record).unwrap();
         assert_eq!(err.len(), 6);
         assert!((err[0] - phred_to_prob(30)).abs() < 1e-7);
         assert!((err[1] - phred_to_prob(20)).abs() < 1e-7);
@@ -795,7 +947,7 @@ mod tests {
         let qual = &[30, 20, 25, 10, 10, 35, 40, 30]; // 8 quality values
         let record = make_record(cigar, seq, qual, 100);
 
-        let err = extract_error_vector(&record);
+        let err = extract_error_vector(&record).unwrap();
         assert_eq!(err.len(), 6);
         assert!((err[0] - phred_to_prob(30)).abs() < 1e-7); // pos 0
         assert!((err[1] - phred_to_prob(20)).abs() < 1e-7); // pos 1
@@ -819,7 +971,7 @@ mod tests {
         let qual = &[30, 20, 15, 25, 35];
         let record = make_record(cigar, seq, qual, 100);
 
-        let err = extract_error_vector(&record);
+        let err = extract_error_vector(&record).unwrap();
         assert_eq!(err.len(), 5);
         assert!((err[2] - phred_to_prob(15)).abs() < 1e-7); // mismatch base
     }
@@ -837,10 +989,10 @@ mod tests {
         let qual = &[30, 30, 30, 20, 10, 30, 30]; // 7 query bases
         let record = make_record(cigar, seq, qual, 200);
 
-        let (hap, err, start, end) = extract_hap_err_vectors(&record);
+        let (hap, err, start, end) = extract_hap_err_vectors(&record).unwrap();
 
-        // Hap: [1, 1, 1, -4, ins_marker=4, 1]
-        assert_eq!(hap.to_vec(), vec![1, 1, 1, -4, 4, 1]);
+        // Hap: [1, 1, 1, -4, match+1bp-ins = 1+10 = 11, 1]
+        assert_eq!(hap.to_vec(), vec![1, 1, 1, -4, 11, 1]);
 
         // Err: insertion overwrites err[ref_pos-1] where ref_pos=4 after the X(1).
         assert_eq!(err.len(), 6);
@@ -867,7 +1019,7 @@ mod tests {
         let qual = &[10; 9];
         let record = make_record(cigar, seq, qual, 100);
 
-        let hap = extract_hap_vector(&record);
+        let hap = extract_hap_vector(&record).unwrap();
         assert_eq!(hap.to_vec(), vec![1, 1, 1, 1]);
     }
 
@@ -907,7 +1059,7 @@ mod tests {
         let cigar = CigarString(vec![Cigar::Equal(5)]);
         let record = make_record(cigar, b"ATCGN", &[30, 25, 20, 15, 10], 100);
 
-        let data = extract_read_qseqs(&record);
+        let data = extract_read_qseqs(&record).unwrap();
 
         debug!("all_matches: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}, qual={:?}",
             data.ref_to_query, data.query_to_ref, data.qseq_encoded, data.qseq_qualities);
@@ -935,7 +1087,7 @@ mod tests {
         ]);
         let record = make_record(cigar, b"ACGTAC", &[30; 6], 10);
 
-        let data = extract_read_qseqs(&record);
+        let data = extract_read_qseqs(&record).unwrap();
 
         debug!("deletion: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}",
             data.ref_to_query, data.query_to_ref, data.qseq_encoded);
@@ -966,7 +1118,7 @@ mod tests {
         ]);
         let record = make_record(cigar, b"ACTGGAT", &[30; 7], 50);
 
-        let data = extract_read_qseqs(&record);
+        let data = extract_read_qseqs(&record).unwrap();
 
         debug!("insertion: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}",
             data.ref_to_query, data.query_to_ref, data.qseq_encoded);
@@ -992,7 +1144,7 @@ mod tests {
         ]);
         let record = make_record(cigar, b"CCATGA", &[10, 10, 30, 30, 30, 10], 100);
 
-        let data = extract_read_qseqs(&record);
+        let data = extract_read_qseqs(&record).unwrap();
 
         debug!("softclip: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}",
             data.ref_to_query, data.query_to_ref, data.qseq_encoded);
@@ -1020,7 +1172,7 @@ mod tests {
         ]);
         let record = make_record(cigar, b"ACTAG", &[30, 30, 25, 30, 30], 200);
 
-        let data = extract_read_qseqs(&record);
+        let data = extract_read_qseqs(&record).unwrap();
 
         debug!("snv: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}",
             data.ref_to_query, data.query_to_ref, data.qseq_encoded);
@@ -1051,7 +1203,7 @@ mod tests {
         ]);
         let record = make_record(cigar, b"NACGTAAN", &[5, 30, 30, 30, 30, 30, 30, 5], 0);
 
-        let data = extract_read_qseqs(&record);
+        let data = extract_read_qseqs(&record).unwrap();
 
         debug!("complex: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}, qual={:?}",
             data.ref_to_query, data.query_to_ref, data.qseq_encoded, data.qseq_qualities);
@@ -1079,11 +1231,11 @@ mod tests {
         let mut cache: HashMap<String, ReadQseqData> = HashMap::new();
 
         // First call populates cache
-        let data1 = extract_read_qseqs_cached(&record, &mut cache);
+        let data1 = extract_read_qseqs_cached(&record, &mut cache).unwrap();
         assert_eq!(cache.len(), 1);
 
         // Second call returns cached value
-        let data2 = extract_read_qseqs_cached(&record, &mut cache);
+        let data2 = extract_read_qseqs_cached(&record, &mut cache).unwrap();
         assert_eq!(cache.len(), 1); // no new entry
 
         debug!("caching: data1.qseq={:?}, data2.qseq={:?}", data1.qseq_encoded, data2.qseq_encoded);
@@ -1108,7 +1260,7 @@ mod tests {
         ]);
         let record = make_record(cigar, b"ACGTACGT", &[30; 8], 10);
 
-        let data = extract_read_qseqs(&record);
+        let data = extract_read_qseqs(&record).unwrap();
 
         debug!("python_del_example: ref_to_query={:?}, query_to_ref={:?}",
             data.ref_to_query, data.query_to_ref);
@@ -1138,7 +1290,7 @@ mod tests {
         ]);
         let record = make_record(cigar, b"ACGTACGT", &[30; 8], 10);
 
-        let data = extract_read_qseqs(&record);
+        let data = extract_read_qseqs(&record).unwrap();
 
         debug!("python_ins_example: ref_to_query={:?}, query_to_ref={:?}",
             data.ref_to_query, data.query_to_ref);
@@ -1176,30 +1328,70 @@ mod tests {
     }
 
     #[test]
+    fn test_count_snv_compound() {
+        // Golden: pure SNVs (-4) PLUS compound mismatches under an insertion (end in
+        // digit 6: 6, 16, 26). A match under an insertion ends in 1 (11, 21) and is NOT
+        // an SNV; a deletion-under-insertion (loophole, 10, 20) ends in 0 and is not an SNV.
+        let hap_vec = array![1, -4, 6, 11, 16, 21, 1];
+        // SNVs counted: -4, 6, 16 → 3
+        assert_eq!(count_snv(&hap_vec), 3);
+    }
+
+    #[test]
+    fn test_golden_decoders() {
+        // round_to_nearest_10 recovers the structural (multiple-of-10) part.
+        assert_eq!(round_to_nearest_10(1), 0); // match
+        assert_eq!(round_to_nearest_10(-4), 0); // mismatch
+        assert_eq!(round_to_nearest_10(-10), -10); // deletion
+        assert_eq!(round_to_nearest_10(6), 10); // mismatch + 1bp ins
+        assert_eq!(round_to_nearest_10(11), 10); // match + 1bp ins
+        assert_eq!(round_to_nearest_10(16), 20); // mismatch + 2bp ins
+        assert_eq!(round_to_nearest_10(21), 20); // match + 2bp ins
+        assert_eq!(round_to_nearest_10(-20), -20); // padding
+
+        // insertion_len = structural / 10 for insertions, else 0.
+        assert_eq!(insertion_len(1), 0);
+        assert_eq!(insertion_len(-10), 0);
+        assert_eq!(insertion_len(11), 1);
+        assert_eq!(insertion_len(6), 1);
+        assert_eq!(insertion_len(21), 2);
+        assert_eq!(insertion_len(16), 2);
+
+        // is_snv / is_indel / is_deletion / is_real classification.
+        assert!(is_snv(-4) && is_snv(6) && is_snv(16));
+        assert!(!is_snv(1) && !is_snv(11) && !is_snv(21) && !is_snv(-10));
+        assert!(is_indel(-10) && is_indel(11) && is_indel(6) && is_indel(21));
+        assert!(!is_indel(1) && !is_indel(-4) && !is_indel(HAP_PAD));
+        assert!(is_deletion(-10) && !is_deletion(-4) && !is_deletion(HAP_PAD));
+        assert!(is_real(1) && is_real(-10) && is_real(21));
+        assert!(!is_real(HAP_PAD));
+    }
+
+    #[test]
     fn test_count_continuous_indel_blocks_single_deletion() {
-        // Single deletion block: -6
-        let hap_vec = array![1, 1, -6, -6, -6, 1, 1];
+        // Single deletion block: golden deletion = -10 (HAP_DEL)
+        let hap_vec = array![1, 1, -10, -10, -10, 1, 1];
         assert_eq!(count_continuous_indel_blocks(&hap_vec), 1);
     }
 
     #[test]
     fn test_count_continuous_indel_blocks_single_insertion() {
-        // Single insertion block: >1 (e.g., 8 means 2bp insertion)
-        let hap_vec = array![1, 1, 8, 1, 1];
+        // Single insertion block: >1 (21 = match base + 2bp insertion, golden)
+        let hap_vec = array![1, 1, 21, 1, 1];
         assert_eq!(count_continuous_indel_blocks(&hap_vec), 1);
     }
 
     #[test]
     fn test_count_continuous_indel_blocks_multiple() {
-        // Multiple indel blocks: deletion, insertion, deletion
-        let hap_vec = array![1, -6, -6, 1, 8, 1, -6, 1];
+        // Multiple indel blocks: deletion (-10), insertion (21), deletion (-10)
+        let hap_vec = array![1, -10, -10, 1, 21, 1, -10, 1];
         assert_eq!(count_continuous_indel_blocks(&hap_vec), 3);
     }
 
     #[test]
     fn test_count_continuous_indel_blocks_consecutive_different_types() {
-        // Consecutive deletion and insertion should be ONE block
-        let hap_vec = array![1, -6, 8, 1];
+        // Consecutive deletion (-10) and insertion (21) should be ONE block
+        let hap_vec = array![1, -10, 21, 1];
         assert_eq!(count_continuous_indel_blocks(&hap_vec), 1);
     }
 
@@ -1211,15 +1403,22 @@ mod tests {
 
     #[test]
     fn test_count_continuous_indel_blocks_at_boundaries() {
-        // Indel at start and end
-        let hap_vec = array![-6, 1, 1, 8];
+        // Indel at start (-10) and end (21)
+        let hap_vec = array![-10, 1, 1, 21];
+        assert_eq!(count_continuous_indel_blocks(&hap_vec), 2);
+    }
+
+    #[test]
+    fn test_count_continuous_indel_blocks_compound_counts_as_indel() {
+        // Golden compound base (mismatch + 1bp ins = 6) is also an indel position.
+        let hap_vec = array![1, 6, 1, 16, 1];
         assert_eq!(count_continuous_indel_blocks(&hap_vec), 2);
     }
 
     #[test]
     fn test_count_var_combined() {
-        // 2 SNVs + 2 indel blocks = 4 variants
-        let hap_vec = array![1, -4, -6, -6, 1, -4, 8, 1];
+        // 2 SNVs (-4) + 2 indel blocks (del -10 block, ins 21) = 4 variants
+        let hap_vec = array![1, -4, -10, -10, 1, -4, 21, 1];
         assert_eq!(count_var(&hap_vec), 4);
     }
 
@@ -1231,7 +1430,16 @@ mod tests {
 
     #[test]
     fn test_count_var_only_indels() {
-        let hap_vec = array![1, -6, 1, 8, 1];
+        let hap_vec = array![1, -10, 1, 21, 1];
+        assert_eq!(count_var(&hap_vec), 2);
+    }
+
+    #[test]
+    fn test_count_var_compound_counts_twice() {
+        // Golden: a compound mismatch+ins base (16) is BOTH an SNV and an indel block.
+        let hap_vec = array![1, 16, 1];
+        assert_eq!(count_snv(&hap_vec), 1);
+        assert_eq!(count_continuous_indel_blocks(&hap_vec), 1);
         assert_eq!(count_var(&hap_vec), 2);
     }
 

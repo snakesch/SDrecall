@@ -164,7 +164,8 @@ fn main() {
 
             // a) Record haplotype/error vectors
             let (read_spans, hap_vectors, err_vectors) =
-                record_hap_err_vectors_per_region(&region_reads, &mut hap_cache, &mut err_cache);
+                record_hap_err_vectors_per_region(&region_reads, &mut hap_cache, &mut err_cache)
+                    .expect("record_hap_err_vectors_per_region failed (M op in CIGAR?)");
 
             eprintln!("    hap_vectors shape: {:?}, err_vectors shape: {:?}, read_spans shape: {:?}",
                       hap_vectors.dim(), err_vectors.dim(), read_spans.dim());

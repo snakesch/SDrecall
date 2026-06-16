@@ -2,19 +2,19 @@
 //!
 //! A Python-INDEPENDENT ground truth for the encoding-dependent variant counters. The
 //! oracle reads the raw CIGAR, never the hap-vector encoding, so the *same* harness
-//! validates the current (overwrite) encoding now and the golden (summation) encoding
-//! after the T4 switch — only the asserted `count_snv` relationship changes.
+//! validates the current (overwrite) encoding and the golden (summation) encoding —
+//! only the asserted `count_snv` relationship changes. This crate now uses GOLDEN.
 //!
 //! Truths (encoding-agnostic):
 //!   * `true #SNV          = Σ len(X ops)`
 //!   * `true #indel-blocks = number of maximal runs of consecutive I/D ops`
 //!
-//! Findings this harness pins down for the CURRENT encoding:
-//!   * `count_continuous_indel_blocks(hap)` == true #indel-blocks  — ALWAYS (even with compounds).
-//!   * `count_snv(hap)` == true #SNV − (#compound bases)           — the overwrite UNDERCOUNT,
-//!     where a "compound base" is an insertion immediately followed by a mismatch (`I` then `X`),
-//!     whose `-4` SNV signal is overwritten by the insertion marker and lost. This is exactly the
-//!     DivB bug; golden fixes it (then `count_snv == true #SNV`, and this file flips one assert).
+//! Findings this harness pins down for the GOLDEN (summation) encoding:
+//!   * `count_continuous_indel_blocks(hap)` == ref-position #indel-blocks — ALWAYS (even compounds).
+//!   * `count_snv(hap)` == true #SNV                                       — a compound mismatch
+//!     under an insertion (`I` then `X`, whose value ends in digit 6) is now RECOVERED: summation
+//!     keeps the `-4` signal (`-4 + 10*L`) instead of overwriting it. This is the DivB fix the old
+//!     overwrite encoding lacked (where the compound `-4` was lost, undercounting by one per compound).
 
 use haplotype_inspection::pairwise_read_inspection::{
     count_continuous_indel_blocks, count_snv, count_var, extract_hap_vector,
@@ -65,9 +65,10 @@ fn true_indel_blocks(ops: &[Cigar]) -> i32 {
     blocks
 }
 
-/// Compound bases the current overwrite encoding loses: an `I` op immediately followed by an `X`
-/// op, whose first mismatch position is overwritten by the insertion marker.
-fn compound_undercount(ops: &[Cigar]) -> i32 {
+/// Compound bases: an `I` op immediately followed by an `X` op, so the first mismatch position is
+/// summed with the insertion marker (`-4 + 10*L`, ending in digit 6). The OLD overwrite encoding
+/// lost the `-4` here (undercount); GOLDEN recovers it, so this is now an exact "compound count".
+fn compound_count(ops: &[Cigar]) -> i32 {
     ops.windows(2)
         .filter(|w| matches!(w[0], Cigar::Ins(_)) && matches!(w[1], Cigar::Diff(_)))
         .count() as i32
@@ -125,7 +126,7 @@ fn ref_position_indel_blocks(ops: &[Cigar]) -> i32 {
 fn snv_only_matches_cigar_truth() {
     // 3= 1X 2=  → one SNV, no indels
     let ops = vec![Cigar::Equal(3), Cigar::Diff(1), Cigar::Equal(2)];
-    let hap = extract_hap_vector(&make_record(&ops));
+    let hap = extract_hap_vector(&make_record(&ops)).unwrap();
     assert_eq!(count_snv(&hap), true_snv(&ops));
     assert_eq!(count_snv(&hap), 1);
     assert_eq!(count_continuous_indel_blocks(&hap), 0);
@@ -134,7 +135,7 @@ fn snv_only_matches_cigar_truth() {
 #[test]
 fn deletion_is_one_indel_block() {
     let ops = vec![Cigar::Equal(3), Cigar::Del(2), Cigar::Equal(3)];
-    let hap = extract_hap_vector(&make_record(&ops));
+    let hap = extract_hap_vector(&make_record(&ops)).unwrap();
     assert_eq!(count_continuous_indel_blocks(&hap), true_indel_blocks(&ops));
     assert_eq!(count_continuous_indel_blocks(&hap), 1);
     assert_eq!(count_snv(&hap), 0);
@@ -143,7 +144,7 @@ fn deletion_is_one_indel_block() {
 #[test]
 fn insertion_is_one_indel_block() {
     let ops = vec![Cigar::Equal(3), Cigar::Ins(2), Cigar::Equal(3)];
-    let hap = extract_hap_vector(&make_record(&ops));
+    let hap = extract_hap_vector(&make_record(&ops)).unwrap();
     assert_eq!(count_continuous_indel_blocks(&hap), true_indel_blocks(&ops));
     assert_eq!(count_continuous_indel_blocks(&hap), 1);
     assert_eq!(count_snv(&hap), 0);
@@ -153,26 +154,26 @@ fn insertion_is_one_indel_block() {
 fn adjacent_ins_del_is_a_single_block() {
     // I then D are consecutive indel ops → one block (vector: marker then -6 run)
     let ops = vec![Cigar::Equal(3), Cigar::Ins(2), Cigar::Del(2), Cigar::Equal(3)];
-    let hap = extract_hap_vector(&make_record(&ops));
+    let hap = extract_hap_vector(&make_record(&ops)).unwrap();
     assert_eq!(count_continuous_indel_blocks(&hap), 1);
     assert_eq!(true_indel_blocks(&ops), 1);
 }
 
 #[test]
-fn compound_ins_then_snv_undercounts_by_one() {
-    // 5= 3I 1X 5=  → the X's -4 is overwritten by the insertion marker.
-    // TRUE: 1 SNV + 1 indel block = 2 variant events.
-    // CURRENT encoding: count_snv = 0 (lost), count_indel = 1  → count_var = 1 (undercount).
+fn compound_ins_then_snv_recovered() {
+    // 5= 3I 1X 5=  → golden sums the X's -4 with the 3bp insertion: -4 + 30 = 26 (ends in 6).
+    // TRUE: 1 SNV + 1 indel block = 2 variant events — both recovered under golden.
     let ops = vec![Cigar::Equal(5), Cigar::Ins(3), Cigar::Diff(1), Cigar::Equal(5)];
-    let hap = extract_hap_vector(&make_record(&ops));
+    let hap = extract_hap_vector(&make_record(&ops)).unwrap();
 
     assert_eq!(true_snv(&ops), 1);
-    assert_eq!(compound_undercount(&ops), 1);
-    assert_eq!(count_snv(&hap), true_snv(&ops) - compound_undercount(&ops));
-    assert_eq!(count_snv(&hap), 0, "the compound SNV is lost under the overwrite encoding");
+    assert_eq!(compound_count(&ops), 1);
+    // Golden: count_snv == true #SNV (the compound mismatch is recovered, not lost).
+    assert_eq!(count_snv(&hap), true_snv(&ops));
+    assert_eq!(count_snv(&hap), 1, "the compound SNV is recovered under golden summation");
     assert_eq!(count_continuous_indel_blocks(&hap), 1);
-    // The true variant count is 2, but the current encoding reports 1.
-    assert_eq!(count_var(&hap), 1);
+    // The true variant count is 2, and golden now reports 2 (the old encoding reported 1).
+    assert_eq!(count_var(&hap), 2);
     assert_eq!(true_snv(&ops) + true_indel_blocks(&ops), 2);
 }
 
@@ -183,7 +184,7 @@ fn trailing_insertion_is_dropped() {
     // faithful to Python's get_hapvector_from_cigar (defer-to-next-ref-op). Real minimap2 --eqx
     // reads end aligned (or soft-clipped), so this never fires in the pipeline.
     let ops = vec![Cigar::Diff(5), Cigar::Ins(1)];
-    let hap = extract_hap_vector(&make_record(&ops));
+    let hap = extract_hap_vector(&make_record(&ops)).unwrap();
     assert_eq!(count_continuous_indel_blocks(&hap), 0, "trailing insertion has no anchor → dropped");
     assert_eq!(true_indel_blocks(&ops), 1, "op-level truth would be 1; the encoding cannot represent it");
 }
@@ -202,20 +203,21 @@ fn insertion_on_isolated_match_merges_indel_blocks() {
         Cigar::Del(1),
         Cigar::Equal(3),
     ];
-    let hap = extract_hap_vector(&make_record(&ops));
+    let hap = extract_hap_vector(&make_record(&ops)).unwrap();
     assert_eq!(count_continuous_indel_blocks(&hap), 1, "insertion marker consumes the separating match");
     assert_eq!(ref_position_indel_blocks(&ops), 1);
     assert_eq!(true_indel_blocks(&ops), 2, "op-level (biological) count is 2 distinct indel events");
 }
 
 #[test]
-fn compound_ins_then_longer_snv_loses_only_first_base() {
-    // 5= 3I 2X 5= → only the first of the 2 mismatches is overwritten.
+fn compound_ins_then_longer_snv_recovers_all() {
+    // 5= 3I 2X 5= → golden sums only the first mismatch with the insertion (-4+30=26);
+    // the second mismatch stays -4. Both are SNVs, so all are recovered.
     let ops = vec![Cigar::Equal(5), Cigar::Ins(3), Cigar::Diff(2), Cigar::Equal(5)];
-    let hap = extract_hap_vector(&make_record(&ops));
+    let hap = extract_hap_vector(&make_record(&ops)).unwrap();
     assert_eq!(true_snv(&ops), 2);
-    assert_eq!(compound_undercount(&ops), 1);
-    assert_eq!(count_snv(&hap), 1);
+    assert_eq!(compound_count(&ops), 1);
+    assert_eq!(count_snv(&hap), 2);
 }
 
 // ── Randomized property check (deterministic, dependency-free) ─────────────────
@@ -278,7 +280,7 @@ fn property_counts_match_cigar_truth_over_random_cigars() {
 
     for _ in 0..iters {
         let ops = random_clean_cigar(&mut rng);
-        let hap = extract_hap_vector(&make_record(&ops));
+        let hap = extract_hap_vector(&make_record(&ops)).unwrap();
 
         // Indel-block count matches the ref-position structural truth (the space the function
         // operates in), exact even when an insertion merges op-level-distinct runs.
@@ -288,30 +290,31 @@ fn property_counts_match_cigar_truth_over_random_cigars() {
             "indel-block count diverged from ref-position truth for ops {ops:?}"
         );
 
-        // SNV count undercounts by EXACTLY the number of compound (ins-then-mismatch) bases.
-        let undercount = compound_undercount(&ops);
+        // GOLDEN: SNV count equals the true #SNV exactly — compound (ins-then-mismatch)
+        // bases are recovered (`-4 + 10*L` still classifies as an SNV), no undercount.
+        let compounds = compound_count(&ops);
         assert_eq!(
             count_snv(&hap),
-            true_snv(&ops) - undercount,
-            "snv count != true_snv - compound_undercount for ops {ops:?}"
+            true_snv(&ops),
+            "snv count != true_snv for ops {ops:?}"
         );
 
         // count_var is just the sum of its two parts.
         assert_eq!(count_var(&hap), count_snv(&hap) + count_continuous_indel_blocks(&hap));
 
-        if undercount > 0 {
+        if compounds > 0 {
             cases_with_compound += 1;
-            total_compounds += undercount;
+            total_compounds += compounds;
         }
     }
 
-    // The generator must actually exercise the compound path, else the undercount assertion is vacuous.
+    // The generator must actually exercise the compound path, else the recovery assertion is vacuous.
     assert!(
         cases_with_compound > 100,
-        "expected many compound cases, got {cases_with_compound} ({total_compounds} lost SNVs)"
+        "expected many compound cases, got {cases_with_compound} ({total_compounds} compound bases)"
     );
     eprintln!(
         "[cigar_oracle] {iters} random CIGARs: {cases_with_compound} contained compound ins+SNV bases, \
-         {total_compounds} true SNVs lost to the overwrite encoding (golden recovers all)."
+         {total_compounds} compound SNVs recovered by the golden summation encoding."
     );
 }

@@ -18,6 +18,7 @@ use rust_htslib::bam::Record;
 use rust_lapper::Lapper;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
+use std::collections::hash_map::Entry;
 use log::{debug, info, warn};
 
 use crate::bam_lappers::{BamLapperResult, build_lapper_from_bam, query_overlapping_reads};
@@ -25,6 +26,7 @@ use crate::pairwise_read_inspection::{
     read_id, extract_hap_vector, extract_error_vector,
     extract_read_qseqs, ReadQseqData,
     count_var, count_continuous_indel_blocks, count_snv,
+    HAP_PAD, is_snv, is_indel, is_deletion, insertion_len, is_real,
 };
 use crate::structs::{BilcRecord, EnrichedRecord, RegionKey};
 use crate::bilc_solver::{lp_solve_remained_haplotypes, BilcStatus};
@@ -81,28 +83,26 @@ pub fn count_window_var_density(array: &Array1<i16>, padding_size: i32) -> Array
     let pad = padding_size as usize;
     let window_size = (padding_size * 2 + 1) as f32;
 
-    // Prefix sums computed once over the whole sequence:
-    //   snv_prefix[k]   = count of SNV markers (-4) in array[0..k]
-    //   block_prefix[k] = count of indel-block STARTS in array[0..k], where a
-    //                     start is an indel position (-6 or >1) whose left
-    //                     neighbour is not an indel — this mirrors how
-    //                     count_continuous_blocks counts maximal indel runs.
+    // Prefix sums computed once over the whole sequence (golden decoders, so this
+    // stays identical to count_var over each window):
+    //   snv_prefix[k]   = count of SNV positions (pure -4 OR compound mismatch-ins
+    //                     ending in digit 6) in array[0..k]  — matches count_snv.
+    //   block_prefix[k] = count of indel-block STARTS in array[0..k], where a start
+    //                     is an indel position (deletion -10 or insertion >1) whose
+    //                     left neighbour is not an indel — mirrors count_continuous_blocks.
     let mut snv_prefix = vec![0i32; n + 1];
     let mut block_prefix = vec![0i32; n + 1];
     let mut prev_indel = false;
     for (k, &v) in array.iter().enumerate() {
-        let is_snv = v == -4;
-        let is_indel = v == -6 || v > 1;
-        let is_block_start = is_indel && !prev_indel;
-        snv_prefix[k + 1] = snv_prefix[k] + is_snv as i32;
+        let snv = is_snv(v);
+        let indel = is_indel(v);
+        let is_block_start = indel && !prev_indel;
+        snv_prefix[k + 1] = snv_prefix[k] + snv as i32;
         block_prefix[k + 1] = block_prefix[k] + is_block_start as i32;
-        prev_indel = is_indel;
+        prev_indel = indel;
     }
 
-    let is_indel_at = |k: usize| -> bool {
-        let v = array[k];
-        v == -6 || v > 1
-    };
+    let is_indel_at = |k: usize| -> bool { is_indel(array[k]) };
 
     let mut density_arr = Array1::<f32>::zeros(n);
     for i in 0..n {
@@ -316,16 +316,18 @@ pub fn ref_genome_similarity(
 ///
 /// Ports from identify_misaligned_haps.py lines 57-108 (`numba_shared_variant_positions`)
 ///
-/// Haplotype vector encoding:
+/// Haplotype vector encoding (golden — decoded via the shared helpers):
 /// - `1` = match/reference
-/// - `-4` = SNV
-/// - `-6` = deletion (spans multiple positions)
-/// - `>1` = insertion marker (value encodes insertion length × 4)
-/// - `<= -8` = padding / NA
+/// - `-4` = SNV (pure); a compound mismatch-under-insertion (ends in digit 6) is also an SNV
+/// - `-10` = deletion (spans multiple positions)
+/// - `>1` = insertion present (`base + 10*L`); the inserted length is `insertion_len`
+/// - `-20` = padding / NA ([`HAP_PAD`])
 ///
 /// Returns `(shared_snv_pos, shared_ins_pos, shared_del_pos)`:
-/// - `shared_snv_pos`: absolute positions where both vectors have SNV (-4)
-/// - `shared_ins_pos`: absolute positions where both vectors have identical insertion marker (>1, same value)
+/// - `shared_snv_pos`: absolute positions where both vectors are SNVs (pure or compound)
+/// - `shared_ins_pos`: absolute positions where both vectors carry an insertion of the
+///   **same length** (length match made explicit, not raw-value equality, because the
+///   summed point signal differs between match-ins and mismatch-ins of equal length)
 /// - `shared_del_pos`: absolute positions of shared deletion spans (exact same start+end in both vectors)
 pub fn numba_shared_variant_positions(
     vec1: &Array1<i16>,
@@ -343,21 +345,22 @@ pub fn numba_shared_variant_positions(
         let v1 = vec1[i];
         let v2 = vec2[i];
 
-        // Shared SNV: both are -4
-        if v1 == -4 && v2 == -4 {
+        // Shared SNV: both positions are SNVs (pure -4 or compound mismatch-ins).
+        if is_snv(v1) && is_snv(v2) {
             snv_out.push(overlap_start + i as i32);
         }
 
-        // Shared insertion: both are > 1 and have the same value
-        if v1 > 1 && v2 > 1 && v1 == v2 {
+        // Shared insertion: both carry an insertion of the same inserted length.
+        let l1 = insertion_len(v1);
+        if l1 > 0 && l1 == insertion_len(v2) {
             ins_out.push(overlap_start + i as i32);
         }
     }
 
-    // Shared deletions: find identical deletion spans (same start and end)
-    // A deletion span is a contiguous stretch of -6 values
-    let vec1_del_bool = vec1.mapv(|v| v == -6);
-    let vec2_del_bool = vec2.mapv(|v| v == -6);
+    // Shared deletions: find identical deletion spans (same start and end).
+    // A deletion span is a contiguous stretch of HAP_DEL (-10) values.
+    let vec1_del_bool = vec1.mapv(is_deletion);
+    let vec2_del_bool = vec2.mapv(is_deletion);
     let vec1_del_spans = extract_true_stretches(&vec1_del_bool);
     let vec2_del_spans = extract_true_stretches(&vec2_del_bool);
 
@@ -569,7 +572,11 @@ fn parse_origin_region(qname: &str) -> Option<(String, i64, i64)> {
 /// - `varcounts_among_refseqs` — output accumulator (hid -> homo_qname -> Vec<RegionVarStats>)
 ///
 /// # Returns
-/// The (mutated) `varcounts_among_refseqs`.
+/// `Ok(())` after mutating `varcounts_among_refseqs`.
+///
+/// # Errors
+/// Propagates [`crate::pairwise_read_inspection::CigarError`] if a homologous refseq
+/// or member read has a non-`=`/`X` CIGAR (DivA — fail fast).
 #[allow(clippy::too_many_arguments)]
 pub fn stat_refseq_similarity(
     intrin_lapper: &BamLapperResult,
@@ -581,7 +588,7 @@ pub fn stat_refseq_similarity(
     total_genomic_haps: &mut HashMap<String, Array1<i16>>,
     qseq_cache: &mut HashMap<String, ReadQseqData>,
     varcounts_among_refseqs: &mut VarcountsAmongRefseqs,
-) {
+) -> Result<(), Box<dyn std::error::Error>> {
     // Query intrinsic Lapper for overlapping homologous reference sequences
     let homo_refseqs = query_overlapping_reads(
         &intrin_lapper.lapper_dict,
@@ -615,11 +622,10 @@ pub fn stat_refseq_similarity(
             // string "N"), so extract_hap_vector (CIGAR-only) is equivalent.
             // Cache the qseq data for later use in map_positions_to_bases.
             let homo_rid = read_id(homo_refseq);
-            qseq_cache.entry(homo_rid).or_insert_with(|| {
-                
-                extract_read_qseqs(homo_refseq)
-            });
-            let hap_vec = extract_hap_vector(homo_refseq);
+            if let Entry::Vacant(slot) = qseq_cache.entry(homo_rid) {
+                slot.insert(extract_read_qseqs(homo_refseq)?);
+            }
+            let hap_vec = extract_hap_vector(homo_refseq)?;
             total_genomic_haps.insert(homo_refseq_id.clone(), hap_vec.clone());
             hap_vec
         };
@@ -687,7 +693,7 @@ pub fn stat_refseq_similarity(
                 let r_qseq = if let Some(cached) = qseq_cache.get(&r_id) {
                     cached.clone()
                 } else {
-                    let data = extract_read_qseqs(r);
+                    let data = extract_read_qseqs(r)?;
                     qseq_cache.insert(r_id, data.clone());
                     data
                 };
@@ -706,7 +712,7 @@ pub fn stat_refseq_similarity(
             let h_qseq = if let Some(cached) = qseq_cache.get(&homo_rid) {
                 cached.clone()
             } else {
-                let data = extract_read_qseqs(homo_refseq);
+                let data = extract_read_qseqs(homo_refseq)?;
                 qseq_cache.insert(homo_rid, data.clone());
                 data
             };
@@ -779,6 +785,8 @@ pub fn stat_refseq_similarity(
             .or_default()
             .push(stats);
     }
+
+    Ok(())
 }
 
 // ─── cal_similarity_score ───────────────────────────────────────────────────
@@ -978,6 +986,10 @@ pub fn calculate_coefficient(rows: &[&[f32; 10]]) -> Vec<f32> {
 
 // ─── Batch vector collection per region ───────────────────────────────────────
 
+/// Padded per-region vectors produced by [`record_hap_err_vectors_per_region`]:
+/// `(read_spans [N×2], hap_vectors [N×max_len], err_vectors [N×max_len])`.
+pub type RegionVectors = (Array2<i32>, Array2<i16>, Array2<f32>);
+
 /// Collect haplotype and error vectors for all reads in a region, with caching.
 ///
 /// Ports Python's `record_hap_err_vectors_per_region`
@@ -997,22 +1009,26 @@ pub fn calculate_coefficient(rows: &[&[f32; 10]]) -> Vec<f32> {
 ///
 /// # Returns
 /// * `read_spans`  - `Array2<i32>` shape `(n_reads, 2)` with `[ref_start, ref_end]` per read
-/// * `hap_vectors` - `Array2<i16>` shape `(n_reads, max_len)` padded with -10
+/// * `hap_vectors` - `Array2<i16>` shape `(n_reads, max_len)` padded with [`HAP_PAD`] (-20)
 /// * `err_vectors` - `Array2<f32>` shape `(n_reads, max_len)` padded with -10.0
+///
+/// # Errors
+/// Propagates [`crate::pairwise_read_inspection::CigarError`] if any read's CIGAR is
+/// not in `=`/`X` mode (DivA — fail fast instead of panicking).
 pub fn record_hap_err_vectors_per_region(
     records: &[&Record],
     hap_cache: &mut HashMap<String, Array1<i16>>,
     err_cache: &mut HashMap<String, Array1<f32>>,
-) -> (Array2<i32>, Array2<i16>, Array2<f32>) {
+) -> Result<RegionVectors, Box<dyn std::error::Error>> {
     let n = records.len();
 
     if n == 0 {
         info!("[record_hap_err_vectors_per_region] no reads to process");
-        return (
+        return Ok((
             Array2::<i32>::zeros((0, 2)),
             Array2::<i16>::zeros((0, 0)),
             Array2::<f32>::zeros((0, 0)),
-        );
+        ));
     }
 
     let cache_size_before = hap_cache.len();
@@ -1033,14 +1049,19 @@ pub fn record_hap_err_vectors_per_region(
         let rid = read_id(record);
         let hap_hit = hap_cache.contains_key(&rid);
 
-        let hap_len = hap_cache
-            .entry(rid.clone())
-            .or_insert_with(|| extract_hap_vector(record))
-            .len();
-        let err_len = err_cache
-            .entry(rid.clone())
-            .or_insert_with(|| extract_error_vector(record))
-            .len();
+        // Populate the caches on miss, propagating CigarError via `?` (DivA: the
+        // M-op rejection early-stops here rather than panicking). extract_hap_vector
+        // runs first, so a malformed read never reaches extract_error_vector. The
+        // Entry API avoids the double lookup that `contains_key` + `insert` incurs.
+        if let Entry::Vacant(e) = hap_cache.entry(rid.clone()) {
+            e.insert(extract_hap_vector(record)?);
+        }
+        let hap_len = hap_cache[&rid].len();
+
+        if let Entry::Vacant(e) = err_cache.entry(rid.clone()) {
+            e.insert(extract_error_vector(record)?);
+        }
+        let err_len = err_cache[&rid].len();
 
         debug!(
             "[record_hap_err_vectors_per_region] read {} cache_hit={} hap_len={} err_len={}",
@@ -1067,7 +1088,10 @@ pub fn record_hap_err_vectors_per_region(
     // Second pass: copy each cached vector directly into its padded row.
     // hap and err vectors share the same length (both span the read's reference
     // footprint), so max_len computed from hap lengths bounds both.
-    let mut hap_vectors = Array2::<i16>::from_elem((n, max_len), -10i16);
+    // hap padding is HAP_PAD (-20): golden deletion is -10, so the old -10 padding
+    // would collide and drop deletions. err padding stays -10.0 (it does not collide —
+    // assemble_consensus truncates qual by the seq-derived count, never testing it).
+    let mut hap_vectors = Array2::<i16>::from_elem((n, max_len), HAP_PAD);
     let mut err_vectors = Array2::<f32>::from_elem((n, max_len), -10.0f32);
     for (i, rid) in rids.iter().enumerate() {
         let hap = &hap_cache[rid];
@@ -1081,7 +1105,7 @@ pub fn record_hap_err_vectors_per_region(
             .copy_from_slice(err.as_slice().unwrap());
     }
 
-    (read_spans, hap_vectors, err_vectors)
+    Ok((read_spans, hap_vectors, err_vectors))
 }
 
 // ─── Consensus assembly ───────────────────────────────────────────────────────
@@ -1094,9 +1118,10 @@ pub fn record_hap_err_vectors_per_region(
 /// The caller retains ownership and can reuse them after this call.
 ///
 /// # Arguments
-/// * `seq_arrays`  - `Array2<i16>` shape `(n_reads, max_len)`, padded with -10.
-///   Values >= -8 are considered valid (non-NA).
-/// * `qual_arrays` - `Array2<f32>` shape `(n_reads, max_len)`, same padding convention.
+/// * `seq_arrays`  - `Array2<i16>` shape `(n_reads, max_len)`, padded with [`HAP_PAD`] (-20).
+///   Any value other than `HAP_PAD` is valid (non-NA) — this keeps the golden deletion
+///   `-10`, which the old `>= -8` filter would have dropped as padding.
+/// * `qual_arrays` - `Array2<f32>` shape `(n_reads, max_len)` (err padding -10.0).
 /// * `read_spans`  - `Array2<i32>` shape `(n_reads, 2)` with `[ref_start, ref_end]` per read.
 ///
 /// # Returns
@@ -1145,9 +1170,10 @@ pub fn assemble_consensus(
         let qual_row = qual_arrays.row(i);
         let start = read_spans[[i, 0]];
 
-        // ── Python line 315 ─────────────────────────────────────────────
-        // non_na_values = numba_sum(seq >= -8)
-        let non_na_values: usize = seq_row.iter().filter(|&&v| v >= -8).count();
+        // Count real (non-padding) values; padding (HAP_PAD = -20) is always at the
+        // tail, so this equals the length of the real prefix. Golden change: was
+        // `>= -8`, which would now wrongly drop the deletion signal (-10).
+        let non_na_values: usize = seq_row.iter().filter(|&&v| is_real(v)).count();
 
         // ── Python lines 317-325: strip padding ─────────────────────────
         let nona_seq: Vec<i32> = seq_row.iter().take(non_na_values).map(|&v| v as i32).collect();
@@ -1643,8 +1669,12 @@ pub struct IdentifyMisalignmentResult {
 /// - `mean_read_length` — average read length (used to estimate total depth).
 ///
 /// # Returns
-/// `Some(IdentifyMisalignmentResult)` — ranked haplotype array + chrom,
-/// or `None` if the region is skipped (no haplotypes, < 2 enclosing haps, etc.).
+/// `Ok(Some(IdentifyMisalignmentResult))` — ranked haplotype array + chrom,
+/// `Ok(None)` if the region is skipped (no haplotypes, < 2 enclosing haps, etc.).
+///
+/// # Errors
+/// Propagates [`crate::pairwise_read_inspection::CigarError`] from vector extraction
+/// (DivA — a non-`=`/`X` CIGAR fails fast instead of panicking).
 #[allow(clippy::too_many_arguments)]
 pub fn identify_misalignment_per_region(
     region: (&str, i64, i64),
@@ -1657,7 +1687,7 @@ pub fn identify_misalignment_per_region(
     hap_cache: &mut HashMap<String, Array1<i16>>,
     err_cache: &mut HashMap<String, Array1<f32>>,
     mean_read_length: f64,
-) -> Option<IdentifyMisalignmentResult> {
+) -> Result<Option<IdentifyMisalignmentResult>, Box<dyn std::error::Error>> {
     let (chrom, start, end) = region;
     let region_str = format!("{chrom}:{start}-{end}");
 
@@ -1702,12 +1732,15 @@ pub fn identify_misalignment_per_region(
         warn!(
             "[identify_misalignment_per_region] No haplotype clusters found for region {region_str}. Skipping."
         );
-        return None;
+        return Ok(None);
     }
 
     // ── Step 4: Summarize enclosing haplotypes ──────────────────────────
     let summarize_result = summarize_enclosing_haps(&hap_subgraphs, qname_to_node, region);
-    let (region_haplotype_info, overlapping_span) = summarize_result?;
+    let (region_haplotype_info, overlapping_span) = match summarize_result {
+        Some(v) => v,
+        None => return Ok(None),
+    };
 
     debug!(
         "[identify_misalignment_per_region] region {}:{}-{} → {} enclosing haplotypes",
@@ -1740,7 +1773,7 @@ pub fn identify_misalignment_per_region(
 
         // Compute hap/err vectors for these reads
         let (read_spans, hap_vectors, err_vectors) =
-            record_hap_err_vectors_per_region(reads.as_slice(), hap_cache, err_cache);
+            record_hap_err_vectors_per_region(reads.as_slice(), hap_cache, err_cache)?;
 
         // Assemble consensus
         let consensus_sequence = assemble_consensus(&hap_vectors, &err_vectors, &read_spans);
@@ -1780,7 +1813,7 @@ pub fn identify_misalignment_per_region(
             final_clusters.len(),
             region_str
         );
-        return None;
+        return Ok(None);
     }
 
     // ── Step 6: Rank haplotypes ─────────────────────────────────────────
@@ -1796,10 +1829,10 @@ pub fn identify_misalignment_per_region(
         region_str
     );
 
-    Some(IdentifyMisalignmentResult {
+    Ok(Some(IdentifyMisalignmentResult {
         record_2d_arr,
         chrom: chrom.to_string(),
-    })
+    }))
 }
 
 /// Select genomic intervals covered by >= `min_haplotypes` distinct haplotypes.
@@ -2060,7 +2093,7 @@ pub fn inspect_haplotypes(
 
             // a) Record haplotype/error vectors
             let (read_spans, hap_vectors, err_vectors) =
-                record_hap_err_vectors_per_region(&region_reads, &mut hap_cache, &mut err_cache);
+                record_hap_err_vectors_per_region(&region_reads, &mut hap_cache, &mut err_cache)?;
 
             // b) Assemble consensus
             let consensus_sequence = assemble_consensus(&hap_vectors, &err_vectors, &read_spans);
@@ -2093,7 +2126,7 @@ pub fn inspect_haplotypes(
                 &mut total_genomic_haps,
                 &mut qseq_cache,
                 &mut varcounts_among_refseqs,
-            );
+            )?;
         }
     }
 
@@ -2166,7 +2199,7 @@ pub fn inspect_haplotypes(
             &mut hap_cache,
             &mut err_cache,
             mean_read_length,
-        ) {
+        )? {
             record_results.push(result);
         } else {
             warn!("[inspect_haplotypes] No valid haplotypes for region {chrom}:{start}-{end}");
@@ -2507,14 +2540,14 @@ mod tests {
         arr
     }
 
-    /// Build a padded Array2<i16> from variable-length rows (pad with -10).
+    /// Build a padded Array2<i16> from variable-length rows (pad with HAP_PAD = -20).
     fn make_padded_seq_array(data: &[Vec<i16>]) -> Array2<i16> {
         if data.is_empty() {
             return Array2::<i16>::zeros((0, 0));
         }
         let nrows = data.len();
         let ncols = data.iter().map(|r| r.len()).max().unwrap();
-        let mut arr = Array2::<i16>::from_elem((nrows, ncols), -10i16);
+        let mut arr = Array2::<i16>::from_elem((nrows, ncols), HAP_PAD);
         for (i, row) in data.iter().enumerate() {
             for (j, &val) in row.iter().enumerate() {
                 arr[[i, j]] = val;
@@ -2577,16 +2610,17 @@ mod tests {
         assert_eq!(result.to_vec(), vec![1i16, -4, 1, 1]);
     }
 
-    /// Test single read with -10 padding at the tail.
+    /// Test single read with HAP_PAD (-20) padding at the tail.
     #[test]
     fn test_single_read_with_padding() {
-        // 4 valid bases + 2 padding values (-10)
-        let seq_arrays = make_seq_array(&[&[1i16, -4, 1, 1, -10, -10]]);
+        // 4 valid bases + 2 hap-padding values (HAP_PAD = -20). The qual padding
+        // stays -10.0 (it does not collide; truncated by the seq-derived count).
+        let seq_arrays = make_seq_array(&[&[1i16, -4, 1, 1, -20, -20]]);
         let qual_arrays = make_qual_array(&[&[0.01f32, 0.05, 0.01, 0.01, -10.0, -10.0]]);
         let read_spans = make_spans_array(&[[100i32, 104]]);
 
         let result = assemble_consensus(&seq_arrays, &qual_arrays, &read_spans);
-        // Only 4 valid values; padding is stripped
+        // Only 4 valid values; padding (-20) is stripped
         assert_eq!(result.to_vec(), vec![1i16, -4, 1, 1]);
     }
 
@@ -2600,11 +2634,11 @@ mod tests {
         //
         // Read 1: positions 101..104, 3 valid bases
         //   pos 101: seq=-4, qual=0.05   <-- better quality, wins at pos 101
-        //   pos 102: seq=-6, qual=0.15   <-- worse quality than Read 0
+        //   pos 102: seq=-10, qual=0.15  <-- worse quality than Read 0
         //   pos 103: seq=1,  qual=0.05
         let seq_arrays = make_seq_array(&[
             &[1i16, -4, 1],
-            &[-4i16, -6, 1],
+            &[-4i16, -10, 1],
         ]);
         let qual_arrays = make_qual_array(&[
             &[0.10f32, 0.10, 0.10],
@@ -2660,11 +2694,11 @@ mod tests {
     #[test]
     fn test_three_reads_staggered() {
         // Read 0: pos 10..13, seq=[1, -4, 1], qual=[0.05, 0.15, 0.05]
-        // Read 1: pos 11..14, seq=[1,  1, -6], qual=[0.10, 0.01, 0.10]
+        // Read 1: pos 11..14, seq=[1,  1, -10], qual=[0.10, 0.01, 0.10]
         // Read 2: pos 12..15, seq=[-4, 1,  1], qual=[0.02, 0.02, 0.02]
         let seq_arrays = make_seq_array(&[
             &[1i16, -4, 1],
-            &[1i16, 1, -6],
+            &[1i16, 1, -10],
             &[-4i16, 1, 1],
         ]);
         let qual_arrays = make_qual_array(&[
@@ -2686,8 +2720,8 @@ mod tests {
         //   → R1: 0.01 <= 0.05 → update → consensus(1, 0.01)
         //   → R2: 0.02 <= 0.01 → NO (0.02 > 0.01)
         //   → final: seq=1
-        // pos 13 (rel 3): Read 1 (seq=-6, q=0.10) then R2 (seq=1, q=0.02)
-        //   → R1: 0.10 <= 0.2 → update → consensus(-6, 0.10)
+        // pos 13 (rel 3): Read 1 (seq=-10, q=0.10) then R2 (seq=1, q=0.02)
+        //   → R1: 0.10 <= 0.2 → update → consensus(-10, 0.10)
         //   → R2: 0.02 <= 0.10 → update → consensus(1, 0.02)
         //   → final: seq=1
         // pos 14 (rel 4): Read 2 only → seq=1, qual=0.02
@@ -2717,30 +2751,30 @@ mod tests {
         assert_eq!(result.to_vec(), vec![1i16]);
     }
 
-    /// Regression test: padding value -9 should also be filtered (< -8).
+    /// Golden collision fix: the deletion signal (-10) is real data; only HAP_PAD
+    /// (-20) is stripped. The old `>= -8` filter would have wrongly dropped -10.
     #[test]
-    fn test_padding_minus_nine_filtered() {
-        // Valid data [1, -4], then padding [-9, -10]
-        let seq_arrays = make_seq_array(&[&[1i16, -4, -9, -10]]);
-        let qual_arrays = make_qual_array(&[&[0.05f32, 0.05, -9.0, -10.0]]);
-        let read_spans = make_spans_array(&[[100i32, 102]]);
+    fn test_hap_pad_stripped_deletion_kept() {
+        // Valid data [1, -4, -10(deletion)], then padding [-20 = HAP_PAD]
+        let seq_arrays = make_seq_array(&[&[1i16, -4, -10, -20]]);
+        let qual_arrays = make_qual_array(&[&[0.05f32, 0.05, 0.05, -10.0]]);
+        let read_spans = make_spans_array(&[[100i32, 103]]);
 
         let result = assemble_consensus(&seq_arrays, &qual_arrays, &read_spans);
-        // non_na_values: count(v >= -8) = 2 (only 1 and -4)
-        // Takes first 2 elements → [1, -4]
-        assert_eq!(result.to_vec(), vec![1i16, -4]);
+        // non_na_values: count(v != HAP_PAD) = 3 (1, -4, -10) → takes first 3
+        assert_eq!(result.to_vec(), vec![1i16, -4, -10]);
     }
 
-    /// Valid haplotype value -8 is treated as data (>= -8 is True).
+    /// Golden: the only NA sentinel is HAP_PAD (-20); a leading deletion (-10) is data.
     #[test]
-    fn test_value_minus_eight_is_valid() {
-        let seq_arrays = make_seq_array(&[&[-8i16, 1, -10]]);
+    fn test_only_hap_pad_is_padding() {
+        let seq_arrays = make_seq_array(&[&[-10i16, 1, -20]]);
         let qual_arrays = make_qual_array(&[&[0.05f32, 0.05, -10.0]]);
         let read_spans = make_spans_array(&[[100i32, 102]]);
 
         let result = assemble_consensus(&seq_arrays, &qual_arrays, &read_spans);
-        // -8 >= -8 is True, so non_na_values = 2. Takes first 2: [-8, 1]
-        assert_eq!(result.to_vec(), vec![-8i16, 1]);
+        // -10 != HAP_PAD → real, so non_na_values = 2. Takes first 2: [-10, 1]
+        assert_eq!(result.to_vec(), vec![-10i16, 1]);
     }
 
     // ── Integration: extract vectors → assemble consensus ──────────────────
@@ -2759,10 +2793,10 @@ mod tests {
         let r1 = make_record(cigar1, b"ACGTG", &[10; 5], 100);
         let r2 = make_record(cigar2, b"GCACC", &[20; 5], 102);
 
-        let hap1 = extract_hap_vector(&r1);
-        let err1 = extract_error_vector(&r1);
-        let hap2 = extract_hap_vector(&r2);
-        let err2 = extract_error_vector(&r2);
+        let hap1 = extract_hap_vector(&r1).unwrap();
+        let err1 = extract_error_vector(&r1).unwrap();
+        let hap2 = extract_hap_vector(&r2).unwrap();
+        let err2 = extract_error_vector(&r2).unwrap();
 
         assert_eq!(hap1.to_vec(), vec![1, 1, 1, 1, 1]);
         assert_eq!(hap2.to_vec(), vec![1, 1, -4, 1, 1]);
@@ -2802,7 +2836,7 @@ mod tests {
         let mut err_cache: HashMap<String, Array1<f32>> = HashMap::new();
 
         let (spans, haps, errs) =
-            record_hap_err_vectors_per_region(&records, &mut hap_cache, &mut err_cache);
+            record_hap_err_vectors_per_region(&records, &mut hap_cache, &mut err_cache).unwrap();
 
         // spans is Array2<i32> (2 × 2)
         assert_eq!(spans.nrows(), 2);
@@ -2837,11 +2871,11 @@ mod tests {
         // First call populates cache
         let records: Vec<&Record> = vec![&r1];
         let (_, haps1, _) =
-            record_hap_err_vectors_per_region(&records, &mut hap_cache, &mut err_cache);
+            record_hap_err_vectors_per_region(&records, &mut hap_cache, &mut err_cache).unwrap();
 
         // Second call with same record should use cached values
         let (_, haps2, _) =
-            record_hap_err_vectors_per_region(&records, &mut hap_cache, &mut err_cache);
+            record_hap_err_vectors_per_region(&records, &mut hap_cache, &mut err_cache).unwrap();
 
         assert_eq!(haps1, haps2);
         // Cache still has exactly 1 entry (not duplicated)
@@ -2929,8 +2963,8 @@ mod tests {
 
     #[test]
     fn test_count_window_var_density_with_indels() {
-        // Sequence with deletion block
-        let seq = array![1, 1, -6, -6, 1, 1];
+        // Sequence with deletion block (golden deletion = -10)
+        let seq = array![1, 1, -10, -10, 1, 1];
         let density = count_window_var_density(&seq, 1);
 
         // Window size = 3
@@ -2973,9 +3007,11 @@ mod tests {
     #[test]
     fn test_count_window_var_density_matches_reference() {
         init_log();
-        // Mix of matches, SNVs (-4), deletions (-6), and insertion markers (>1),
-        // including adjacent mixed indel types so runs straddle window edges.
-        let values = [1i16, 1, 1, -4, -6, -6, 8, 1, -4, 12, -6, 1, 1, -4, -4, 8];
+        // Mix of matches (1), SNVs (-4), deletions (-10), pure insertions (11/21),
+        // and compound mismatch+ins (6/16 — counted as BOTH an SNV and an indel),
+        // including adjacent mixed indel types so runs straddle window edges. Golden
+        // optimized vs. reference must agree even on the double-counted compounds.
+        let values = [1i16, 1, 1, -4, -10, -10, 21, 1, -4, 11, -10, 1, 6, -4, -4, 16];
         let mut seed = 0x1234_5678u64;
         for &len in &[0usize, 1, 2, 5, 13, 50, 137, 300] {
             let arr: Array1<i16> = (0..len)
@@ -3002,7 +3038,7 @@ mod tests {
     fn bench_count_window_var_density() {
         use std::time::Instant;
         let len = 2000usize;
-        let values = [1i16, 1, 1, 1, 1, -4, -6, 8, 1, 1];
+        let values = [1i16, 1, 1, 1, 1, -4, -10, 21, 1, 1];
         let mut seed = 0x00AB_CDEFu64;
         let arr: Array1<i16> = (0..len)
             .map(|_| values[(xorshift(&mut seed) as usize) % values.len()])
@@ -3074,7 +3110,7 @@ mod tests {
             seq[i] = -4; // SNVs
         }
         for i in 95..100 {
-            seq[i] = -6; // Deletion block
+            seq[i] = -10; // Deletion block (golden HAP_DEL)
         }
         for i in 100..105 {
             seq[i] = -4; // More SNVs
@@ -3351,7 +3387,7 @@ mod tests {
     fn test_ref_genome_similarity_all_reference() {
         init_log();
         // Genomic hap vector is all matches (1s) → short-circuit to (0,0,0)
-        let query = array![1, -4, 1, -6, -6, 1];
+        let query = array![1, -4, 1, -10, -10, 1];
         let genomic = array![1, 1, 1, 1, 1, 1];
         let result = ref_genome_similarity(&query, &genomic);
         debug!("ref_genome_similarity(query={:?}, genomic={:?}) = {:?}", query.as_slice().unwrap(), genomic.as_slice().unwrap(), result);
@@ -3363,8 +3399,8 @@ mod tests {
         init_log();
         // query: 2 SNVs + 1 del block = 3 variants
         // genomic: 1 SNV + 1 del block → alt_snv=1, alt_indel=1
-        let query = array![1, -4, -4, 1, -6, -6, 1];
-        let genomic = array![1, -4, 1, 1, -6, -6, 1];
+        let query = array![1, -4, -4, 1, -10, -10, 1];
+        let genomic = array![1, -4, 1, 1, -10, -10, 1];
         let (var_count, alt_snv, alt_indel) = ref_genome_similarity(&query, &genomic);
         debug!("ref_genome_similarity(query={:?}, genomic={:?}) = (var_count={}, alt_snv={}, alt_indel={})",
                query.as_slice().unwrap(), genomic.as_slice().unwrap(), var_count, alt_snv, alt_indel);
@@ -3376,9 +3412,9 @@ mod tests {
     #[test]
     fn test_ref_genome_similarity_only_insertions() {
         init_log();
-        // query has insertion markers; genomic has insertion markers
-        let query = array![1, 8, 1, 1];  // 1 insertion block
-        let genomic = array![1, 1, 12, 1]; // 1 insertion block
+        // query has insertion markers; genomic has insertion markers (golden: base+10*L)
+        let query = array![1, 21, 1, 1];  // 1 insertion block (match + 2bp ins)
+        let genomic = array![1, 1, 31, 1]; // 1 insertion block (match + 3bp ins)
         let (var_count, alt_snv, alt_indel) = ref_genome_similarity(&query, &genomic);
         debug!("ref_genome_similarity(query={:?}, genomic={:?}) = (var_count={}, alt_snv={}, alt_indel={})",
                query.as_slice().unwrap(), genomic.as_slice().unwrap(), var_count, alt_snv, alt_indel);
@@ -3419,9 +3455,10 @@ mod tests {
     #[test]
     fn test_shared_variant_positions_shared_insertions() {
         init_log();
-        // Insertion markers: same value means same insertion length
-        let vec1 = array![1, 8, 1, 12, 1];
-        let vec2 = array![1, 8, 1, 8, 1]; // matches at idx 1 (both 8), not at idx 3 (8 vs 12)
+        // Golden: shared insertion = same inserted LENGTH (not raw value).
+        // 21 = match+2bp, 31 = match+3bp. idx 1 both length 2 (shared); idx 3 length 3 vs 2 (not).
+        let vec1 = array![1, 21, 1, 31, 1];
+        let vec2 = array![1, 21, 1, 21, 1];
         let (snvs, ins, dels) = numba_shared_variant_positions(&vec1, &vec2, 0);
         debug!("shared_variant_positions(vec1={:?}, vec2={:?}, overlap_start=0) = (snvs={:?}, ins={:?}, dels={:?})",
                vec1.as_slice().unwrap(), vec2.as_slice().unwrap(), snvs, ins, dels);
@@ -3433,9 +3470,9 @@ mod tests {
     #[test]
     fn test_shared_variant_positions_shared_deletions() {
         init_log();
-        // Two identical deletion spans: indices 2..=4
-        let vec1 = array![1, 1, -6, -6, -6, 1, 1];
-        let vec2 = array![1, 1, -6, -6, -6, 1, 1];
+        // Two identical deletion spans (golden -10): indices 2..=4
+        let vec1 = array![1, 1, -10, -10, -10, 1, 1];
+        let vec2 = array![1, 1, -10, -10, -10, 1, 1];
         let (snvs, ins, dels) = numba_shared_variant_positions(&vec1, &vec2, 50);
         debug!("shared_variant_positions(vec1={:?}, vec2={:?}, overlap_start=50) = (snvs={:?}, ins={:?}, dels={:?})",
                vec1.as_slice().unwrap(), vec2.as_slice().unwrap(), snvs, ins, dels);
@@ -3448,8 +3485,8 @@ mod tests {
     fn test_shared_variant_positions_different_deletion_spans() {
         init_log();
         // vec1 has del at 1..=2, vec2 has del at 1..=3 → NOT shared (different span)
-        let vec1 = array![1, -6, -6, 1, 1];
-        let vec2 = array![1, -6, -6, -6, 1];
+        let vec1 = array![1, -10, -10, 1, 1];
+        let vec2 = array![1, -10, -10, -10, 1];
         let (_snvs, _ins, dels) = numba_shared_variant_positions(&vec1, &vec2, 0);
         debug!("shared_variant_positions(vec1={:?}, vec2={:?}, overlap_start=0) = dels={:?} (expect empty, different spans)",
                vec1.as_slice().unwrap(), vec2.as_slice().unwrap(), dels);
@@ -3459,15 +3496,29 @@ mod tests {
     #[test]
     fn test_shared_variant_positions_mixed() {
         init_log();
-        // SNV at idx 0, insertion at idx 2 (both value 8), deletion at idx 4..=5
-        let vec1 = array![-4, 1, 8, 1, -6, -6, 1];
-        let vec2 = array![-4, 1, 8, 1, -6, -6, 1];
+        // SNV at idx 0, insertion at idx 2 (both 21 = match+2bp), deletion at idx 4..=5 (-10)
+        let vec1 = array![-4, 1, 21, 1, -10, -10, 1];
+        let vec2 = array![-4, 1, 21, 1, -10, -10, 1];
         let (snvs, ins, dels) = numba_shared_variant_positions(&vec1, &vec2, 10);
         debug!("shared_variant_positions(vec1={:?}, vec2={:?}, overlap_start=10) = (snvs={:?}, ins={:?}, dels={:?})",
                vec1.as_slice().unwrap(), vec2.as_slice().unwrap(), snvs, ins, dels);
         assert_eq!(snvs, vec![10]);      // abs 10+0
         assert_eq!(ins, vec![12]);       // abs 10+2
         assert_eq!(dels, vec![14, 15]);  // abs 10+4, 10+5
+    }
+
+    #[test]
+    fn test_shared_variant_positions_compound() {
+        init_log();
+        // Golden compound base (mismatch + 1bp ins = 6) shared at idx 1 counts as
+        // BOTH a shared SNV and a shared insertion (length 1) — the recovered signal.
+        let vec1 = array![1, 6, 1];
+        let vec2 = array![1, 6, 1];
+        let (snvs, ins, dels) = numba_shared_variant_positions(&vec1, &vec2, 100);
+        debug!("shared_variant_positions(compound) = (snvs={snvs:?}, ins={ins:?}, dels={dels:?})");
+        assert_eq!(snvs, vec![101]);
+        assert_eq!(ins, vec![101]);
+        assert!(dels.is_empty());
     }
 
     // --- map_positions_to_bases ---
