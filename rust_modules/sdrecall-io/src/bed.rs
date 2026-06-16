@@ -331,6 +331,63 @@ pub fn complement(
     out
 }
 
+/// `a` minus `b` — the portions of each `a` interval NOT covered by any `b`
+/// interval (`bedtools subtract`). When `stranded`, only same-strand `b`
+/// intervals cut an `a` interval (`bedtools subtract -s`). Output pieces keep
+/// `a`'s strand. Each `a` interval may yield 0+ output pieces (fully covered →
+/// none). The result is NOT merged (callers sort+merge if needed).
+pub fn subtract(
+    a: &[GenomicInterval],
+    b: &[GenomicInterval],
+    stranded: bool,
+) -> Vec<GenomicInterval> {
+    let mut out = Vec::new();
+    for ai in a {
+        // The same-chrom (and same-strand, if stranded) `b` portions overlapping
+        // `ai`, clamped to `ai`.
+        let mut cuts: Vec<(i64, i64)> = b
+            .iter()
+            .filter(|bi| {
+                bi.chrom == ai.chrom
+                    && (!stranded || bi.strand == ai.strand)
+                    && bi.start < ai.end
+                    && ai.start < bi.end
+            })
+            .map(|bi| (bi.start.max(ai.start), bi.end.min(ai.end)))
+            .collect();
+        if cuts.is_empty() {
+            out.push(ai.clone());
+            continue;
+        }
+        cuts.sort_by_key(|&(s, _)| s);
+        // Sweep left→right, emitting the gaps between (merged) cuts.
+        let mut cursor = ai.start;
+        for (cs, ce) in cuts {
+            if cs > cursor {
+                out.push(GenomicInterval::with_strand(
+                    ai.chrom.clone(),
+                    cursor,
+                    cs,
+                    ai.strand,
+                ));
+            }
+            cursor = cursor.max(ce);
+            if cursor >= ai.end {
+                break;
+            }
+        }
+        if cursor < ai.end {
+            out.push(GenomicInterval::with_strand(
+                ai.chrom.clone(),
+                cursor,
+                ai.end,
+                ai.strand,
+            ));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -553,6 +610,58 @@ mod tests {
         let ivs = vec![iv("chr1", 0, 100)];
         let cs = sizes(&[("chr1", 100)]);
         assert!(complement(&ivs, &cs).is_empty());
+    }
+
+    // ── subtract ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn subtract_splits_around_overlap() {
+        // a=[10,100) minus b=[40,60) → [10,40) + [60,100).
+        let r = subtract(&[iv("chr1", 10, 100)], &[iv("chr1", 40, 60)], false);
+        assert_eq!(r, vec![iv("chr1", 10, 40), iv("chr1", 60, 100)]);
+    }
+
+    #[test]
+    fn subtract_fully_covered_yields_nothing() {
+        let r = subtract(&[iv("chr1", 10, 50)], &[iv("chr1", 0, 100)], false);
+        assert!(r.is_empty());
+    }
+
+    #[test]
+    fn subtract_no_overlap_keeps_a() {
+        let r = subtract(&[iv("chr1", 10, 20)], &[iv("chr1", 30, 40)], false);
+        assert_eq!(r, vec![iv("chr1", 10, 20)]);
+        // different chrom is also a no-op.
+        let r2 = subtract(&[iv("chr1", 10, 20)], &[iv("chr2", 10, 20)], false);
+        assert_eq!(r2, vec![iv("chr1", 10, 20)]);
+    }
+
+    #[test]
+    fn subtract_stranded_only_cuts_same_strand() {
+        let a = vec![sv("chr1", 10, 100, Strand::Forward)];
+        // opposite strand → no cut.
+        let r = subtract(&a, &[sv("chr1", 40, 60, Strand::Reverse)], true);
+        assert_eq!(r, vec![sv("chr1", 10, 100, Strand::Forward)]);
+        // same strand → cut.
+        let r2 = subtract(&a, &[sv("chr1", 40, 60, Strand::Forward)], true);
+        assert_eq!(
+            r2,
+            vec![
+                sv("chr1", 10, 40, Strand::Forward),
+                sv("chr1", 60, 100, Strand::Forward)
+            ]
+        );
+    }
+
+    #[test]
+    fn subtract_merges_overlapping_cuts() {
+        // Two overlapping b cuts [30,50)+[45,70) remove [30,70) → [10,30)+[70,100).
+        let r = subtract(
+            &[iv("chr1", 10, 100)],
+            &[iv("chr1", 30, 50), iv("chr1", 45, 70)],
+            false,
+        );
+        assert_eq!(r, vec![iv("chr1", 10, 30), iv("chr1", 70, 100)]);
     }
 
     // ── merge_bed_files ──────────────────────────────────────────────────────

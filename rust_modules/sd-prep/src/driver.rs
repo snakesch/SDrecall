@@ -598,7 +598,7 @@ fn establish_rg(
     let qnode_keys: Vec<NodeKey> = group.subclusters.iter().map(|s| s.fc.clone()).collect();
     let query_ivs = write_query_bed(&query_bed, &qnode_keys)?;
 
-    // counterpart BED: each cnode's fix_coord window (build_beds l.159-166).
+    // counterpart intervals: each cnode's fix_coord window (build_beds l.159-166).
     let mut counter_ivs: Vec<GenomicInterval> = Vec::new();
     for sc in &group.subclusters {
         for c in &sc.counterparts {
@@ -608,18 +608,26 @@ fn establish_rg(
             }
         }
     }
-    let counter_merged = sdrecall_io::sort_merge_bed(&counter_ivs, true);
-    write_bed6(&counterparts_bed, &counter_merged)?;
+    // Counterparts BED: subtract the query regions (strand-aware) before sort+merge
+    // (build_beds l.169-170: `subtract(Query, s=True)` → sortBed_and_merge). Without
+    // this, a counterpart overlapping a query region would be extracted a second
+    // time as an NFC read during realignment (duplicate reads / inflated depth).
+    let counter_minus_query = sdrecall_io::subtract(&counter_ivs, &query_ivs, true);
+    let counter_bed = sdrecall_io::sort_merge_bed(&counter_minus_query, true);
+    write_bed6(&counterparts_bed, &counter_bed)?;
 
     // all-regions BED: the 7-column FC/NFC-tagged, per-sub-cluster, projected
-    // format that region-prep consumes (build_beds l.174-189). NOT merged — the
-    // tags + col4/col5 projection must survive.
+    // format that region-prep consumes (build_beds l.174-189). NOT merged, and the
+    // counterparts are the RAW (un-subtracted) ones — the tags + col4/col5 must
+    // survive.
     write_all_region_bed(&all_regions_bed, label, &group.subclusters)?;
 
-    // Merged all-region intervals (query ∪ counterpart) for the intrinsic
-    // alignment below, which needs the regions but not the FC/NFC tags.
+    // Merged all-region intervals for the intrinsic alignment = query ∪ RAW
+    // (un-subtracted) counterparts — Python's getIntrinsicBam reads the
+    // un-subtracted All_region_bed; the intrinsic step needs the regions, not tags.
+    let counter_merged_raw = sdrecall_io::sort_merge_bed(&counter_ivs, true);
     let mut all_ivs = query_ivs.clone();
-    all_ivs.extend(counter_merged.iter().cloned());
+    all_ivs.extend(counter_merged_raw.iter().cloned());
     let all_merged = sdrecall_io::sort_merge_bed(&all_ivs, false);
 
     // masked genome (md5-gated FASTA).
