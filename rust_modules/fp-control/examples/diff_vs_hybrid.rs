@@ -81,8 +81,18 @@ fn graph_lowqual(meta: &Meta, reference: &str) -> HashSet<String> {
         meta.basequal_median_cutoff,
     )
     .expect("allele depth");
+    // Intrinsic AD map (Python `intrinsic_ad_dict`) — built the same way the fuse
+    // does in `build_and_phase_with_intrinsic`, so this reproduces the production
+    // graph (PSV-aware edge weights) the hybrid was compared against.
+    let intrinsic_adm = build_allele_depth_map(
+        &meta.intrinsic_bam,
+        reference,
+        meta.recall_mq_cutoff,
+        meta.basequal_median_cutoff,
+    )
+    .expect("intrinsic allele depth");
     let cfg = HaplotypeConfig::new(meta.mean_read_length);
-    let g = build_phasing_graph(&rpm, &adm, &header, &cfg).expect("graph build");
+    let g = build_phasing_graph(&rpm, &adm, &intrinsic_adm, &header, &cfg).expect("graph build");
     g.lowqual_qnames.iter().cloned().collect()
 }
 

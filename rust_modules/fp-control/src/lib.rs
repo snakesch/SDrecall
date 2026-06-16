@@ -41,7 +41,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use phasing::{build_and_phase, PhaserParams};
+use phasing::{build_and_phase_with_intrinsic, PhaserParams};
 use haplotype_inspection::identify_misaligned_haps::inspect_haplotypes;
 use sdrecall_utils::{Result, SdError};
 
@@ -168,7 +168,14 @@ pub fn run_fp_control(
 
     // Early-out #1: no weight matrix (no ALT alleles) → build_and_phase returns
     // None → skip island (matches the Python `build_phasing_graph_rust` None gate).
-    let phased = match build_and_phase(bam, &params.reference_genome, &phaser_params)? {
+    // Production parity (#4): thread the intrinsic BAM so PSV detection drives the
+    // edge-weight formula exactly as the Python pipeline's `intrinsic_ad_dict`.
+    let phased = match build_and_phase_with_intrinsic(
+        bam,
+        &params.reference_genome,
+        Some(intrinsic_bam),
+        &phaser_params,
+    )? {
         Some(p) => p,
         None => {
             log::warn!("[fp_control] no ALT alleles / empty weight matrix for {bam}; skipping");
