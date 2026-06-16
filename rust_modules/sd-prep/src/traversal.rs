@@ -586,12 +586,6 @@ pub fn extract_sd_paralog_pairs(
     }
     let sorted_qnode_vs = sort_query_nodes(&qnode_vs, g, &comp_labels);
 
-    // Open the reference FASTA once (faidx random access).
-    let mut reader = bio::io::fasta::IndexedReader::from_file(&ref_fa).map_err(|e| SdError::Io {
-        path: ref_fa.display().to_string(),
-        source: std::io::Error::other(e.to_string()),
-    })?;
-
     // Build the connected-qnodes graph in Python insertion order: all qnodes first.
     let mut connected: crate::grouping::ConnectedQnodes<NodeKey> =
         crate::grouping::ConnectedQnodes::new();
@@ -599,25 +593,48 @@ pub fn extract_sd_paralog_pairs(
         connected.node(g.g[v].clone());
     }
 
+    // Per-qnode traversal, PARALLEL across cores — this is the Phase-1 hotspot
+    // (dijkstra walk + minimap2 similarity per candidate). Each rayon worker opens
+    // its OWN faidx reader (the reader is stateful and not shareable) via
+    // `map_init`. Results are collected in qnode order (rayon's indexed `collect`
+    // preserves it), then assembled SEQUENTIALLY below so `sd_paralog_pairs` and
+    // the `connected` graph come out byte-identical to the serial walk — the
+    // coloring-order parity contract. `g`/`comp_labels`/`qnode_set` are shared
+    // read-only; each `traverse_qnode` is deterministic and side-effect-free, so
+    // the parallel result equals the serial one.
+    use rayon::prelude::*;
+    let per_qnode: Vec<Result<(Vec<HomoseqRegion>, Vec<NodeKey>)>> = sorted_qnode_vs
+        .par_iter()
+        .map_init(
+            || bio::io::fasta::IndexedReader::from_file(&ref_fa),
+            |reader, &qv| {
+                let reader = match reader {
+                    Ok(r) => r,
+                    Err(e) => {
+                        return Err(SdError::Io {
+                            path: ref_fa.display().to_string(),
+                            source: std::io::Error::other(e.to_string()),
+                        })
+                    }
+                };
+                let qkey = g.g[qv].clone();
+                traverse_qnode(&qkey, qv, g, &comp_labels, &qnode_set, reader, &frag)
+            },
+        )
+        .collect();
+
     let mut sd_paralog_pairs: FxHashMap<NodeKey, Vec<HomoseqRegion>> = FxHashMap::default();
 
-    for &qv in &sorted_qnode_vs {
+    // Sequential, order-preserving assembly (identical to the serial walk).
+    for (&qv, res) in sorted_qnode_vs.iter().zip(per_qnode) {
+        let (counterparts, counter_qnodes) = res?;
         let qkey = g.g[qv].clone();
-        let (counterparts, counter_qnodes) = traverse_qnode(
-            &qkey,
-            qv,
-            g,
-            &comp_labels,
-            &qnode_set,
-            &mut reader,
-            &frag,
-        )?;
         if !counterparts.is_empty() {
             sd_paralog_pairs.insert(qkey.clone(), counterparts);
         }
         // Wire qnode↔counter-qnode edges (insertion order: cnodes appended in the
         // order produced above).
-        let qi = connected.node(qkey.clone());
+        let qi = connected.node(qkey);
         for ck in &counter_qnodes {
             let ci = connected.node(ck.clone());
             connected.edge(qi, ci);
