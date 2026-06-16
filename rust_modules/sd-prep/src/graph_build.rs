@@ -7,20 +7,28 @@
 //! ## What this builds (matching the Python control flow)
 //!
 //! 1. An **SD-edge** set, one undirected edge per filtered SD pair, weight =
-//!    `mismatch_rate`, `kind = SegmentalDuplication` (Python l.102-106).
+//!    `mismatch_rate`, `is_sd = true` (Python l.102-106).
 //! 2. A per-chromosome **directed PO graph**: for every pair of SD intervals that
 //!    physically overlap on the same chrom, a PO edge **large → small**, weight
-//!    `1/max(span/size_a, span/size_b)`, `overlap = true` (Python l.52-76, via an
+//!    `1/max(span/size_a, span/size_b)`, `is_overlap = true` (Python l.52-76, via an
 //!    `IntervalTree`; here a `rust_lapper::Lapper`).
 //! 3. The per-chr PO graphs are merged (union of nodes + edges) and the SD edges
-//!    are overlaid: if a PO edge already connects the two SD nodes its `kind` is
-//!    upgraded to `SegmentalDuplication`, else a fresh SD edge is added (l.127-135).
+//!    are overlaid onto them: an SD pair that already has a PO edge in the SAME
+//!    direction KEEPS that edge's PO weight + `is_overlap` flag and is *also* marked
+//!    `is_sd` (a "combined" edge); otherwise a fresh SD edge is added — even when
+//!    only the *reverse* PO edge exists, in which case both edges coexist (Python
+//!    l.127-135; see [`build_multiplex_graph`] for the directional overlay).
 //!
 //! ## Representation
 //!
 //! `petgraph::DiGraph<NodeKey, EdgeAttr>` with an `FxHashMap<NodeKey, NodeIndex>`
 //! intern map (the Python tuple-node identity). The graph **owns** fresh node
 //! copies; `build_multiplex_graph` borrows the SD-pair table read-only.
+//!
+//! An edge carries its physical-overlap and SD natures **independently**
+//! ([`EdgeAttr::is_overlap`] / [`EdgeAttr::is_sd`]) so a single edge can be both —
+//! matching the Python multiplex graph where the overlay leaves an upgraded PO
+//! edge `overlap="True"` AND `type="segmental_duplication"` with the PO weight.
 //!
 //! Directedness matches Python: PO edges are directed large→small; SD edges are
 //! logically undirected but stored on the same DiGraph (the traversal core treats
@@ -61,31 +69,92 @@ impl NodeKey {
     }
 }
 
-/// Edge kind: an SD homology edge or a physical-overlap edge (Python `type ==
-/// "segmental_duplication"` vs `overlap == "True"`).
+/// Route-step kind — which branch the route walk took when crossing an edge
+/// (`inspect_cnode_along_route`): an SD homology step or a physical-overlap step.
+///
+/// This is **no longer an `EdgeAttr` field**. Python dispatches the route walk by
+/// `if type == "segmental_duplication" … elif overlap == "True" …` (so SD wins on a
+/// combined edge) and records the branch taken on each `RouteStep`, so the
+/// back-projection (`qnode_relative_region`) can replay it. An edge's *nature* is
+/// the independent [`EdgeAttr::is_overlap`] / [`EdgeAttr::is_sd`] flags; this enum
+/// only records the route-walk branch a `RouteStep` was reached by.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum EdgeKind {
     SegmentalDuplication,
     Overlap,
 }
 
-/// Edge attributes. `weight` is the SD `mismatch_rate` for SD edges, or `1/overlap_frac`
-/// for PO edges (Python stores `weight=1/weight` where `weight=max(span/size)`).
-/// `nonoverlap_smaller` is only meaningful for PO edges (Python
-/// `nonoverlapping_smaller_interval`); `0` for SD edges.
+/// Edge attributes — an edge carries its physical-overlap (PO) and segmental-
+/// duplication (SD) natures **independently**, matching the Python multiplex graph
+/// where a single edge can be *both* a PO edge (`overlap == "True"`) **and** an SD
+/// edge (`type == "segmental_duplication"`).
+///
+/// ## Why two flags + two weights (not one `kind` enum)
+///
+/// The Python SD overlay (`create_multiplex_graph` l.127-135) overlays SD edges
+/// onto the merged PO graph: when an SD pair already has a PO edge it sets ONLY
+/// `type = "segmental_duplication"` and **keeps the PO edge's `weight`
+/// (`1/overlap_frac`) and `overlap="True"`**. So a "combined" edge ends up
+/// `overlap="True"` + `type="segmental_duplication"` carrying the **PO** weight. A
+/// single `kind` enum cannot represent that — it conflates the two natures and
+/// loses either the overlap flag or the PO weight (the bug this struct fixes).
+///
+/// - [`is_overlap`](Self::is_overlap): Python `overlap == "True"`.
+/// - [`is_sd`](Self::is_sd): Python `type == "segmental_duplication"`.
+/// - [`po_weight`](Self::po_weight): the PO weight `1/overlap_frac` (Python stores
+///   `weight = 1/max(span/size)`); `NaN` when `!is_overlap`.
+/// - [`sd_weight`](Self::sd_weight): the SD `mismatch_rate` (kept available even on
+///   a combined edge, where Python discards it); `NaN` when `!is_sd`.
+/// - [`weight()`](Self::weight) reproduces Python's `ep["weight"]`: the PO weight
+///   wins on a combined edge (because the overlay keeps it), else the SD weight.
+/// - `nonoverlap_smaller`: Python `nonoverlapping_smaller_interval` (PO edges only;
+///   `0` for a pure SD edge).
 #[derive(Clone, Copy, Debug)]
 pub struct EdgeAttr {
-    pub kind: EdgeKind,
-    pub weight: f64,
+    pub is_overlap: bool,
+    pub is_sd: bool,
+    pub po_weight: f64,
+    pub sd_weight: f64,
     pub nonoverlap_smaller: i64,
 }
 
 impl EdgeAttr {
-    pub fn is_overlap(&self) -> bool {
-        matches!(self.kind, EdgeKind::Overlap)
+    /// A fresh **PO** (physical-overlap) edge: `overlap="True"`, weight
+    /// `1/overlap_frac`, not (yet) SD.
+    pub fn po(po_weight: f64, nonoverlap_smaller: i64) -> Self {
+        Self {
+            is_overlap: true,
+            is_sd: false,
+            po_weight,
+            sd_weight: f64::NAN,
+            nonoverlap_smaller,
+        }
     }
-    pub fn is_sd(&self) -> bool {
-        matches!(self.kind, EdgeKind::SegmentalDuplication)
+
+    /// A fresh **SD** (segmental-duplication) edge: `type="segmental_duplication"`,
+    /// weight = `mismatch_rate`, not a PO edge.
+    pub fn sd(mismatch_rate: f64) -> Self {
+        Self {
+            is_overlap: false,
+            is_sd: true,
+            po_weight: f64::NAN,
+            sd_weight: mismatch_rate,
+            nonoverlap_smaller: 0,
+        }
+    }
+
+    /// Python `ep["weight"]` — the single weight every weight-consuming site uses
+    /// (dijkstra cost, the SD-product route filter, the PO-edge prune). The **PO
+    /// weight wins on a combined edge** (Python's overlay keeps the PO weight when
+    /// it upgrades a PO edge to SD); otherwise the SD weight. Never reads a `NaN`
+    /// slot: a PO/combined edge (`is_overlap`) reads `po_weight`, a pure-SD edge
+    /// reads `sd_weight`.
+    pub fn weight(&self) -> f64 {
+        if self.is_overlap {
+            self.po_weight
+        } else {
+            self.sd_weight
+        }
     }
 }
 
@@ -187,42 +256,73 @@ pub fn build_multiplex_graph(sd_pairs: &[SdPairRow], _threads: usize) -> SdGraph
         compose_po_per_chr(chrom, sd_pairs, &mut sd, &mut po_edge_seen);
     }
 
-    // ---- overlay SD edges (dedup by unordered pair key) ----
-    // Python uses an undirected SD graph G then overlays onto the merged PO
-    // DiGraph. We dedup SD pairs by the sorted (min,max) tuple key so the same SD
-    // pair in either order produces one SD edge (matches the frozenset dedup the
-    // driver does at l.175-176 before graph build — but we dedup here defensively
-    // too, since build_multiplex_graph may receive an undeduped table).
+    // ---- overlay SD edges onto the merged PO graph (Python l.127-135) ----
+    //
+    //     for u, v, d in G.edges(data=True):          # G = undirected SD graph
+    //         if not PO.has_edge(u, v): PO.add_edge(u, v, **d)               # fresh SD
+    //         else:                     PO[u][v]["type"]="segmental_duplication"  # upgrade
+    //
+    // Two parity-critical details, both previously WRONG in Rust:
+    //   1. DIRECTIONALITY — `has_edge(u, v)` probes the SPECIFIC (u, v) direction.
+    //      If only the *reverse* PO edge (v, u) exists, Python ADDS a new SD edge
+    //      (u, v) and leaves the reverse PO edge intact (the two edges coexist).
+    //      So we check `find_edge(u, v)` ONLY — NOT `find_edge(u,v).or(find_edge(v,u))`.
+    //   2. PRESERVATION — upgrading an existing PO edge sets ONLY `type`; it KEEPS
+    //      the PO `weight` (1/overlap_frac) + `overlap="True"` + nonoverlap. So we
+    //      set `is_sd = true` and DO NOT touch `po_weight`/`is_overlap`/nonoverlap
+    //      (the old code overwrote the weight + collapsed both directions).
+    //
+    // (u, v) ORIENTATION: Python yields each SD edge from the undirected `G` in
+    // (earlier-inserted, later-inserted) node order (networkx adjacency iteration);
+    // `G`'s nodes are inserted by `G.add_edge(row.a, row.b)` in row order (a before
+    // b). We reproduce that orientation via each node's first-appearance index so
+    // `find_edge` probes the SAME direction Python's `has_edge` does — that is what
+    // decides "combine onto the PO edge" vs "add a reciprocal SD edge".
+    let mut first_seen: ahash::AHashMap<NodeKey, usize> = ahash::AHashMap::new();
+    {
+        let mut order = 0usize;
+        for row in sd_pairs {
+            for k in [&row.a, &row.b] {
+                if !first_seen.contains_key(k) {
+                    first_seen.insert(k.clone(), order);
+                    order += 1;
+                }
+            }
+        }
+    }
+
+    // Dedup each unordered SD pair once (Python's undirected `G` has one edge per
+    // pair); the sorted (min,max) key is canonical regardless of orientation.
     let mut sd_edge_seen: ahash::AHashSet<(NodeKey, NodeKey)> = ahash::AHashSet::new();
     for row in sd_pairs {
         let (lo, hi) = ordered_pair(&row.a, &row.b);
         if !sd_edge_seen.insert((lo.clone(), hi.clone())) {
             continue;
         }
-        let u = sd.node(row.a.clone());
-        let v = sd.node(row.b.clone());
-        // If a PO edge already connects u and v (either direction), upgrade its
-        // kind to SegmentalDuplication; else add a fresh SD edge u->v.
-        let existing = sd
-            .g
-            .find_edge(u, v)
-            .or_else(|| sd.g.find_edge(v, u));
-        match existing {
+        // Orient (u_key → v_key) by first-appearance order (networkx `G` edge order).
+        let (u_key, v_key) = if first_seen[&row.a] <= first_seen[&row.b] {
+            (row.a.clone(), row.b.clone())
+        } else {
+            (row.b.clone(), row.a.clone())
+        };
+        let u = sd.node(u_key);
+        let v = sd.node(v_key);
+        // SPECIFIC (u, v) direction only (Python `has_edge(u, v)`).
+        match sd.g.find_edge(u, v) {
             Some(e) => {
+                // A PO edge already runs u→v: upgrade it to ALSO be SD, KEEPING its
+                // PO weight + overlap flag + nonoverlap (Python sets only `type`).
+                // We additionally stash the SD `mismatch_rate` in `sd_weight` so it
+                // stays available, though `weight()` (= ep["weight"]) keeps using
+                // the PO weight on this combined edge, exactly as Python does.
                 let attr = sd.g.edge_weight_mut(e).expect("edge exists");
-                attr.kind = EdgeKind::SegmentalDuplication;
-                attr.weight = row.mismatch_rate;
+                attr.is_sd = true;
+                attr.sd_weight = row.mismatch_rate;
             }
             None => {
-                sd.g.add_edge(
-                    u,
-                    v,
-                    EdgeAttr {
-                        kind: EdgeKind::SegmentalDuplication,
-                        weight: row.mismatch_rate,
-                        nonoverlap_smaller: 0,
-                    },
-                );
+                // No u→v edge: add a fresh SD edge (Python `add_edge(u, v, **d)`).
+                // A reverse PO edge (v, u), if any, is intentionally left intact.
+                sd.g.add_edge(u, v, EdgeAttr::sd(row.mismatch_rate));
             }
         }
     }
@@ -233,7 +333,7 @@ pub fn build_multiplex_graph(sd_pairs: &[SdPairRow], _threads: usize) -> SdGraph
         sd.edge_count(),
         sd.g
             .edge_weights()
-            .filter(|a| a.is_sd())
+            .filter(|a| a.is_sd)
             .count()
     );
     sd
@@ -319,15 +419,8 @@ fn compose_po_per_chr(
                 if po_edge_seen.insert((large.clone(), small.clone())) {
                     let lu = sd.node(large);
                     let sv = sd.node(small);
-                    sd.g.add_edge(
-                        lu,
-                        sv,
-                        EdgeAttr {
-                            kind: EdgeKind::Overlap,
-                            weight: 1.0 / weight,
-                            nonoverlap_smaller: nonoverlap,
-                        },
-                    );
+                    sd.g
+                        .add_edge(lu, sv, EdgeAttr::po(1.0 / weight, nonoverlap));
                 }
             }
         }
@@ -394,8 +487,14 @@ mod tests {
         let g = build_multiplex_graph(&rows, 1);
         assert_eq!(g.node_count(), 2);
         assert_eq!(g.edge_count(), 1);
-        let sd_edges = g.g.edge_weights().filter(|a| a.is_sd()).count();
+        let sd_edges = g.g.edge_weights().filter(|a| a.is_sd).count();
         assert_eq!(sd_edges, 1);
+        // A pure inter-chrom SD edge: is_sd, NOT overlap, weight() == mismatch_rate.
+        let attr = g.g.edge_weights().next().unwrap();
+        assert!(attr.is_sd && !attr.is_overlap);
+        assert!((attr.weight() - 0.03).abs() < 1e-9);
+        assert!((attr.sd_weight - 0.03).abs() < 1e-9);
+        assert!(attr.po_weight.is_nan(), "pure SD edge has no PO weight");
     }
 
     #[test]
@@ -421,15 +520,24 @@ mod tests {
         let s = g.index.get(&nk("chr1", 600, 1000, Strand::Forward)).copied().unwrap();
         let e = g.g.find_edge(l, s).expect("PO edge L->S exists");
         let attr = g.g.edge_weight(e).unwrap();
-        assert!(attr.is_overlap());
-        assert!((attr.weight - 1.0).abs() < 1e-9, "weight {}", attr.weight);
+        assert!(attr.is_overlap);
+        assert!(!attr.is_sd, "pure PO edge is not (yet) an SD edge");
+        assert!((attr.po_weight - 1.0).abs() < 1e-9, "po_weight {}", attr.po_weight);
+        // ep["weight"] == PO weight for a pure PO edge.
+        assert!((attr.weight() - 1.0).abs() < 1e-9);
+        assert!(attr.sd_weight.is_nan(), "pure PO edge has no SD weight");
         // No reverse PO edge.
         assert!(g.g.find_edge(s, l).is_none());
     }
 
+    // ── FIX #8: SD overlay onto a PO edge → combined edge (PO weight + flag kept) ──
+
     #[test]
-    fn sd_overlay_upgrades_existing_po_edge() {
-        // Make chr1 intervals overlap (creating a PO edge) AND be an SD pair.
+    fn sd_overlay_combines_with_existing_po_edge_keeping_po_weight() {
+        // L = [100, 1100) (size 1000) and S = [600, 1000) (size 400) overlap on chr1
+        // (PO edge L->S, po_weight = 1/max(400/400,400/1000) = 1.0) AND are an SD
+        // pair (mismatch_rate 0.02). first_seen: L (row.a) before S (row.b), so the
+        // overlay probes find_edge(L, S) — the PO edge's OWN direction → COMBINE.
         let l = nk("chr1", 100, 1100, Strand::Forward);
         let s = nk("chr1", 600, 1000, Strand::Forward);
         let rows = vec![SdPairRow {
@@ -438,13 +546,55 @@ mod tests {
             mismatch_rate: 0.02,
         }];
         let g = build_multiplex_graph(&rows, 1);
-        // Only one edge between them, upgraded to SD.
+
+        // Still exactly ONE edge between them (overlay upgraded, did not duplicate).
+        assert_eq!(g.edge_count(), 1, "combine keeps a single edge");
         let lu = g.index.get(&l).copied().unwrap();
         let sv = g.index.get(&s).copied().unwrap();
-        let e = g.g.find_edge(lu, sv).or_else(|| g.g.find_edge(sv, lu)).unwrap();
+        let e = g.g.find_edge(lu, sv).expect("combined edge L->S");
         let attr = g.g.edge_weight(e).unwrap();
-        assert!(attr.is_sd(), "edge should be upgraded to SD");
-        assert!((attr.weight - 0.02).abs() < 1e-9);
-        assert_eq!(g.edge_count(), 1, "PO + SD on same pair collapse to one edge");
+
+        // The required end state for an overlapping SD pair:
+        assert!(attr.is_overlap, "overlap flag KEPT");
+        assert!(attr.is_sd, "ALSO marked SD");
+        assert!((attr.po_weight - 1.0).abs() < 1e-9, "PO weight 1/overlap_frac preserved");
+        assert!((attr.sd_weight - 0.02).abs() < 1e-9, "SD mismatch_rate kept available");
+        // ep["weight"] = PO weight on a combined edge (Python keeps the PO weight).
+        assert!((attr.weight() - 1.0).abs() < 1e-9, "ep[weight] is the PO weight, not 0.02");
+        // No reverse edge was created.
+        assert!(g.g.find_edge(sv, lu).is_none());
+    }
+
+    #[test]
+    fn sd_overlay_adds_reciprocal_edge_when_only_reverse_po_exists() {
+        // Same overlapping intervals, but the SD row is oriented SMALL→LARGE
+        // (a = S, b = L). The PO edge is still LARGE→SMALL (L->S), so the overlay
+        // probes find_edge(S, L) — the *reverse* direction → MISS → a fresh SD edge
+        // S->L is added and the reverse PO edge L->S is left intact (two coexist),
+        // matching Python's directional `has_edge(u, v)` overlay.
+        let l = nk("chr1", 100, 1100, Strand::Forward); // size 1000 (larger)
+        let s = nk("chr1", 600, 1000, Strand::Forward); // size 400  (smaller)
+        let rows = vec![SdPairRow {
+            a: s.clone(), // SD-edge orientation small→large (first-seen: s before l)
+            b: l.clone(),
+            mismatch_rate: 0.02,
+        }];
+        let g = build_multiplex_graph(&rows, 1);
+
+        let lu = g.index.get(&l).copied().unwrap();
+        let sv = g.index.get(&s).copied().unwrap();
+
+        // TWO edges coexist: PO L->S and a reciprocal SD S->L.
+        assert_eq!(g.edge_count(), 2, "reciprocal SD edge coexists with the reverse PO edge");
+
+        // PO edge L->S is intact (overlap, NOT SD, PO weight 1.0).
+        let po = g.g.edge_weight(g.g.find_edge(lu, sv).expect("PO L->S")).unwrap();
+        assert!(po.is_overlap && !po.is_sd, "reverse PO edge untouched");
+        assert!((po.po_weight - 1.0).abs() < 1e-9);
+
+        // Fresh SD edge S->L (SD, NOT overlap, weight() == mismatch_rate).
+        let sd_e = g.g.edge_weight(g.g.find_edge(sv, lu).expect("SD S->L")).unwrap();
+        assert!(sd_e.is_sd && !sd_e.is_overlap, "fresh reciprocal SD edge");
+        assert!((sd_e.weight() - 0.02).abs() < 1e-9);
     }
 }

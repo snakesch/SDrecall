@@ -121,18 +121,22 @@ pub fn is_small_sd(size: i64, mean_read_length: f64, avg_frag: f64, std_frag: f6
 /// `smaller_node_size` is the size of the edge's TARGET node (Python uses
 /// `edge[1]` — the small node, since PO edges point large→small).
 pub fn should_prune_po_edge(attr: &EdgeAttr, smaller_node_size: i64, cutoff: f64) -> bool {
-    if !attr.is_overlap() {
+    // Python gates on `edge[2].get("overlap", False)` — the independent overlap
+    // flag — so a COMBINED (SD+PO) edge is pruned just like a pure PO edge.
+    if !attr.is_overlap {
         return false;
     }
-    // PO weight is `1/overlap_fraction ∈ [1, ∞)`; a non-finite or non-positive
-    // weight is degenerate (never produced by the builder, where Python would hit
-    // a ZeroDivisionError). Guard the division so it yields a definite `false`
-    // (keep the edge) instead of an `inf`/NaN that would make the predicate
-    // unpredictable once a NaN-policy is applied elsewhere.
-    if !attr.weight.is_finite() || attr.weight <= 0.0 {
+    // Python's `weight` here is `edge[2]["weight"]` = `ep["weight"]` (the PO weight
+    // on a PO/combined edge). PO weight is `1/overlap_fraction ∈ [1, ∞)`; a
+    // non-finite or non-positive weight is degenerate (never produced by the
+    // builder, where Python would hit a ZeroDivisionError). Guard the division so
+    // it yields a definite `false` (keep the edge) instead of an `inf`/NaN that
+    // would make the predicate unpredictable once a NaN-policy is applied elsewhere.
+    let w = attr.weight();
+    if !w.is_finite() || w <= 0.0 {
         return false;
     }
-    let inv_weight = 1.0 / attr.weight; // = overlap fraction
+    let inv_weight = 1.0 / w; // = overlap fraction
     let overlap_size = smaller_node_size as f64 * inv_weight;
     overlap_size < cutoff && inv_weight < 0.5
 }
@@ -259,68 +263,77 @@ fn inspect_cnode_along_route(
         let edge_attr = g.g[edges[i]];
         let mut c = HomoseqRegion::new(g.g[v].clone(), v);
 
-        match edge_attr.kind {
-            EdgeKind::SegmentalDuplication => {
-                if qnode.key.strand == c.key.strand {
-                    c.ups_rela_start = qnode.rela_start.max(0);
-                    c.ups_rela_end = qnode.rela_end.min(c.size);
-                } else {
-                    c.ups_rela_end = (qnode.size - qnode.rela_start).min(c.size);
-                    c.ups_rela_start = (qnode.size - qnode.rela_end).max(0);
-                }
-                c.rela_start = c.ups_rela_start;
-                c.rela_end = c.ups_rela_end;
-                if c.rela_end <= c.rela_start {
-                    // Python sys.exit(1) here; we treat as a dropped route.
-                    log::error!(
-                        "SD route step produced empty window for {:?} (rela {}..{})",
-                        c.key, c.rela_start, c.rela_end
-                    );
-                    return None;
-                }
-                let mut route = qnode.route.clone();
-                route.push(RouteStep {
-                    node: qnode.key.clone(),
-                    edge_kind: EdgeKind::SegmentalDuplication,
-                });
-                c.route = route;
+        // Python dispatches `if type=="segmental_duplication" … elif overlap=="True"`
+        // — SD WINS on a combined edge (both flags set). Mirror that priority via
+        // the independent `is_sd` / `is_overlap` flags, NOT a single `kind`.
+        if edge_attr.is_sd {
+            if qnode.key.strand == c.key.strand {
+                c.ups_rela_start = qnode.rela_start.max(0);
+                c.ups_rela_end = qnode.rela_end.min(c.size);
+            } else {
+                c.ups_rela_end = (qnode.size - qnode.rela_start).min(c.size);
+                c.ups_rela_start = (qnode.size - qnode.rela_end).max(0);
             }
-            EdgeKind::Overlap => {
-                // qnode downstream window from cnode's absolute position.
-                let mut qnode_rela_start = c.key.start - qnode.key.start;
-                let qnode_rela_end = (qnode_rela_start + c.size).min(qnode.size);
-                qnode_rela_start = qnode_rela_start.max(0);
-
-                qnode.down_rela_start = qnode_rela_start;
-                qnode.down_rela_end = qnode_rela_end;
-                let q_overlap_start = qnode.down_rela_start.max(qnode.ups_rela_start);
-                let q_overlap_end = qnode.down_rela_end.min(qnode.ups_rela_end);
-                let q_overlap_size = q_overlap_end - q_overlap_start;
-                qnode.rela_start = q_overlap_start;
-                qnode.rela_end = q_overlap_end;
-
-                if (q_overlap_size as f64) <= floor {
-                    return None;
-                }
-                let q_overlap_abs_start = qnode.key.start + q_overlap_start;
-                let mut c_rela_start = q_overlap_abs_start - c.key.start;
-                let c_rela_end = c.size.min(c_rela_start + q_overlap_size);
-                c_rela_start = c_rela_start.max(0);
-                c.ups_rela_start = c_rela_start;
-                c.ups_rela_end = c_rela_end;
-                c.rela_start = c_rela_start;
-                c.rela_end = c_rela_end;
-
-                if (c_rela_end - c_rela_start) as f64 <= floor {
-                    return None;
-                }
-                let mut route = qnode.route.clone();
-                route.push(RouteStep {
-                    node: qnode.key.clone(),
-                    edge_kind: EdgeKind::Overlap,
-                });
-                c.route = route;
+            c.rela_start = c.ups_rela_start;
+            c.rela_end = c.ups_rela_end;
+            if c.rela_end <= c.rela_start {
+                // Python sys.exit(1) here; we treat as a dropped route.
+                log::error!(
+                    "SD route step produced empty window for {:?} (rela {}..{})",
+                    c.key, c.rela_start, c.rela_end
+                );
+                return None;
             }
+            let mut route = qnode.route.clone();
+            route.push(RouteStep {
+                node: qnode.key.clone(),
+                edge_kind: EdgeKind::SegmentalDuplication,
+            });
+            c.route = route;
+        } else if edge_attr.is_overlap {
+            // qnode downstream window from cnode's absolute position.
+            let mut qnode_rela_start = c.key.start - qnode.key.start;
+            let qnode_rela_end = (qnode_rela_start + c.size).min(qnode.size);
+            qnode_rela_start = qnode_rela_start.max(0);
+
+            qnode.down_rela_start = qnode_rela_start;
+            qnode.down_rela_end = qnode_rela_end;
+            let q_overlap_start = qnode.down_rela_start.max(qnode.ups_rela_start);
+            let q_overlap_end = qnode.down_rela_end.min(qnode.ups_rela_end);
+            let q_overlap_size = q_overlap_end - q_overlap_start;
+            qnode.rela_start = q_overlap_start;
+            qnode.rela_end = q_overlap_end;
+
+            if (q_overlap_size as f64) <= floor {
+                return None;
+            }
+            let q_overlap_abs_start = qnode.key.start + q_overlap_start;
+            let mut c_rela_start = q_overlap_abs_start - c.key.start;
+            let c_rela_end = c.size.min(c_rela_start + q_overlap_size);
+            c_rela_start = c_rela_start.max(0);
+            c.ups_rela_start = c_rela_start;
+            c.ups_rela_end = c_rela_end;
+            c.rela_start = c_rela_start;
+            c.rela_end = c_rela_end;
+
+            if (c_rela_end - c_rela_start) as f64 <= floor {
+                return None;
+            }
+            let mut route = qnode.route.clone();
+            route.push(RouteStep {
+                node: qnode.key.clone(),
+                edge_kind: EdgeKind::Overlap,
+            });
+            c.route = route;
+        } else {
+            // Unreachable: the multiplex builder guarantees every edge is is_sd ||
+            // is_overlap (Python: every edge has type==SD or overlap==True). A
+            // "neither" edge would be a builder invariant violation; drop the route.
+            log::error!(
+                "route edge {:?} → {:?} is neither SD nor PO (builder invariant violated); dropping route",
+                qnode.key, c.key
+            );
+            return None;
         }
         qnode = c.clone();
         cnode = Some(c);
@@ -427,8 +440,10 @@ fn traverse_qnode(
     frag: &FragParams,
 ) -> Result<(Vec<HomoseqRegion>, Vec<NodeKey>)> {
     let my_comp = comp_labels[qnode_v.index()];
-    // Overlap-only sub-partition (graph_traversal.py l.328-329).
-    let overlap_labels = component_labels(g, |a| a.is_overlap());
+    // Overlap-only sub-partition (graph_traversal.py l.328-329): the independent
+    // overlap flag selects PO edges (a combined SD+PO edge counts as overlap here,
+    // matching Python's `efilt = ep["overlap"]=="True"`).
+    let overlap_labels = component_labels(g, |a| a.is_overlap);
 
     let mut counterparts: Vec<HomoseqRegion> = Vec::new();
     let mut counter_qnodes: Vec<NodeKey> = Vec::new();
@@ -452,29 +467,36 @@ fn traverse_qnode(
             Some(r) => r,
             None => continue,
         };
-        // Reject empty routes, and routes whose last edge is a PO edge.
+        // (a) Reject empty routes, and routes whose LAST edge is a PO edge. Python
+        // `ep["overlap"][last] == "True"` — the INDEPENDENT overlap flag, so a
+        // combined SD+PO edge as the last edge is rejected too.
         let Some(&last_edge) = edges.last() else {
             continue;
         };
-        if g.g[last_edge].is_overlap() {
+        if g.g[last_edge].is_overlap {
             continue;
         }
-        // Reject: ≥2 adjacent PO-edge pairs (Python `len([...]) > 1`).
+        // (b) Reject: ≥2 adjacent PO-edge pairs (Python `len([...]) > 1`), again via
+        // the independent overlap flag (combined edges count as PO here).
         let mut adjacent_po = 0;
         for w in edges.windows(2) {
-            if g.g[w[0]].is_overlap() && g.g[w[1]].is_overlap() {
+            if g.g[w[0]].is_overlap && g.g[w[1]].is_overlap {
                 adjacent_po += 1;
             }
         }
         if adjacent_po > 1 {
             continue;
         }
-        // Reject: SD-similarity product ∏(1-weight) <= 0.8 over SD edges.
+        // (c) Reject: SD-similarity product ∏(1 - ep["weight"]) <= 0.8 over the
+        // `type=="segmental_duplication"` edges (Python graph_traversal.py l.265).
+        // We select `is_sd` edges and use `weight()` (= ep["weight"]), so a combined
+        // edge contributes `1 - po_weight` (the PO weight Python keeps), NOT
+        // `1 - mismatch_rate` — exactly as Python does.
         let sd_product: f64 = edges
             .iter()
             .map(|&e| g.g[e])
-            .filter(|a| a.is_sd())
-            .map(|a| 1.0 - a.weight)
+            .filter(|a| a.is_sd)
+            .map(|a| 1.0 - a.weight())
             .product();
         if sd_product <= 0.8 {
             continue;
@@ -526,7 +548,7 @@ fn overlap_neighbor_qnodes(
         .edges(v)
         .chain(g.g.edges_directed(v, petgraph::Direction::Incoming))
     {
-        if !e.weight().is_overlap() {
+        if !e.weight().is_overlap {
             continue;
         }
         let other = if e.source() == v { e.target() } else { e.source() };
@@ -586,13 +608,6 @@ pub fn extract_sd_paralog_pairs(
     }
     let sorted_qnode_vs = sort_query_nodes(&qnode_vs, g, &comp_labels);
 
-    // Build the connected-qnodes graph in Python insertion order: all qnodes first.
-    let mut connected: crate::grouping::ConnectedQnodes<NodeKey> =
-        crate::grouping::ConnectedQnodes::new();
-    for &v in &sorted_qnode_vs {
-        connected.node(g.g[v].clone());
-    }
-
     // Per-qnode traversal, PARALLEL across cores — this is the Phase-1 hotspot
     // (dijkstra walk + minimap2 similarity per candidate). Each rayon worker opens
     // its OWN faidx reader (the reader is stateful and not shareable) via
@@ -623,27 +638,19 @@ pub fn extract_sd_paralog_pairs(
         )
         .collect();
 
-    let mut sd_paralog_pairs: FxHashMap<NodeKey, Vec<HomoseqRegion>> = FxHashMap::default();
-
-    // Sequential, order-preserving assembly (identical to the serial walk).
-    for (&qv, res) in sorted_qnode_vs.iter().zip(per_qnode) {
-        let (counterparts, counter_qnodes) = res?;
-        let qkey = g.g[qv].clone();
-        if !counterparts.is_empty() {
-            sd_paralog_pairs.insert(qkey.clone(), counterparts);
-        }
-        // Wire qnode↔counter-qnode edges (insertion order: cnodes appended in the
-        // order produced above).
-        let qi = connected.node(qkey);
-        for ck in &counter_qnodes {
-            let ci = connected.node(ck.clone());
-            connected.edge(qi, ci);
-        }
+    // Unwrap the per-qnode results IN ORDER (propagate the first error), then hand
+    // them to the order-preserving assembler. Keeping the assembly in a pure helper
+    // makes the FIX-#9 gating (below) independently unit-testable.
+    let mut results: Vec<(Vec<HomoseqRegion>, Vec<NodeKey>)> = Vec::with_capacity(per_qnode.len());
+    for res in per_qnode {
+        results.push(res?);
     }
+    let sorted_keys: Vec<NodeKey> = sorted_qnode_vs.iter().map(|&v| g.g[v].clone()).collect();
+    let (sd_paralog_pairs, connected) = assemble_results(&sorted_keys, results);
 
     log::info!(
         "Traversal: {} qnodes → {} with counterparts; connected-qnodes graph has {} nodes",
-        sorted_qnode_vs.len(),
+        sorted_keys.len(),
         sd_paralog_pairs.len(),
         connected.len()
     );
@@ -651,6 +658,52 @@ pub fn extract_sd_paralog_pairs(
         sd_paralog_pairs,
         connected,
     })
+}
+
+/// Assemble the per-qnode traversal results into `sd_paralog_pairs` + the
+/// connected-qnodes graph, in the Python insertion order: ALL qnodes first (in
+/// `sorted_qnode_keys` order), then counter-qnodes in traversal-result order. This
+/// is the coloring-order parity contract (see [`crate::grouping`]).
+///
+/// ## FIX #9 — gate grouping edges on a non-empty counterpart set
+///
+/// Python (`graph_query.py` l.251-273): a qnode whose accepted-counterpart list
+/// (cnodes kept at `>= 0.95`) is EMPTY hits `else: … continue`, so the
+/// `for cnode_data in query_counter_nodes:` edge-wiring loop is **never reached**
+/// for it. So both the paralog-pair insert AND the counter-qnode edge wiring are
+/// gated on `!counterparts.is_empty()`; a 0-counterpart qnode contributes no
+/// grouping edges (it remains an isolated vertex, since all qnodes are added as
+/// vertices up front). The edge loop previously ran UNCONDITIONALLY in Rust — the
+/// bug this fixes.
+fn assemble_results(
+    sorted_qnode_keys: &[NodeKey],
+    results: Vec<(Vec<HomoseqRegion>, Vec<NodeKey>)>,
+) -> (
+    FxHashMap<NodeKey, Vec<HomoseqRegion>>,
+    crate::grouping::ConnectedQnodes<NodeKey>,
+) {
+    // Build the connected-qnodes graph in Python insertion order: all qnodes first
+    // (Python adds every sorted qnode as a vertex before any edges, l.231-234).
+    let mut connected: crate::grouping::ConnectedQnodes<NodeKey> =
+        crate::grouping::ConnectedQnodes::new();
+    for k in sorted_qnode_keys {
+        connected.node(k.clone());
+    }
+
+    let mut sd_paralog_pairs: FxHashMap<NodeKey, Vec<HomoseqRegion>> = FxHashMap::default();
+    for (qkey, (counterparts, counter_qnodes)) in sorted_qnode_keys.iter().zip(results) {
+        if !counterparts.is_empty() {
+            sd_paralog_pairs.insert(qkey.clone(), counterparts);
+            // Wire qnode↔counter-qnode edges ONLY for a qnode with >= 1 counterpart
+            // (FIX #9). Insertion order: counter-qnodes appended in result order.
+            let qi = connected.node(qkey.clone());
+            for ck in &counter_qnodes {
+                let ci = connected.node(ck.clone());
+                connected.edge(qi, ci);
+            }
+        }
+    }
+    (sd_paralog_pairs, connected)
 }
 
 #[cfg(test)]
@@ -675,15 +728,11 @@ mod tests {
     fn add_edge(g: &mut SdGraph, a: i64, b: i64, kind: EdgeKind) {
         let u = g.node(nk(a));
         let v = g.node(nk(b));
-        g.g.add_edge(
-            u,
-            v,
-            EdgeAttr {
-                kind,
-                weight: 0.1,
-                nonoverlap_smaller: 0,
-            },
-        );
+        let attr = match kind {
+            EdgeKind::SegmentalDuplication => EdgeAttr::sd(0.1),
+            EdgeKind::Overlap => EdgeAttr::po(0.1, 0),
+        };
+        g.g.add_edge(u, v, attr);
     }
 
     #[test]
@@ -736,38 +785,22 @@ mod tests {
         // weight stored = 1/overlap_frac. overlap_frac 0.4 → weight 2.5.
         // smaller_node_size 300, overlap_size = 300*0.4 = 120 < cutoff 350, and
         // inv_weight 0.4 < 0.5 → prune.
-        let attr = EdgeAttr {
-            kind: EdgeKind::Overlap,
-            weight: 2.5,
-            nonoverlap_smaller: 0,
-        };
+        let attr = EdgeAttr::po(2.5, 0);
         assert!(should_prune_po_edge(&attr, 300, 350.0));
         // overlap_frac 0.6 → inv_weight 0.6 >= 0.5 → keep regardless.
-        let attr2 = EdgeAttr {
-            kind: EdgeKind::Overlap,
-            weight: 1.0 / 0.6,
-            nonoverlap_smaller: 0,
-        };
+        let attr2 = EdgeAttr::po(1.0 / 0.6, 0);
         assert!(!should_prune_po_edge(&attr2, 300, 350.0));
-        // SD edges are never PO-pruned.
-        let sd = EdgeAttr {
-            kind: EdgeKind::SegmentalDuplication,
-            weight: 0.05,
-            nonoverlap_smaller: 0,
-        };
+        // SD edges are never PO-pruned (is_overlap = false).
+        let sd = EdgeAttr::sd(0.05);
         assert!(!should_prune_po_edge(&sd, 300, 350.0));
     }
 
     #[test]
     fn should_prune_po_edge_guards_degenerate_weight() {
         // Zero / non-finite weight must not panic or prune via inf/NaN arithmetic.
-        let zero = EdgeAttr { kind: EdgeKind::Overlap, weight: 0.0, nonoverlap_smaller: 0 };
+        let zero = EdgeAttr::po(0.0, 0);
         assert!(!should_prune_po_edge(&zero, 100, 350.0));
-        let inf = EdgeAttr {
-            kind: EdgeKind::Overlap,
-            weight: f64::INFINITY,
-            nonoverlap_smaller: 0,
-        };
+        let inf = EdgeAttr::po(f64::INFINITY, 0);
         assert!(!should_prune_po_edge(&inf, 100, 350.0));
     }
 
@@ -786,13 +819,13 @@ mod tests {
         let t = g.node(po_tgt.clone());
 
         // SD edge between survivors → kept.
-        g.g.add_edge(a, b, EdgeAttr { kind: EdgeKind::SegmentalDuplication, weight: 0.1, nonoverlap_smaller: 0 });
+        g.g.add_edge(a, b, EdgeAttr::sd(0.1));
         // SD edge into the small node → dropped (endpoint pruned).
-        g.g.add_edge(a, s, EdgeAttr { kind: EdgeKind::SegmentalDuplication, weight: 0.1, nonoverlap_smaller: 0 });
+        g.g.add_edge(a, s, EdgeAttr::sd(0.1));
         // Self-loop → dropped.
-        g.g.add_edge(a, a, EdgeAttr { kind: EdgeKind::SegmentalDuplication, weight: 0.1, nonoverlap_smaller: 0 });
+        g.g.add_edge(a, a, EdgeAttr::sd(0.1));
         // Weak PO edge a→t: weight 3.0 → inv 0.333 < 0.5, overlap_size 400*0.333 ≈ 133 < 350 → dropped.
-        g.g.add_edge(a, t, EdgeAttr { kind: EdgeKind::Overlap, weight: 3.0, nonoverlap_smaller: 0 });
+        g.g.add_edge(a, t, EdgeAttr::po(3.0, 0));
 
         let pruned = prune_graph(&g, &frag());
 
@@ -815,7 +848,7 @@ mod tests {
         let mut g = SdGraph::new();
         let au = g.node(a.clone());
         let bu = g.node(b.clone());
-        g.g.add_edge(au, bu, EdgeAttr { kind: EdgeKind::Overlap, weight: 1.5, nonoverlap_smaller: 0 });
+        g.g.add_edge(au, bu, EdgeAttr::po(1.5, 0));
         let pruned = prune_graph(&g, &frag());
         assert_eq!(pruned.node_count(), 2);
         assert_eq!(pruned.edge_count(), 1);
@@ -826,19 +859,16 @@ mod tests {
     fn nk_full(chrom: &str, start: i64, end: i64, s: Strand) -> NodeKey {
         NodeKey::new(chrom, start, end, s)
     }
-    /// Add an edge between two arbitrary keys, interning them.
+    /// Add an edge between two arbitrary keys, interning them. `weight` is the SD
+    /// `mismatch_rate` (SD edge) or the PO weight `1/overlap_frac` (overlap edge).
     fn add_edge_keys(g: &mut SdGraph, a: NodeKey, b: NodeKey, kind: EdgeKind, weight: f64) {
         let u = g.node(a);
         let v = g.node(b);
-        g.g.add_edge(
-            u,
-            v,
-            EdgeAttr {
-                kind,
-                weight,
-                nonoverlap_smaller: 0,
-            },
-        );
+        let attr = match kind {
+            EdgeKind::SegmentalDuplication => EdgeAttr::sd(weight),
+            EdgeKind::Overlap => EdgeAttr::po(weight, 0),
+        };
+        g.g.add_edge(u, v, attr);
     }
 
     #[test]
@@ -914,5 +944,120 @@ mod tests {
         let verts = route_vertices(&g, qv, &edges);
         let cnode = inspect_cnode_along_route(&g, &verts, &edges, &frag());
         assert!(cnode.is_none(), "tiny overlap window should drop the route");
+    }
+
+    // ── FIX #8: a combined SD+PO edge behaves like Python in all 4 route checks ──
+
+    /// Build a COMBINED edge (both is_sd and is_overlap), carrying the PO weight as
+    /// `ep["weight"]` and the SD mismatch_rate stashed in `sd_weight`.
+    fn combined_edge(po_weight: f64, mismatch_rate: f64) -> EdgeAttr {
+        EdgeAttr {
+            is_overlap: true,
+            is_sd: true,
+            po_weight,
+            sd_weight: mismatch_rate,
+            nonoverlap_smaller: 0,
+        }
+    }
+
+    #[test]
+    fn combined_sd_po_edge_downstream_checks_match_python() {
+        // overlap_frac 0.8 → po_weight 1.25; SD mismatch_rate 0.03 stashed.
+        let combined = combined_edge(1.25, 0.03);
+
+        // ep["weight"] is the PO weight on a combined edge (Python keeps it).
+        assert!((combined.weight() - 1.25).abs() < 1e-9, "ep[weight] = PO weight, not 0.03");
+
+        // (a) "last edge is PO" + (b) "adjacent PO edges" use the INDEPENDENT overlap
+        // flag (Python `ep["overlap"]=="True"`), which is TRUE for a combined edge.
+        assert!(combined.is_overlap);
+
+        // (c) the SD-product filter selects `type==SD` edges (is_sd) and multiplies
+        // (1 - ep["weight"]) = (1 - po_weight) < 0 for a combined edge — exactly what
+        // Python does (it uses ep["weight"], NOT the mismatch_rate). So a route
+        // through a combined edge fails `∏(1-w) <= 0.8`. Replicate the inline expr:
+        assert!(combined.is_sd);
+        let route_attrs = [EdgeAttr::sd(0.03), combined, EdgeAttr::sd(0.02)];
+        let sd_product: f64 = route_attrs
+            .iter()
+            .copied()
+            .filter(|a| a.is_sd)
+            .map(|a| 1.0 - a.weight())
+            .product();
+        assert!(sd_product < 0.0, "combined edge (1 - po_weight < 0) poisons the SD-product");
+        assert!(sd_product <= 0.8, "→ route is rejected by check (c), as in Python");
+
+        // (d) the PO-prune uses the overlap flag + ep["weight"] (= po_weight). With
+        // smaller_node_size 40 and cutoff 350: overlap_size = 40*(1/1.25)=32 < 350 but
+        // 1/1.25 = 0.8 >= 0.5 → NOT pruned (the `1/weight < 0.5` clause fails), exactly
+        // as a pure PO edge with the same weight.
+        assert!(!should_prune_po_edge(&combined, 40, 350.0));
+        // A weaker combined edge (po_weight 3.0 → overlap frac 0.333 < 0.5, tiny
+        // overlap) IS pruned — the combined edge is treated as a PO edge here.
+        let weak = combined_edge(3.0, 0.03);
+        assert!(should_prune_po_edge(&weak, 40, 350.0));
+    }
+
+    #[test]
+    fn inspect_combined_edge_takes_sd_branch() {
+        // A single COMBINED edge q→c (both flags). Python's route walk dispatches
+        // `if type=="segmental_duplication"` FIRST, so a combined edge takes the SD
+        // branch (clip/flip by strand), NOT the overlap branch — and records the
+        // step as SegmentalDuplication for the back-projection.
+        let mut g = SdGraph::new();
+        let q = nk_full("chr1", 10000, 12000, Strand::Forward);
+        let c = nk_full("chr2", 20000, 22000, Strand::Forward);
+        let u = g.node(q.clone());
+        let v = g.node(c.clone());
+        g.g.add_edge(u, v, combined_edge(1.25, 0.02));
+
+        let qv = g.index.get(&q).copied().unwrap();
+        let cv = g.index.get(&c).copied().unwrap();
+        let (_, edges) = dijkstra_route(&g, qv, cv).unwrap();
+        let verts = route_vertices(&g, qv, &edges);
+        let cnode = inspect_cnode_along_route(&g, &verts, &edges, &frag()).unwrap();
+
+        // SD branch (same strand) → full window clipped to cnode size [0, 2000).
+        assert_eq!((cnode.rela_start, cnode.rela_end), (0, 2000));
+        // The route records an SD step (not an overlap step).
+        assert_eq!(cnode.route.len(), 1);
+        assert_eq!(cnode.route[0].edge_kind, EdgeKind::SegmentalDuplication);
+    }
+
+    // ── FIX #9: counter-qnode edges are wired ONLY for qnodes with a counterpart ──
+
+    #[test]
+    fn assemble_gates_edges_on_nonempty_counterparts() {
+        // q0 has 1 accepted counterpart (>=0.95) + counter_qnodes [q2] → wires q0-q2.
+        // q1 has ZERO counterparts but a NON-empty counter_qnodes [q2] (e.g. a
+        // 0.9<sim<0.95 hit) → Python `else: continue` skips its edge loop, so FIX #9
+        // wires NOTHING for q1. q2 is just a vertex.
+        let q0 = NodeKey::new("chr1", 0, 1000, Strand::Forward);
+        let q1 = NodeKey::new("chr2", 0, 1000, Strand::Forward);
+        let q2 = NodeKey::new("chr3", 0, 1000, Strand::Forward);
+        let sorted = vec![q0.clone(), q1.clone(), q2.clone()];
+
+        // q0: one counterpart cnode + counter_qnodes=[q2]; q1: ZERO counterparts but
+        // counter_qnodes=[q2]; q2: nothing.
+        let c0 = HomoseqRegion::new(q2.clone(), NodeIndex::new(2));
+        let results = vec![
+            (vec![c0], vec![q2.clone()]), // q0 → wires q0-q2
+            (Vec::new(), vec![q2.clone()]), // q1 (zero counterparts) → NO edge
+            (Vec::new(), Vec::new()),       // q2
+        ];
+
+        let (pairs, connected) = assemble_results(&sorted, results);
+
+        // Only q0 lands in the paralog pairs (q1's empty counterpart set is skipped).
+        assert!(pairs.contains_key(&q0));
+        assert!(!pairs.contains_key(&q1), "q1 has zero counterparts → not a paralog pair");
+        // All three qnodes are vertices (added up front), but exactly ONE grouping
+        // edge is wired (q0-q2). The pre-fix bug would also wire q1-q2 → 2 edges.
+        assert_eq!(connected.len(), 3, "all qnodes are vertices");
+        assert_eq!(
+            connected.edge_count(),
+            1,
+            "only q0 (with a counterpart) wires an edge; q1 is gated out"
+        );
     }
 }

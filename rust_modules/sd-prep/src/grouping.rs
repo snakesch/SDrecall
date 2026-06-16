@@ -90,6 +90,13 @@ impl<K: Clone + std::hash::Hash + Eq> ConnectedQnodes<K> {
         self.keys.is_empty()
     }
 
+    /// Number of distinct (deduped, undirected) edges wired so far — for
+    /// diagnostics and tests (e.g. asserting the FIX-#9 gating wires the right
+    /// number of grouping edges).
+    pub fn edge_count(&self) -> usize {
+        self.edge_seen.len()
+    }
+
     /// The node key at a vertex index (for mapping groups back to keys).
     pub fn key_at(&self, idx: usize) -> &K {
         &self.keys[idx]

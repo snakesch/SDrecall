@@ -122,7 +122,7 @@ fn run_graph(sd_map: &PathBuf, threads: usize) -> sdrecall_utils::Result<()> {
     let rows = read_sd_map(sd_map)?;
     log::info!("Read {} SD pair rows from {}", rows.len(), sd_map.display());
     let g = build_multiplex_graph(&rows, threads);
-    let sd_edges = g.g.edge_weights().filter(|a| a.is_sd()).count();
+    let sd_edges = g.g.edge_weights().filter(|a| a.is_sd).count();
     let po_edges = g.edge_count() - sd_edges;
 
     let labels = component_labels(&g, |_| true);

@@ -84,7 +84,7 @@ fn main() {
     println!("Read {} SD pair rows", rows.len());
 
     let g = build_multiplex_graph(&rows, 1);
-    let sd_edges = g.g.edge_weights().filter(|a| a.is_sd()).count();
+    let sd_edges = g.g.edge_weights().filter(|a| a.is_sd).count();
     let total_edges = g.edge_count();
     let nodes = g.node_count();
 

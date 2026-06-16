@@ -49,7 +49,7 @@ use std::collections::BinaryHeap;
 /// a partition (the pass criterion), not by raw label value.
 ///
 /// `&SdGraph` + `Fn(&EdgeAttr)->bool`: borrow-only; the predicate lets the caller
-/// pick all-edges (`|_| true`) or overlap-only (`|a| a.is_overlap()`).
+/// pick all-edges (`|_| true`) or overlap-only (`|a| a.is_overlap`).
 pub fn component_labels(g: &SdGraph, edge_filter: impl Fn(&EdgeAttr) -> bool) -> Vec<u32> {
     let n = g.g.node_count();
     let mut uf = UnionFind::new(n);
@@ -116,7 +116,7 @@ pub fn greedy_vertex_coloring(adj: &[Vec<u32>]) -> Vec<u32> {
 /// Weighted single-source → single-target shortest path returning the **edge
 /// route** (petgraph's `dijkstra` returns only distances). Treats the directed
 /// `SdGraph` as **undirected** (Python runs `shortest_path` on an undirected
-/// graph). Edge cost = `EdgeAttr::weight`.
+/// graph). Edge cost = `EdgeAttr::weight()` (Python `graph.ep["weight"]`).
 ///
 /// Returns `Some((total_cost, route))` where `route` is the ordered list of edge
 /// indices from `src` to `tgt`, or `None` if `tgt` is unreachable. The route is an
@@ -154,7 +154,9 @@ pub fn dijkstra_route(
         let nidx = NodeIndex::new(node);
         // Undirected: iterate both outgoing and incoming edges.
         for e in g.g.edges(nidx).chain(g.g.edges_directed(nidx, petgraph::Direction::Incoming)) {
-            let w = e.weight().weight;
+            // `e.weight()` is petgraph's edge payload (&EdgeAttr); `.weight()` is
+            // Python's `graph.ep["weight"]` (PO weight wins on a combined edge).
+            let w = e.weight().weight();
             // The neighbor is the endpoint that is not `node`.
             let other = if e.source() == nidx { e.target() } else { e.source() };
             let oi = other.index();
@@ -287,19 +289,16 @@ mod tests {
     }
 
     /// Add an edge with a given kind/weight to an SdGraph (interning nodes by an
-    /// integer label so tests read cleanly).
+    /// integer label so tests read cleanly). `weight` is the SD `mismatch_rate` for
+    /// an SD edge, or the PO weight `1/overlap_frac` for an overlap edge.
     fn add_edge(g: &mut SdGraph, a: i64, b: i64, kind: EdgeKind, weight: f64) {
         let u = g.node(nk(a));
         let v = g.node(nk(b));
-        g.g.add_edge(
-            u,
-            v,
-            EdgeAttr {
-                kind,
-                weight,
-                nonoverlap_smaller: 0,
-            },
-        );
+        let attr = match kind {
+            EdgeKind::SegmentalDuplication => EdgeAttr::sd(weight),
+            EdgeKind::Overlap => EdgeAttr::po(weight, 0),
+        };
+        g.g.add_edge(u, v, attr);
     }
 
     /// Partition (set of frozensets) induced by a labeling, for order-independent
@@ -352,7 +351,7 @@ mod tests {
         let all = component_labels(&g, |_| true);
         assert_eq!(partition(&all).len(), 1);
 
-        let ov = component_labels(&g, |a| a.is_overlap());
+        let ov = component_labels(&g, |a| a.is_overlap);
         let part = partition(&ov);
         // {0}, {1,2}, {3}
         assert_eq!(part.len(), 3);
