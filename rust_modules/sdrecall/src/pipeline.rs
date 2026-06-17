@@ -347,10 +347,26 @@ fn realign_per_rg(
                 }
                 dedup_and_pair_fastqs(&r1, &r2)?;
 
-                // 3b: minimap2 realign.
-                crate::tools::minimap2_align(&r1, &r2, &masked_genome, &raw_bam, tpj)?;
+                // 3b: minimap2 realign onto the masked genome (contigs `{chrom}:{start}`)
+                // → an intermediate LOCAL-coordinate BAM.
+                let local_bam = raw_bam.with_extension("local.bam");
+                crate::tools::minimap2_align(&r1, &r2, &masked_genome, &local_bam, tpj)?;
 
-                // 3c: variant call.
+                // 3b': remap masked(local) → ORIGINAL-genome coordinates (port of
+                // shell_utils.sh independent_minimap2_masked's modify_bam_sq_lines +
+                // modify_masked_genome_coords). This makes `raw_bam` genomic so the
+                // later merge of all per-RG BAMs shares the original-ref header (Bug B)
+                // and bcftools mpileup -f ref_genome is coordinate-consistent.
+                sdrecall_io::remap_masked_bam_to_genomic(
+                    &local_bam,
+                    &ref_genome,
+                    &rg.label,
+                    &raw_bam,
+                )?;
+                let _ = std::fs::remove_file(&local_bam);
+                let _ = std::fs::remove_file(format!("{}.bai", local_bam.display()));
+
+                // 3c: variant call on the GENOMIC BAM.
                 crate::tools::bcftools_call(&raw_bam, &ref_genome, &raw_vcf, tpj)?;
 
                 log::info!("[realign] {} done → {:?}", rg.label, raw_bam);
