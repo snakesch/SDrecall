@@ -14,6 +14,19 @@ use crate::structs::{
     ReadErrorVector, Variant
 };
 
+pub const HAP_DEL: i16 = -10;
+pub const INDEL_UNIT: i16 = 10;
+
+#[inline]
+fn is_snv_value(v: i16) -> bool {
+    v == -4 || (v > 1 && v % INDEL_UNIT == 6)
+}
+
+#[inline]
+fn is_indel_value(v: i16) -> bool {
+    v == HAP_DEL || v > 1
+}
+
 /// Result of haplotype compatibility analysis
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum HaplotypeResult {
@@ -143,20 +156,15 @@ pub fn compare_sequences(seq1: &[u8], seq2: &[u8]) -> bool {
 /// relative to the reference:
 /// - `1`: match (`=`, or a lenient `M` — see note)
 /// - `-4`: SNV (mismatch, `X`)
-/// - `-6`: deletion (`D`)
-/// - `len*4` (positive): an insertion of `len` bases, placed on the **next**
-///   reference-consuming position (deferred-marker convention)
+/// - `-10`: deletion (`D`)
+/// - `base + 10*len` (positive): insertion of `len` bases, summed onto the
+///   next reference-consuming base (`11` = match+1I, `6` = SNV+1I)
 ///
 /// # Insertion-marker convention (T2 fix, 2026-06-11)
-/// An insertion is recorded by deferring a `pending_ins = len*4` marker to the
-/// **next** reference-consuming op (matching Python `get_hapvector_from_cigar`
-/// and `haplotype_inspection::extract_hap_vector`). The previous implementation
-/// overwrote the **previous** aligned position (`105=1I42=` put the marker at
-/// index 104 instead of 105); that one-position shift made Python-inspect (which
-/// reuses these exported vectors) disagree with Rust-inspect (which recomputes
-/// with the correct convention) on borderline reads — the root cause of the 3
-/// diverging T1 islands (137/139/163). An insertion at the read start (empty
-/// vector) is dropped, mirroring Python's `if index > 0`.
+/// An insertion is recorded by deferring a `pending_ins = len*10` marker to the
+/// **next** reference-consuming op, where it is summed onto the base value. This
+/// matches the golden haplotype-inspection encoding and preserves SNV+insertion
+/// compound bases.
 ///
 /// # Note on `M`
 /// Unlike `haplotype_inspection` (which panics on `M` per the golden DivA
@@ -192,20 +200,19 @@ pub fn extract_hap_vector(record: &Record) -> Vec<i16> {
                 if pending_ins == 0 {
                     hap_vector.extend(std::iter::repeat_n(1i16, n));
                 } else {
-                    hap_vector.push(pending_ins);
+                    hap_vector.push(1 + pending_ins);
                     hap_vector.extend(std::iter::repeat_n(1i16, n.saturating_sub(1)));
                     pending_ins = 0;
                 }
             }
-            // Diff (X) → SNV (-4). A compound insertion+mismatch overwrites the X
-            // with the insertion marker (current encoding; golden DivB summation
-            // deferred to T4).
+            // Diff (X) → SNV (-4). A compound insertion+mismatch sums the
+            // insertion unit onto the SNV base, producing values ending in 6.
             Cigar::Diff(len) => {
                 let n = *len as usize;
                 if pending_ins == 0 {
                     hap_vector.extend(std::iter::repeat_n(-4i16, n));
                 } else {
-                    hap_vector.push(pending_ins);
+                    hap_vector.push(-4 + pending_ins);
                     hap_vector.extend(std::iter::repeat_n(-4i16, n.saturating_sub(1)));
                     pending_ins = 0;
                 }
@@ -213,17 +220,17 @@ pub fn extract_hap_vector(record: &Record) -> Vec<i16> {
             // Ins (I) → defer the marker to the next ref-consuming op; drop at read start.
             Cigar::Ins(len) => {
                 if !hap_vector.is_empty() {
-                    pending_ins = (*len as i16) * 4;
+                    pending_ins = (*len as i16) * INDEL_UNIT;
                 }
             }
-            // Del (D) → deletion (-6).
+            // Del (D) → deletion (-10).
             Cigar::Del(len) => {
                 let n = *len as usize;
                 if pending_ins == 0 {
-                    hap_vector.extend(std::iter::repeat_n(-6i16, n));
+                    hap_vector.extend(std::iter::repeat_n(HAP_DEL, n));
                 } else {
                     hap_vector.push(pending_ins);
-                    hap_vector.extend(std::iter::repeat_n(-6i16, n.saturating_sub(1)));
+                    hap_vector.extend(std::iter::repeat_n(HAP_DEL, n.saturating_sub(1)));
                     pending_ins = 0;
                 }
             }
@@ -265,16 +272,16 @@ fn count_continuous_blocks(bool_array: &[bool]) -> usize {
 /// 
 /// Equivalent to Python's count_snv function
 fn count_snv_blocks(hap_vector: &[i16]) -> usize {
-    // Count SNVs per site (val == -4), not contiguous blocks
-    hap_vector.iter().filter(|&&val| val == -4).count()
+    // Count SNVs per site, including compound SNV+insertion values.
+    hap_vector.iter().filter(|&&val| is_snv_value(val)).count()
 }
 
 /// Count indel blocks in a haplotype vector  
 /// 
 /// Equivalent to Python's count_continuous_indel_blocks function
-/// Counts continuous blocks of deletions (-6) or insertions (>1)
+/// Counts continuous blocks of deletions (-10) or insertions (>1)
 fn count_indel_blocks(hap_vector: &[i16]) -> usize {
-    let indel_positions: Vec<bool> = hap_vector.iter().map(|&val| val == -6 || val > 1).collect();
+    let indel_positions: Vec<bool> = hap_vector.iter().map(|&val| is_indel_value(val)).collect();
     count_continuous_blocks(&indel_positions)
 }
 
@@ -724,10 +731,10 @@ fn tolerate_mismatches_from_hap_vectors(
                idx + 1, genomic_pos, hap1, hap2);
         
         // Check if this is an indel mismatch (not tolerable)
-        let is_indel1 = hap1 == -6 || hap1 > 1;  // Deletion or insertion
-        let is_indel2 = hap2 == -6 || hap2 > 1;  // Deletion or insertion
-        let is_snv1 = hap1 == -4;
-        let is_snv2 = hap2 == -4;
+        let is_indel1 = is_indel_value(hap1);
+        let is_indel2 = is_indel_value(hap2);
+        let is_snv1 = is_snv_value(hap1);
+        let is_snv2 = is_snv_value(hap2);
         
         if is_indel1 || is_indel2 {
             debug!("[tolerate_mismatches_from_hap_vectors] Position {} has indel mismatch (hap1={}, hap2={}) - NOT TOLERABLE", 
@@ -814,8 +821,8 @@ fn find_mismatch_positions_from_hap_vectors(
 /// Haplotype vector values:
 /// - 1: Match to reference
 /// - -4: SNV (mismatch) 
-/// - -6: Deletion
-/// - Positive values: Insertion length
+/// - -10: Deletion
+/// - Positive values: insertion compound (`base + 10*len`)
 /// 
 /// # Arguments
 /// * `hap_vec1` - Sliced haplotype vector for read 1 (interval only)
@@ -842,8 +849,8 @@ fn has_indel_mismatches_from_hap_vectors(
         let hap2 = hap_vec2[index];
         
         // Check if either value indicates an indel
-        let is_indel1 = hap1 == -6 || hap1 > 1;  // Deletion or insertion
-        let is_indel2 = hap2 == -6 || hap2 > 1;  // Deletion or insertion
+        let is_indel1 = is_indel_value(hap1);
+        let is_indel2 = is_indel_value(hap2);
         
         if is_indel1 || is_indel2 {
             debug!("[has_indel_mismatches_from_hap_vectors] Found indel mismatch at position {}: hap1={}, hap2={}", 
@@ -1221,8 +1228,9 @@ fn psv_shared_snvs(
     let mut psv_snv_count = 0usize;
 
     for i in 0..min_len {
-        // Shared SNV site iff both hap-vectors are -4 (base-agnostic count).
-        if interval_hap1[i] != -4 || interval_hap2[i] != -4 {
+        // Shared SNV site iff both hap-vectors carry an SNV signal
+        // (including SNV+insertion compound values).
+        if !is_snv_value(interval_hap1[i]) || !is_snv_value(interval_hap2[i]) {
             continue;
         }
         shared_snv_count += 1;
@@ -1287,12 +1295,12 @@ pub fn stat_shared_snv_matches(
     
     debug!("[stat_shared_snv_matches] Analyzing shared SNVs between reads {} and {}", qname1, qname2);
     
-    // Find indices where both vectors have SNVs (-4)
+    // Find indices where both vectors have SNVs, including compound SNV+insertion values.
     let mut all_shared_snv_positions = Vec::new();
     let min_len = interval_hap1.len().min(interval_hap2.len());
     
     for i in 0..min_len {
-        if interval_hap1[i] == -4 && interval_hap2[i] == -4 {
+        if is_snv_value(interval_hap1[i]) && is_snv_value(interval_hap2[i]) {
             let genomic_pos = interval_start + i as i64;
             all_shared_snv_positions.push(genomic_pos);
         }
@@ -1414,7 +1422,7 @@ mod hap_vector_tests {
         // 3=1I3=: marker at index 3 (the position AFTER the 3 matches), not index 2.
         // This is the T2 fix — the old code put it at index 2 (the position before).
         let v = extract_hap_vector(&rec(vec![Cigar::Equal(3), Cigar::Ins(1), Cigar::Equal(3)]));
-        assert_eq!(v, vec![1, 1, 1, 4, 1, 1]);
+        assert_eq!(v, vec![1, 1, 1, 11, 1, 1]);
     }
 
     #[test]
@@ -1435,20 +1443,19 @@ mod hap_vector_tests {
             Cigar::RefSkip(2),
             Cigar::Equal(3),
         ]));
-        assert_eq!(v, vec![1, 1, 1, 4, 1, 1, 1, 1]);
+        assert_eq!(v, vec![1, 1, 1, 11, 1, 1, 1, 1]);
     }
 
     #[test]
-    fn compound_insertion_then_mismatch_overwrites_x() {
-        // 3=1I1X2=: current encoding overwrites the X with the insertion marker
-        // (golden DivB summation deferred to T4); matches haplotype_inspection.
+    fn compound_insertion_then_mismatch_preserves_snv_and_insertion() {
+        // 3=1I1X2=: the compound base is -4 + 10 = 6, preserving both signals.
         let v = extract_hap_vector(&rec(vec![
             Cigar::Equal(3),
             Cigar::Ins(1),
             Cigar::Diff(1),
             Cigar::Equal(2),
         ]));
-        assert_eq!(v, vec![1, 1, 1, 4, 1, 1]);
+        assert_eq!(v, vec![1, 1, 1, 6, 1, 1]);
     }
 
     #[test]
@@ -1463,7 +1470,7 @@ mod hap_vector_tests {
         );
         assert_eq!(
             extract_hap_vector(&rec(vec![Cigar::Equal(3), Cigar::Del(2), Cigar::Equal(3)])),
-            vec![1, 1, 1, -6, -6, 1, 1, 1]
+            vec![1, 1, 1, -10, -10, 1, 1, 1]
         );
     }
 }
@@ -1524,12 +1531,12 @@ mod weight_tests {
         assert!((w - 3.0).abs() < 1e-3, "expected overlap_span base 3.0, got {w}");
     }
 
-    /// FIX #6 (indel_num over EQUAL positions): two indel blocks (a `-6` run and a
+    /// FIX #6 (indel_num over EQUAL positions): two indel blocks (a `-10` run and a
     /// positive insertion marker) within the identical part → `mrl*3*2`.
     #[test]
     fn indel_blocks_counted_over_identical_part() {
-        let h1 = [1, 1, -6, -6, 1, 8, 1];
-        let h2 = [1, 1, -6, -6, 1, 8, 1];
+        let h1 = [1, 1, -10, -10, 1, 11, 1];
+        let h2 = [1, 1, -10, -10, 1, 11, 1];
         let (s, r) = aligned(&[0; 7], 100);
         let w = compute_edge_weight_base(
             &h1, &h2, 100, &s, &r, &s, &r, "chr1", &AlleleDepthMap::new(), &cfg(),
