@@ -216,6 +216,32 @@ pub fn samtools_index(bam: &Path, threads: usize) -> Result<()> {
     run_bash(&script, "samtools index")
 }
 
+/// Coordinate-sort a BAM into `output_bam` and build its index.
+pub fn samtools_sort_index(input_bam: &Path, output_bam: &Path, threads: usize) -> Result<()> {
+    let t = threads.to_string();
+    let script = format!(
+        "samtools sort -O bam -@ {t} -o {out} {inp} && \
+         samtools index -@ {t} {out}",
+        t = t,
+        out = sq(output_bam),
+        inp = sq(input_bam),
+    );
+    run_bash(&script, "samtools sort+index")
+}
+
+/// Sort a VCF with bcftools, bgzip it, and build a tabix index.
+pub fn bcftools_sort_index(input_vcf: &Path, output_vcf: &Path, threads: usize) -> Result<()> {
+    let t = threads.to_string();
+    let script = format!(
+        "bcftools sort --threads {t} -Oz -o {out} {inp} && \
+         tabix -f -p vcf {out}",
+        t = t,
+        out = sq(output_vcf),
+        inp = sq(input_vcf),
+    );
+    run_bash(&script, "bcftools sort+tabix")
+}
+
 // ─────────────────────────── internals ───────────────────────────────────
 
 /// Run a bash script, hard-error on non-zero exit. Mirrors

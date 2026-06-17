@@ -16,6 +16,7 @@ mod paths;
 mod pipeline;
 mod rg_discovery;
 mod tools;
+mod vcf_hp;
 
 use std::path::Path;
 use std::process::ExitCode;

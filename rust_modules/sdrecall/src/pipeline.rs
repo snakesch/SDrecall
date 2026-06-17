@@ -13,10 +13,12 @@
 //! post:     vcf-ops inhouse-common → vcf-ops merge-with-conventional
 //! ```
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use rayon::prelude::*;
+use rust_htslib::{bam, bam::Read};
 use sdrecall_utils::{clamp_threads_u8, Result, SdError};
 
 use crate::cli::{PrepareArgs, RealignArgs, RunArgs};
@@ -51,7 +53,9 @@ impl ThreadBudget {
 pub fn run_full_pipeline(args: &RunArgs, paths: &Paths) -> Result<PathBuf> {
     log::info!(
         "[run] full pipeline for sample={} assembly={} target_tag={}",
-        paths.sample_id, paths.assembly, paths.target_tag
+        paths.sample_id,
+        paths.assembly,
+        paths.target_tag
     );
 
     ensure_dirs(paths)?;
@@ -103,7 +107,10 @@ fn prepare(
     prep: &crate::cli::PreparationArgs,
     paths: &Paths,
 ) -> Result<()> {
-    log::info!("[prepare] building recall regions into {:?}", paths.work_dir);
+    log::info!(
+        "[prepare] building recall regions into {:?}",
+        paths.work_dir
+    );
     let prep_paths = paths.to_prep_paths();
     let prep_params = paths.to_prep_params(common, prep);
     let _prep_result = sd_prep::prepare_recall_regions(&prep_paths, &prep_params)?;
@@ -143,7 +150,11 @@ fn realign_and_recall_inner(
     // ── Step 1: per-RG region size stats ────────────────────────────────
     let rg_infos = stat_realign_group_regions(paths)?;
     let rg_labels: Vec<&str> = rg_infos.iter().map(|r| r.label.as_str()).collect();
-    log::info!("[realign] {} RGs discovered: {:?}", rg_labels.len(), rg_labels);
+    log::info!(
+        "[realign] {} RGs discovered: {:?}",
+        rg_labels.len(),
+        rg_labels
+    );
 
     // ── Step 2: per-RG masked-align region prep ─────────────────────────
     let prep_budget = ThreadBudget::new(threads, 1.0);
@@ -217,9 +228,10 @@ fn prepare_masked_align_regions(
         .build()
         .map_err(|e| SdError::Compute(e.to_string()))?;
 
-    let target_bed = paths.target_bed.as_deref().ok_or_else(|| {
-        SdError::Compute("target_bed is required for region-prep".into())
-    })?;
+    let target_bed = paths
+        .target_bed
+        .as_deref()
+        .ok_or_else(|| SdError::Compute("target_bed is required for region-prep".into()))?;
 
     let errors: Vec<_> = pool.install(|| {
         rg_infos
@@ -333,6 +345,7 @@ fn realign_per_rg(
                     append_file(&r1c, &r1)?;
                     append_file(&r2c, &r2)?;
                 }
+                dedup_and_pair_fastqs(&r1, &r2)?;
 
                 // 3b: minimap2 realign.
                 crate::tools::minimap2_align(&r1, &r2, &masked_genome, &raw_bam, tpj)?;
@@ -381,6 +394,156 @@ fn append_file(src: &Path, dst: &Path) -> Result<()> {
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+struct FastqRecord {
+    header: String,
+    seq: String,
+    plus: String,
+    qual: String,
+}
+
+fn dedup_and_pair_fastqs(r1: &Path, r2: &Path) -> Result<()> {
+    let (r1_order, r1_records) = read_fastq_dedup_by_name(r1)?;
+    let (_r2_order, r2_records) = read_fastq_dedup_by_name(r2)?;
+
+    let tmp_r1 = fastq_tmp_path(r1, "rmdup.paired");
+    let tmp_r2 = fastq_tmp_path(r2, "rmdup.paired");
+    {
+        let mut w1 =
+            std::io::BufWriter::new(std::fs::File::create(&tmp_r1).map_err(|e| SdError::Io {
+                path: tmp_r1.display().to_string(),
+                source: e,
+            })?);
+        let mut w2 =
+            std::io::BufWriter::new(std::fs::File::create(&tmp_r2).map_err(|e| SdError::Io {
+                path: tmp_r2.display().to_string(),
+                source: e,
+            })?);
+        for name in &r1_order {
+            if let (Some(rec1), Some(rec2)) = (r1_records.get(name), r2_records.get(name)) {
+                write_fastq_record(&mut w1, rec1, &tmp_r1)?;
+                write_fastq_record(&mut w2, rec2, &tmp_r2)?;
+            }
+        }
+        w1.flush().map_err(|e| SdError::Io {
+            path: tmp_r1.display().to_string(),
+            source: e,
+        })?;
+        w2.flush().map_err(|e| SdError::Io {
+            path: tmp_r2.display().to_string(),
+            source: e,
+        })?;
+    }
+
+    std::fs::rename(&tmp_r1, r1).map_err(|e| SdError::Io {
+        path: r1.display().to_string(),
+        source: e,
+    })?;
+    std::fs::rename(&tmp_r2, r2).map_err(|e| SdError::Io {
+        path: r2.display().to_string(),
+        source: e,
+    })?;
+    Ok(())
+}
+
+fn read_fastq_dedup_by_name(path: &Path) -> Result<(Vec<String>, HashMap<String, FastqRecord>)> {
+    let file = std::fs::File::open(path).map_err(|e| SdError::Io {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    let mut lines = std::io::BufReader::new(file).lines();
+    let mut order = Vec::new();
+    let mut records = HashMap::new();
+
+    loop {
+        let Some(header) = next_fastq_line(&mut lines, path)? else {
+            break;
+        };
+        let seq = required_fastq_line(&mut lines, path, "sequence")?;
+        let plus = required_fastq_line(&mut lines, path, "plus")?;
+        let qual = required_fastq_line(&mut lines, path, "quality")?;
+        let name = fastq_name(&header)?;
+        if !records.contains_key(&name) {
+            order.push(name.clone());
+            records.insert(
+                name,
+                FastqRecord {
+                    header,
+                    seq,
+                    plus,
+                    qual,
+                },
+            );
+        }
+    }
+
+    Ok((order, records))
+}
+
+fn next_fastq_line(
+    lines: &mut impl Iterator<Item = std::io::Result<String>>,
+    path: &Path,
+) -> Result<Option<String>> {
+    match lines.next() {
+        Some(Ok(line)) => Ok(Some(line)),
+        Some(Err(e)) => Err(SdError::Io {
+            path: path.display().to_string(),
+            source: e,
+        }),
+        None => Ok(None),
+    }
+}
+
+fn required_fastq_line(
+    lines: &mut impl Iterator<Item = std::io::Result<String>>,
+    path: &Path,
+    field: &str,
+) -> Result<String> {
+    next_fastq_line(lines, path)?.ok_or_else(|| {
+        SdError::Compute(format!(
+            "truncated FASTQ {} while reading {field}",
+            path.display()
+        ))
+    })
+}
+
+fn fastq_name(header: &str) -> Result<String> {
+    let Some(rest) = header.strip_prefix('@') else {
+        return Err(SdError::Compute(format!(
+            "invalid FASTQ header without '@': {header}"
+        )));
+    };
+    Ok(rest.split_whitespace().next().unwrap_or(rest).to_string())
+}
+
+fn write_fastq_record(writer: &mut impl Write, rec: &FastqRecord, path: &Path) -> Result<()> {
+    writeln!(writer, "{}", rec.header).map_err(|e| SdError::Io {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    writeln!(writer, "{}", rec.seq).map_err(|e| SdError::Io {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    writeln!(writer, "{}", rec.plus).map_err(|e| SdError::Io {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    writeln!(writer, "{}", rec.qual).map_err(|e| SdError::Io {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    Ok(())
+}
+
+fn fastq_tmp_path(path: &Path, suffix: &str) -> PathBuf {
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("reads.fastq");
+    path.with_file_name(format!("{}.{}.{}.fastq", name, std::process::id(), suffix))
+}
+
 // ── Step 4: merge + markdup ─────────────────────────────────────────────
 
 fn merge_and_markdup_raw_bams(
@@ -388,7 +551,10 @@ fn merge_and_markdup_raw_bams(
     per_rg_bams: &[PathBuf],
     threads: usize,
 ) -> Result<()> {
-    log::info!("[merge] merging {} per-RG BAMs + markdup", per_rg_bams.len());
+    log::info!(
+        "[merge] merging {} per-RG BAMs + markdup",
+        per_rg_bams.len()
+    );
     let refs: Vec<&Path> = per_rg_bams.iter().map(|p| p.as_path()).collect();
 
     let pooled = paths.pooled_raw_bam_path();
@@ -406,7 +572,12 @@ fn merge_and_markdup_raw_bams(
 fn concat_raw_vcfs(paths: &Paths, per_rg_vcfs: &[PathBuf], threads: usize) -> Result<()> {
     log::info!("[concat] concatenating {} per-RG VCFs", per_rg_vcfs.len());
     let refs: Vec<&Path> = per_rg_vcfs.iter().map(|p| p.as_path()).collect();
-    sdrecall_io::concat_sort_vcfs(&refs, &paths.recall_raw_vcf_path(), true, clamp_threads_u8(threads))?;
+    sdrecall_io::concat_sort_vcfs(
+        &refs,
+        &paths.recall_raw_vcf_path(),
+        true,
+        clamp_threads_u8(threads),
+    )?;
     log::info!("[concat] raw VCF → {:?}", paths.recall_raw_vcf_path());
     Ok(())
 }
@@ -427,14 +598,14 @@ fn eliminate_misalignments(
         paths.sample_id
     );
 
-    // Pre-filter intrinsic BAM to target regions.
-    let target_bed = paths.target_bed.as_deref().ok_or_else(|| {
-        SdError::Compute("target_bed required for fp-control".into())
-    })?;
+    // Python feeds fp-control with the multi-align BED, not the user target BED.
+    let target_bed = paths.multi_align_bed_path();
+    let total_intrinsic_bam =
+        filter_redundant_intrinsic_origins(&paths.total_intrinsic_bam_path(), threads)?;
     let filtered_intrin = paths.tmp_dir.join("intrinsic.filtered.bam");
     crate::tools::samtools_view_region(
-        &paths.total_intrinsic_bam_path(),
-        target_bed,
+        &total_intrinsic_bam,
+        &target_bed,
         &filtered_intrin,
         threads,
     )?;
@@ -447,7 +618,7 @@ fn eliminate_misalignments(
     let islands = crate::island::split_bams_into_islands(
         &deduped,
         &filtered_intrin,
-        target_bed,
+        &target_bed,
         &chrom_sizes,
         threads,
         &paths.tmp_dir.join("islands"),
@@ -460,12 +631,14 @@ fn eliminate_misalignments(
             path: paths.pooled_filtered_bam_path().display().to_string(),
             source: e,
         })?;
-        std::fs::copy(paths.recall_raw_vcf_path(), paths.recall_filtered_vcf_path()).map_err(
-            |e| SdError::Io {
-                path: paths.recall_filtered_vcf_path().display().to_string(),
-                source: e,
-            },
-        )?;
+        std::fs::copy(
+            paths.recall_raw_vcf_path(),
+            paths.recall_filtered_vcf_path(),
+        )
+        .map_err(|e| SdError::Io {
+            path: paths.recall_filtered_vcf_path().display().to_string(),
+            source: e,
+        })?;
         return Ok(());
     }
 
@@ -488,13 +661,151 @@ fn eliminate_misalignments(
     Ok(())
 }
 
+#[derive(Clone, Debug)]
+struct IntrinsicOrigin {
+    chrom: String,
+    start: i64,
+    end: i64,
+}
+
+fn filter_redundant_intrinsic_origins(intrinsic_bam: &Path, threads: usize) -> Result<PathBuf> {
+    let mut reader = bam::Reader::from_path(intrinsic_bam).map_err(hts_err)?;
+    if threads > 1 {
+        reader.set_threads(threads - 1).map_err(hts_err)?;
+    }
+
+    let mut origins: HashMap<String, IntrinsicOrigin> = HashMap::new();
+    for result in reader.records() {
+        let record = result.map_err(hts_err)?;
+        let qname = String::from_utf8_lossy(record.qname()).to_string();
+        if origins.contains_key(&qname) {
+            continue;
+        }
+        if let Some(origin) = parse_intrinsic_origin(&qname) {
+            origins.insert(qname, origin);
+        }
+    }
+
+    if origins.is_empty() {
+        log::warn!(
+            "[fp-control] no intrinsic origin intervals parsed from {}",
+            intrinsic_bam.display()
+        );
+        return Ok(intrinsic_bam.to_path_buf());
+    }
+
+    let removable = redundant_origin_qnames(&origins);
+    if removable.is_empty() {
+        log::info!(
+            "[fp-control] intrinsic origin filtering: {} unique origins, none redundant",
+            origins.len()
+        );
+        return Ok(intrinsic_bam.to_path_buf());
+    }
+
+    let filtered_bam = intrinsic_bam.with_extension("filtered.bam");
+    let unsorted_bam = filtered_bam.with_extension("unsorted.bam");
+
+    let mut reader = bam::Reader::from_path(intrinsic_bam).map_err(hts_err)?;
+    if threads > 1 {
+        reader.set_threads(threads - 1).map_err(hts_err)?;
+    }
+    let header = bam::Header::from_template(reader.header());
+    let mut writer =
+        bam::Writer::from_path(&unsorted_bam, &header, bam::Format::Bam).map_err(hts_err)?;
+    if threads > 1 {
+        writer.set_threads(threads - 1).map_err(hts_err)?;
+    }
+
+    let mut kept = 0usize;
+    let mut removed = 0usize;
+    for result in reader.records() {
+        let record = result.map_err(hts_err)?;
+        let qname = String::from_utf8_lossy(record.qname());
+        if removable.contains(qname.as_ref()) {
+            removed += 1;
+        } else {
+            writer.write(&record).map_err(hts_err)?;
+            kept += 1;
+        }
+    }
+    drop(writer);
+
+    crate::tools::samtools_sort_index(&unsorted_bam, &filtered_bam, threads)?;
+    let _ = std::fs::remove_file(&unsorted_bam);
+    log::info!(
+        "[fp-control] intrinsic origin filtering: {} unique origins -> {} kept, {} removed; alignments kept={}, removed={}",
+        origins.len(),
+        origins.len() - removable.len(),
+        removable.len(),
+        kept,
+        removed
+    );
+
+    Ok(filtered_bam)
+}
+
+fn parse_intrinsic_origin(qname: &str) -> Option<IntrinsicOrigin> {
+    let (chrom, rest) = qname.split_once(':')?;
+    if chrom.is_empty()
+        || !chrom
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    {
+        return None;
+    }
+    let (start, end) = rest.split_once('-')?;
+    let start = start.parse::<i64>().ok()?;
+    let end = end.parse::<i64>().ok()?;
+    Some(IntrinsicOrigin {
+        chrom: chrom.to_string(),
+        start,
+        end,
+    })
+}
+
+fn redundant_origin_qnames(origins: &HashMap<String, IntrinsicOrigin>) -> HashSet<String> {
+    let mut by_chrom: HashMap<&str, Vec<(i64, i64, &str)>> = HashMap::new();
+    for (qname, origin) in origins {
+        by_chrom
+            .entry(&origin.chrom)
+            .or_default()
+            .push((origin.start, origin.end, qname));
+    }
+
+    let mut removable = HashSet::new();
+    for intervals in by_chrom.values_mut() {
+        intervals.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
+        let mut max_end = -1i64;
+        let mut max_qname: Option<&str> = None;
+        for &(start, end, qname) in intervals.iter() {
+            if end <= start {
+                continue;
+            }
+            if let Some(container) = max_qname {
+                if end <= max_end && container != qname {
+                    removable.insert(qname.to_string());
+                }
+            }
+            if end > max_end {
+                max_end = end;
+                max_qname = Some(qname);
+            }
+        }
+    }
+    removable
+}
+
 /// One island's terminal outcome in the rayon fan-out.
 enum IslandOutcome {
     Done(PathBuf, PathBuf),
     /// `≤2` haplotypes — a legitimate non-result (not a failure), stays non-fatal.
     Skipped,
     /// Errored or panicked — recorded so the policy below can surface it.
-    Failed { id: String, reason: String },
+    Failed {
+        id: String,
+        reason: String,
+    },
 }
 
 fn fp_control_per_island(
@@ -637,6 +948,7 @@ fn process_one_island(
     let params = fp_control::FpControlParams {
         reference_genome: ref_genome.to_string(),
         mapq_cutoff: mq_cutoff,
+        basequal_median_cutoff: 15,
         threads: clamp_threads_u8(threads),
         ..Default::default()
     };
@@ -647,30 +959,57 @@ fn process_one_island(
         return Ok(None);
     };
 
-    // Filter BAM to keep only correct reads.
-    let correct_set: HashSet<String> = output.correct_qnames.into_iter().collect();
-    let clean_bam = island.raw_bam.with_extension("clean.bam");
-    crate::bam_filter::filter_bam_by_qnames(
+    let correct_set: HashSet<String> = output.correct_qnames.iter().cloned().collect();
+    let mismap_set: HashSet<String> = output.mismap_qnames.iter().cloned().collect();
+    let lowqual_set: HashSet<String> = output.lowqual_qnames.iter().cloned().collect();
+    let qname_hap = output.qname_hap.clone();
+
+    // Replace the island raw BAM with HP-tagged primary alignments for parity
+    // with Python's visualization path, then derive the clean BAM from it.
+    crate::bam_filter::annotate_hp_tags(
         &island.raw_bam,
         &correct_set,
-        &clean_bam,
+        &mismap_set,
+        &lowqual_set,
+        &qname_hap,
+        &island.raw_bam,
+        island.id,
         threads,
     )?;
 
-    // Variant-call on the clean BAM.
-    let clean_vcf = clean_bam.with_extension("vcf.gz");
-    crate::tools::bcftools_call(
+    // Filter BAM to keep only correct, primary, non-duplicate, non-QC-fail reads.
+    let clean_bam = island.raw_bam.with_extension("clean.bam");
+    let clean_alignments = crate::bam_filter::filter_bam_by_qnames(
+        &island.raw_bam,
+        &correct_set,
+        &lowqual_set,
+        &qname_hap,
         &clean_bam,
-        Path::new(ref_genome),
-        &clean_vcf,
+        island.id,
         threads,
     )?;
+    if clean_alignments == 0 {
+        log::warn!(
+            "[fp-control] island {} produced an empty clean BAM after Python-policy filtering",
+            island.id
+        );
+        return Ok(None);
+    }
+
+    // Variant-call on the clean BAM, then annotate clean variants with HP support.
+    let clean_vcf = clean_bam.with_extension("vcf.gz");
+    let unannotated_vcf = clean_bam.with_extension("unannotated.vcf.gz");
+    crate::tools::bcftools_call(&clean_bam, Path::new(ref_genome), &unannotated_vcf, threads)?;
+    crate::vcf_hp::annotate_vcf_hp(&unannotated_vcf, &clean_vcf, &clean_bam, threads)?;
+    let _ = std::fs::remove_file(&unannotated_vcf);
+    let _ = std::fs::remove_file(format!("{}.csi", unannotated_vcf.display()));
+    let _ = std::fs::remove_file(format!("{}.tbi", unannotated_vcf.display()));
 
     log::info!(
         "[fp-control] island {} done: {} correct, {} mismap",
         island.id,
         correct_set.len(),
-        output.mismap_qnames.len()
+        mismap_set.len()
     );
 
     Ok(Some((clean_bam, clean_vcf)))
@@ -698,7 +1037,12 @@ fn merge_island_outputs(
     crate::tools::samtools_merge(&bam_refs, &paths.pooled_filtered_bam_path(), threads)?;
 
     let vcf_refs: Vec<&Path> = clean_vcfs.iter().map(|p| p.as_path()).collect();
-    sdrecall_io::concat_sort_vcfs(&vcf_refs, &paths.recall_filtered_vcf_path(), true, clamp_threads_u8(threads))?;
+    sdrecall_io::concat_sort_vcfs(
+        &vcf_refs,
+        &paths.recall_filtered_vcf_path(),
+        true,
+        clamp_threads_u8(threads),
+    )?;
 
     Ok(())
 }
@@ -732,7 +1076,10 @@ fn merge_and_subset_final_vcf(paths: &Paths, threads: usize) -> Result<()> {
         threads,
     )?;
 
-    log::info!("[merge-final] final VCF → {:?}", paths.final_recall_vcf_path());
+    log::info!(
+        "[merge-final] final VCF → {:?}",
+        paths.final_recall_vcf_path()
+    );
     Ok(())
 }
 
@@ -770,17 +1117,13 @@ fn post_process_vcf(
 
     if let Some(conventional_vcf) = &conventional.conventional_vcf {
         log::info!("[post] merging with conventional VCF {conventional_vcf:?}");
-        let merged = conventional
-            .merged_vcf
-            .clone()
-            .unwrap_or_else(|| {
-                let stem = conventional_vcf
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy();
-                conventional_vcf
-                    .with_file_name(format!("{stem}.sdrecall_merged.vcf.gz"))
-            });
+        let merged = conventional.merged_vcf.clone().unwrap_or_else(|| {
+            let stem = conventional_vcf
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            conventional_vcf.with_file_name(format!("{stem}.sdrecall_merged.vcf.gz"))
+        });
 
         vcf_ops::merge_with_priority(vcf_ops::MergeParams {
             query_vcf: &final_vcf,
@@ -825,6 +1168,10 @@ fn load_chrom_sizes(fai: &Path) -> Result<ahash::AHashMap<String, i64>> {
         }
     }
     Ok(sizes)
+}
+
+fn hts_err(e: impl std::fmt::Display) -> SdError {
+    SdError::Htslib(e.to_string())
 }
 
 #[cfg(test)]

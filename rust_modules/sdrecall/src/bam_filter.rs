@@ -4,50 +4,64 @@
 //! Replaces the Python filtering loop in
 //! `fp_control/realign_filter_per_cov.py:375-437`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use rust_htslib::{bam, bam::Read, bam::record::Aux};
+use rust_htslib::{bam, bam::record::Aux, bam::Read};
 use sdrecall_utils::{Result, SdError};
 
-/// Write a new BAM containing only read pairs whose qname is in
-/// `keep_qnames`. Optionally annotates each read with an `HP` aux tag.
+const CLEAN_MIN_MAPQ: u8 = 10;
+
+/// Write a new BAM containing only primary mapped reads whose qname is in
+/// `keep_qnames`, excluding Python's duplicate/QC-fail/secondary/supplementary
+/// cases. Each retained read is annotated with its fp-control HP tag.
 ///
-/// The output BAM is coordinate-sorted and indexed (via samtools index
-/// subprocess, since rust-htslib doesn't expose a BAM indexer).
+/// The output BAM is coordinate-sorted and indexed. The returned count is the
+/// number of alignments written before sorting.
 pub fn filter_bam_by_qnames(
     input_bam: &Path,
     keep_qnames: &HashSet<String>,
+    lowqual_qnames: &HashSet<String>,
+    qname_hap: &HashMap<String, i32>,
     output_bam: &Path,
+    chunk_id: usize,
     threads: usize,
-) -> Result<()> {
+) -> Result<usize> {
     let mut reader = bam::Reader::from_path(input_bam).map_err(hts_err)?;
     if threads > 1 {
         reader.set_threads(threads - 1).map_err(hts_err)?;
     }
     let header = bam::Header::from_template(reader.header());
 
+    let unsorted_bam = temp_bam_path(output_bam, "clean.unsorted");
     let mut writer =
-        bam::Writer::from_path(output_bam, &header, bam::Format::Bam).map_err(hts_err)?;
+        bam::Writer::from_path(&unsorted_bam, &header, bam::Format::Bam).map_err(hts_err)?;
     if threads > 1 {
         writer.set_threads(threads - 1).map_err(hts_err)?;
     }
 
+    let mut written = 0usize;
     for result in reader.records() {
-        let record = result.map_err(hts_err)?;
-        let qname = std::str::from_utf8(record.qname()).unwrap_or("");
-        if keep_qnames.contains(qname) {
+        let mut record = result.map_err(hts_err)?;
+        let qname = std::str::from_utf8(record.qname())
+            .unwrap_or("")
+            .to_string();
+        if keep_qnames.contains(&qname)
+            && !lowqual_qnames.contains(qname.as_str())
+            && passes_python_clean_policy(&record)
+        {
+            set_hp_tag(&mut record, &clean_hp_tag(&qname, qname_hap, chunk_id))?;
             writer.write(&record).map_err(hts_err)?;
+            written += 1;
         }
     }
 
     drop(writer);
 
-    // Sort + index the output (filtering may have disordered records from
-    // supplementary alignments at different positions).
-    crate::tools::samtools_index(output_bam, threads)?;
+    crate::tools::samtools_sort_index(&unsorted_bam, output_bam, threads)?;
+    let _ = std::fs::remove_file(&unsorted_bam);
 
-    Ok(())
+    Ok(written)
 }
 
 /// Write a new BAM with HP (haplotype) tag annotations for visualization.
@@ -59,47 +73,107 @@ pub fn annotate_hp_tags(
     input_bam: &Path,
     correct_qnames: &HashSet<String>,
     mismap_qnames: &HashSet<String>,
+    lowqual_qnames: &HashSet<String>,
+    qname_hap: &HashMap<String, i32>,
     output_bam: &Path,
     chunk_id: usize,
     threads: usize,
-) -> Result<()> {
+) -> Result<usize> {
     let mut reader = bam::Reader::from_path(input_bam).map_err(hts_err)?;
     if threads > 1 {
         reader.set_threads(threads - 1).map_err(hts_err)?;
     }
     let header = bam::Header::from_template(reader.header());
 
+    let unsorted_bam = temp_bam_path(output_bam, "hp.unsorted");
     let mut writer =
-        bam::Writer::from_path(output_bam, &header, bam::Format::Bam).map_err(hts_err)?;
+        bam::Writer::from_path(&unsorted_bam, &header, bam::Format::Bam).map_err(hts_err)?;
     if threads > 1 {
         writer.set_threads(threads - 1).map_err(hts_err)?;
     }
 
+    let mut written = 0usize;
     for result in reader.records() {
         let mut record = result.map_err(hts_err)?;
-        let qname = std::str::from_utf8(record.qname()).unwrap_or("").to_string();
+        if record.is_secondary() || record.is_supplementary() {
+            continue;
+        }
+        let qname = std::str::from_utf8(record.qname())
+            .unwrap_or("")
+            .to_string();
 
-        let hp_tag = if correct_qnames.contains(&qname) {
-            format!("chunk{chunk_id}_correct")
-        } else if mismap_qnames.contains(&qname) {
-            format!("chunk{chunk_id}_HIGHVD")
-        } else {
-            "LOWQUAL".to_string()
-        };
-
-        // push_aux returns BamAuxTagAlreadyPresent on a duplicate tag; drop any
-        // existing HP first (remove_aux errs only when absent -> ignored) so
-        // pre-tagged input doesn't abort the whole BAM.
-        let _ = record.remove_aux(b"HP");
-        record.push_aux(b"HP", Aux::String(&hp_tag)).map_err(hts_err)?;
+        let hp_tag = raw_hp_tag(
+            &qname,
+            correct_qnames,
+            mismap_qnames,
+            lowqual_qnames,
+            qname_hap,
+            chunk_id,
+        );
+        set_hp_tag(&mut record, &hp_tag)?;
         writer.write(&record).map_err(hts_err)?;
+        written += 1;
     }
 
-    Ok(())
+    drop(writer);
+    crate::tools::samtools_sort_index(&unsorted_bam, output_bam, threads)?;
+    let _ = std::fs::remove_file(&unsorted_bam);
+    Ok(written)
 }
 
 fn hts_err(e: impl std::fmt::Display) -> SdError {
     SdError::Htslib(e.to_string())
+}
+
+fn passes_python_clean_policy(record: &bam::Record) -> bool {
+    !record.is_secondary()
+        && !record.is_supplementary()
+        && !record.is_duplicate()
+        && !record.is_quality_check_failed()
+        && !record.is_unmapped()
+        && record.mapq() > CLEAN_MIN_MAPQ
+}
+
+fn set_hp_tag(record: &mut bam::Record, hp_tag: &str) -> Result<()> {
+    let _ = record.remove_aux(b"HP");
+    record
+        .push_aux(b"HP", Aux::String(hp_tag))
+        .map_err(hts_err)?;
+    Ok(())
+}
+
+fn clean_hp_tag(qname: &str, qname_hap: &HashMap<String, i32>, chunk_id: usize) -> String {
+    match qname_hap.get(qname) {
+        Some(hap_id) => format!("chunk{chunk_id}_{hap_id}"),
+        None => format!("chunk{chunk_id}_NA"),
+    }
+}
+
+fn raw_hp_tag(
+    qname: &str,
+    correct_qnames: &HashSet<String>,
+    mismap_qnames: &HashSet<String>,
+    lowqual_qnames: &HashSet<String>,
+    qname_hap: &HashMap<String, i32>,
+    chunk_id: usize,
+) -> String {
+    if lowqual_qnames.contains(qname) {
+        return format!("chunk{chunk_id}_LOWQUAL");
+    }
+    let base = clean_hp_tag(qname, qname_hap, chunk_id);
+    if mismap_qnames.contains(qname) || !correct_qnames.contains(qname) {
+        format!("{base}_HIGHVD")
+    } else {
+        base
+    }
+}
+
+fn temp_bam_path(target: &Path, suffix: &str) -> std::path::PathBuf {
+    let name = target
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output.bam");
+    target.with_file_name(format!("{}.{}.{}.bam", name, std::process::id(), suffix))
 }
 
 #[cfg(test)]
@@ -113,10 +187,15 @@ mod tests {
     #[test]
     fn missing_bam_returns_error() {
         let qs: HashSet<String> = HashSet::new();
+        let lowqual: HashSet<String> = HashSet::new();
+        let qname_hap: HashMap<String, i32> = HashMap::new();
         let r = filter_bam_by_qnames(
             Path::new("/nonexistent.bam"),
             &qs,
+            &lowqual,
+            &qname_hap,
             Path::new("/tmp/out.bam"),
+            1,
             1,
         );
         assert!(r.is_err());
