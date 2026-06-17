@@ -297,6 +297,7 @@ fn realign_per_rg(
 
     let input_bam_str = paths.input_bam.to_string_lossy().to_string();
     let ref_genome = paths.ref_genome.clone();
+    let sample_id = paths.sample_id.clone();
     let tpj = budget.threads_per_job;
 
     let results: Vec<Result<(PathBuf, PathBuf)>> = pool.install(|| {
@@ -350,7 +351,14 @@ fn realign_per_rg(
                 // 3b: minimap2 realign onto the masked genome (contigs `{chrom}:{start}`)
                 // → an intermediate LOCAL-coordinate BAM.
                 let local_bam = raw_bam.with_extension("local.bam");
-                crate::tools::minimap2_align(&r1, &r2, &masked_genome, &local_bam, tpj)?;
+                crate::tools::minimap2_align(
+                    &r1,
+                    &r2,
+                    &masked_genome,
+                    &sample_id,
+                    &local_bam,
+                    tpj,
+                )?;
 
                 // 3b': remap masked(local) → ORIGINAL-genome coordinates (port of
                 // shell_utils.sh independent_minimap2_masked's modify_bam_sq_lines +

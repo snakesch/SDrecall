@@ -17,27 +17,36 @@ use sdrecall_utils::{Result, SdError};
 
 // ─────────────────────────── minimap2 ────────────────────────────────────
 
-/// Align paired FASTQ files against a reference using minimap2 with `--eqx`
-/// (=X CIGAR ops required by the haplotype-inspection encoding).
+/// Align paired FASTQ files against a masked reference using Python's minimap2
+/// short-read command line.
 ///
 /// Mirrors `shell_utils.sh::independent_minimap2_masked` with the SDrecall
-/// preset (`-a --eqx --secondary=no -t N`). Output is a coordinate-sorted,
-/// indexed BAM.
+/// preset (`-ax sr --eqx --MD -F 1000 --end-bonus 10 -R ...`). Output is a
+/// coordinate-sorted, indexed BAM.
 pub fn minimap2_align(
     r1: &Path,
     r2: &Path,
     reference: &Path,
+    sample_id: &str,
     output_bam: &Path,
     threads: usize,
 ) -> Result<()> {
     let t = threads.to_string();
+    let mmi = reference.with_extension("mmi");
+    let tmp_mmi = mmi.with_extension(format!("mmi.tmp.{}", std::process::id()));
+    let rg = format!("@RG\tID:{sample_id}\tLB:SureSelectXT\tPL:ILLUMINA\tPU:1064\tSM:{sample_id}");
     let script = format!(
         "set -o pipefail; \
-         minimap2 -a --eqx --secondary=no -t {t} {ref_} {r1} {r2} \
+         minimap2 -x sr -d {tmp_mmi} {ref_} && \
+         mv -f {tmp_mmi} {mmi} && \
+         minimap2 -ax sr --eqx --MD -F 1000 --end-bonus 10 -t {t} -R {rg} {mmi} {r1} {r2} \
            | samtools sort -@ {t} -o {out} - && \
          samtools index -@ {t} {out}",
         t = t,
         ref_ = sq(reference),
+        mmi = sq(&mmi),
+        tmp_mmi = sq(&tmp_mmi),
+        rg = shquote(&rg),
         r1 = sq(r1),
         r2 = sq(r2),
         out = sq(output_bam),
@@ -268,6 +277,10 @@ pub(crate) fn run_bash(script: &str, label: &str) -> Result<()> {
 /// Minimal single-quote shell escaping for a path.
 pub(crate) fn sq(p: &Path) -> String {
     let s = p.to_string_lossy();
+    shquote(&s)
+}
+
+fn shquote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
