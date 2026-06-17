@@ -60,7 +60,7 @@ impl Default for PhaserParams {
             edge_weight_cutoff: 0.301,
             mean_read_length: 148.0,
             mapq_cutoff: 10,
-            basequal_median_cutoff: 10,
+            basequal_median_cutoff: 15,
             threads: 4,
         }
     }

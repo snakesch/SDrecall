@@ -48,7 +48,7 @@ struct Args {
     mapq_cutoff: u8,
 
     /// Minimum median base quality.
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = 15)]
     basequal_median_cutoff: u8,
 
     /// htslib / samtools thread budget.

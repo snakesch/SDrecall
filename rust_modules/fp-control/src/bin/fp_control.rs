@@ -52,7 +52,7 @@ struct Cli {
     mapq_cutoff: u8,
 
     /// Median base-quality floor.
-    #[arg(long, default_value_t = 10)]
+    #[arg(long, default_value_t = 15)]
     basequal_median_cutoff: u8,
 
     /// htslib / collate threads.

@@ -75,7 +75,7 @@ impl Default for FpControlParams {
             edge_weight_cutoff: 0.301,
             mean_read_length: 148.0,
             mapq_cutoff: 10,
-            basequal_median_cutoff: 10,
+            basequal_median_cutoff: 15,
             threads: 4,
             compare_haplotype_meta_tab: String::new(),
         }
@@ -87,16 +87,26 @@ impl Default for FpControlParams {
 pub struct FpControlOutput {
     pub correct_qnames: Vec<String>,
     pub mismap_qnames: Vec<String>,
+    pub lowqual_qnames: Vec<String>,
+    pub qname_hap: HashMap<String, i32>,
 }
 
 impl FpControlOutput {
     /// Sorted for stable output / comparison (the underlying sets are unordered).
-    fn from_sets(correct: HashSet<String>, mismap: HashSet<String>) -> Self {
+    fn from_sets(
+        correct: HashSet<String>,
+        mismap: HashSet<String>,
+        lowqual: HashSet<String>,
+        partition: &Partition,
+    ) -> Self {
         let mut correct_qnames: Vec<String> = correct.into_iter().collect();
         let mut mismap_qnames: Vec<String> = mismap.into_iter().collect();
+        let mut lowqual_qnames: Vec<String> = lowqual.into_iter().collect();
         correct_qnames.sort();
         mismap_qnames.sort();
-        Self { correct_qnames, mismap_qnames }
+        lowqual_qnames.sort();
+        let qname_hap = qname_hap_by_qname(partition);
+        Self { correct_qnames, mismap_qnames, lowqual_qnames, qname_hap }
     }
 }
 
@@ -136,6 +146,16 @@ fn build_partition(vertex_hap: &HashMap<i32, i32>, vertex_qname: &[String]) -> P
         qname_hap_info: vertex_hap.clone(),
         qname_to_node,
     }
+}
+
+fn qname_hap_by_qname(partition: &Partition) -> HashMap<String, i32> {
+    let mut out = HashMap::new();
+    for (qname, node) in &partition.qname_to_node {
+        if let Some(hap_id) = partition.qname_hap_info.get(node) {
+            out.insert(qname.clone(), *hap_id);
+        }
+    }
+    out
 }
 
 /// Run the fused Phase-2c FP-control core entirely in Rust.
@@ -212,7 +232,12 @@ pub fn run_fp_control(
             partition.hap_qname_info.len(),
             correct.len()
         );
-        return Ok(Some(FpControlOutput::from_sets(correct, HashSet::new())));
+        return Ok(Some(FpControlOutput::from_sets(
+            correct,
+            HashSet::new(),
+            phased.lowqual_qnames,
+            &partition,
+        )));
     }
 
     // ── Stage 3: haplotype inspection (consensus / similarity / BILC) ───────
@@ -243,7 +268,7 @@ pub fn run_fp_control(
         mismap.len()
     );
 
-    Ok(Some(FpControlOutput::from_sets(correct, mismap)))
+    Ok(Some(FpControlOutput::from_sets(correct, mismap, lowqual, &partition)))
 }
 
 
@@ -289,8 +314,10 @@ mod tests {
             .values()
             .flat_map(|qs| qs.iter().cloned())
             .collect();
-        let out = FpControlOutput::from_sets(correct, HashSet::new());
+        let out = FpControlOutput::from_sets(correct, HashSet::new(), HashSet::new(), &p);
         assert_eq!(out.correct_qnames, vec!["qA".to_string(), "qB".to_string()]);
         assert!(out.mismap_qnames.is_empty());
+        assert_eq!(out.qname_hap["qA"], 0);
+        assert_eq!(out.qname_hap["qB"], 1);
     }
 }

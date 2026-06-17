@@ -19,7 +19,7 @@ use crate::identify_misaligned_haps::inspect_haplotypes;
     compare_haplotype_meta_tab = "",
     mean_read_length = 148.0,
     recall_mq_cutoff = 20,
-    basequal_median_cutoff = 10
+    basequal_median_cutoff = 15
 ))]
 pub fn inspect_haplotypes_rust(
     _py: Python,
