@@ -23,3 +23,7 @@ CLAUDE.md
 progress.md
 .claude/
 docs/
+
+# Large reference-data inputs (BISER/WGAC SD maps, target BEDs): ~1.7 GB, with
+# files exceeding GitHub's 100 MB limit. Downloaded/regenerated, not source.
+data/
