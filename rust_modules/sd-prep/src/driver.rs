@@ -640,11 +640,12 @@ fn establish_rg(
         1000,
     )?;
 
-    // intrinsic BAM.
+    // intrinsic BAM (remapped to genomic coords inside, with `label` as the RG tag).
     crate::intrinsic::intrinsic_bam(
         &all_merged,
         &masked_genome,
         &paths.ref_genome,
+        label,
         &intrinsic_bam,
     )?;
 
@@ -763,7 +764,9 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
     }
 
     // total intrinsic BAM (samtools merge/sort/index — leaf subprocess).
-    let total_intrinsic_bam = paths.realign_dir().join("total_intrinsic_alignments.bam");
+    // Bug A: written to `work_dir/total_intrinsic_alignments.bam` (sdrecall paths.rs:259,
+    // const.py:428) — NOT under `realign_groups/`, where the orchestrator can't find it.
+    let total_intrinsic_bam = paths.work_dir.join("total_intrinsic_alignments.bam");
     if !outputs.is_empty() {
         let inputs: Vec<&Path> = outputs.iter().map(|o| o.intrinsic_bam.as_path()).collect();
         crate::intrinsic::merge_total_intrinsic_bam(&inputs, &total_intrinsic_bam)?;

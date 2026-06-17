@@ -82,16 +82,25 @@ fn get_raw_seqs(
 ///
 /// Extracts counterpart sequences ([`get_raw_seqs`]), maps them against the masked
 /// genome with minimap2 `asm20` (via the minimap2-rs htslib bridge → BAM Records),
-/// writes a coordinate-sorted BAM, then applies [`filter_intrinsic_alignments`].
-/// Returns the path to the filtered, indexed intrinsic BAM (`intrinsic_bam`).
+/// then **remaps the masked-genome (`{chrom}:{start}`, local) alignments back to
+/// original-genome coordinates** ([`sdrecall_io::remap_masked_bam_to_genomic`]) and
+/// finally applies [`filter_intrinsic_alignments`]. This mirrors Python's
+/// `getIntrinsicBam`, which runs the remap *inside* `independent_minimap2_masked`
+/// (shell_utils.sh l.472-479) **before** `filter_intrinsic_alignments` — so the
+/// self-location check (`start == reference_start + 1`) runs against genomic
+/// coordinates (in local coordinates it could never fire). The remap also drops
+/// `FLAG ≥ 256` (Python's `$2 < 256`), so the filter — like Python — sees a
+/// primary-only BAM. Returns the path to the filtered, indexed intrinsic BAM.
 ///
 /// `all_homo_regions` are the counterpart + query regions (the `*_related_homo`
 /// BED); `masked_genome` is the RG's masked FASTA (its `.fai` must exist);
-/// `ref_fa` is the reference for sequence extraction.
+/// `ref_fa` is the reference for sequence extraction + the remap @SQ dictionary;
+/// `rg_tag` is the RG label appended to each remapped QNAME (e.g. `RG0`).
 pub fn intrinsic_bam(
     all_homo_regions: &[GenomicInterval],
     masked_genome: &Path,
     ref_fa: &Path,
+    rg_tag: &str,
     intrinsic_bam: &Path,
 ) -> Result<()> {
     let queries = get_raw_seqs(all_homo_regions, ref_fa)?;
@@ -140,12 +149,19 @@ pub fn intrinsic_bam(
         }
     }
 
-    // Coordinate-sort + index via samtools (the sanctioned leaf subprocess — BAM
-    // sort is NOT re-implemented).
-    samtools_sort(Path::new(&unsorted), intrinsic_bam)?;
+    // Remap masked(local `{chrom}:{start}`) → original-genome coordinates, drop
+    // FLAG ≥ 256, append the `:rg_tag` QNAME suffix, then coordinate-sort + index
+    // (Python's `independent_minimap2_masked`). This must precede the filter so its
+    // self-location check runs in genomic coordinates (matching `getIntrinsicBam`).
+    sdrecall_io::remap_masked_bam_to_genomic(
+        Path::new(&unsorted),
+        ref_fa,
+        rg_tag,
+        intrinsic_bam,
+    )?;
     let _ = std::fs::remove_file(&unsorted);
 
-    // Filter self-location + enclosed/duplicate intervals + secondary→primary.
+    // Filter self-location + enclosed/duplicate intervals (genomic, primary-only).
     filter_intrinsic_alignments(intrinsic_bam)?;
     samtools_index(intrinsic_bam)?;
     Ok(())
