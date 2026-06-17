@@ -23,7 +23,7 @@ use rustc_hash::FxHashMap;
 use sdrecall_utils::{QnameIdx, Result, SdError};
 #[cfg(unix)]
 use std::os::unix::io::AsRawFd;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use tempfile::NamedTempFile;
 
@@ -574,6 +574,244 @@ pub fn merge_bams(_inputs: &[&Path], _out: &Path, _ref_fasta: &Path, _threads: u
     ))
 }
 
+/// Remap a BAM aligned to a per-RG **masked** genome (contigs named `{chrom}:{start}`,
+/// local coordinates) back to **original-genome** coordinates — the in-process port
+/// of `shell_utils.sh::modify_bam_sq_lines` + `modify_masked_genome_coords`
+/// (l.350-412), the remap `independent_minimap2_masked` (l.472-479) applies right
+/// after minimap2 (used by both `realign_per_RG.py` and `preparation/getIntrinsicBam`).
+///
+/// Per record, **keeping only `FLAG < 256`** (Python's final `$2 < 256` — drops
+/// secondary `0x100`, qcfail `0x200`, dup `0x400`, supplementary `0x800`):
+/// - **RNAME** `{chrom}:{offset}` → `chrom`; **POS** → `POS + offset` (offset is the
+///   0-based contig start parsed from the name; rust-htslib `pos()` is 0-based, so
+///   `new_pos = rec.pos() + offset`).
+/// - **mate** (`mtid`/`mpos`): the same uniform remap. rust-htslib resolves the SAM
+///   `=` RNEXT to the mate's tid, so a same-contig mate picks up the same offset
+///   (Python's `$7 == "="` branch) and a different-contig mate is split like Python's
+///   `else` branch. **TLEN/insert_size is left unchanged** (Python keeps `$9`).
+/// - **QNAME** → `{qname}:{rg_tag}` (the RG label, e.g. `RG0`).
+/// - **unmapped** records (tid `< 0`, RNAME `*`) keep tid `-1` and POS unchanged
+///   (Python `split("*", ":")` → empty offset → `$4 + 0`); an unmapped read *placed*
+///   at its mate's local contig (tid `>= 0`) is remapped like any other record.
+///
+/// The output **header** replaces the masked `@SQ` block with the original reference
+/// `@SQ` lines (from `{ref}.fai`, in `.fai` order — running `samtools faidx` if the
+/// index is missing) and **drops `@SQ`/`@PG`**, keeping every other header line
+/// (`@HD`/`@RG`/`@CO`) verbatim — exactly Python's
+/// `samtools view -H | grep -v @SQ | grep -v @PG` + `generate_sq_lines`. Records are
+/// written unsorted, then coordinate-sorted + indexed via `samtools` (the sanctioned
+/// leaf subprocess — BAM sort is not re-implemented, matching `sd-prep/intrinsic.rs`).
+///
+/// `ref_fai_or_fasta` may be the reference FASTA (its `.fai` is derived) or the
+/// `.fai` directly.
+pub fn remap_masked_bam_to_genomic(
+    masked_bam: &Path,
+    ref_fai_or_fasta: &Path,
+    rg_tag: &str,
+    out_bam: &Path,
+) -> Result<()> {
+    // ── reference @SQ dictionary (genomic contigs, in .fai order) ─────────────
+    let fai = resolve_or_build_fai(ref_fai_or_fasta)?;
+    let sq = read_fai_sq(&fai)?;
+    if sq.is_empty() {
+        return Err(SdError::Compute(format!(
+            "remap_masked_bam_to_genomic: reference index {} has no contigs",
+            fai.display()
+        )));
+    }
+    // chrom → new (genomic) tid, matching the @SQ order emitted below.
+    let mut genomic_tid: AHashMap<String, i32> = AHashMap::with_capacity(sq.len());
+    for (i, (name, _len)) in sq.iter().enumerate() {
+        genomic_tid.insert(name.clone(), i as i32);
+    }
+
+    // ── reader + the LOCAL header (resolves each record's masked contig name) ──
+    let mut reader = bam::Reader::from_path(masked_bam)
+        .map_err(|e| SdError::Htslib(format!("open {}: {e}", masked_bam.display())))?;
+    let local_view = reader.header().clone();
+
+    // ── build the genomic header text (keep non-@SQ/@PG lines, append ref @SQ) ─
+    let mut header_text = String::new();
+    let local_text = String::from_utf8_lossy(local_view.as_bytes());
+    for line in local_text.split('\n') {
+        if line.is_empty() || line.starts_with("@SQ") || line.starts_with("@PG") {
+            continue;
+        }
+        header_text.push_str(line);
+        header_text.push('\n');
+    }
+    for (name, len) in &sq {
+        header_text.push_str("@SQ\tSN:");
+        header_text.push_str(name);
+        header_text.push_str("\tLN:");
+        header_text.push_str(len);
+        header_text.push('\n');
+    }
+    let out_view = HeaderView::from_bytes(header_text.as_bytes());
+    let out_header = bam::Header::from_template(&out_view);
+
+    // ── remap + filter records → unsorted BAM ─────────────────────────────────
+    let unsorted = format!("{}.remap.unsorted.bam", out_bam.display());
+    {
+        let mut writer = bam::Writer::from_path(&unsorted, &out_header, bam::Format::Bam)
+            .map_err(|e| SdError::Htslib(format!("open {unsorted}: {e}")))?;
+        let mut rec = Record::new();
+        while let Some(res) = reader.read(&mut rec) {
+            res.map_err(|e| SdError::Htslib(format!("read record: {e}")))?;
+            // Python's `$2 < 256`: keep primaries only (no sec/supp/qcfail/dup).
+            if rec.flags() >= 256 {
+                continue;
+            }
+            // RNAME/POS: remap a record carrying a masked contig; keep `*` (tid -1).
+            if rec.tid() >= 0 {
+                let (chrom, offset) = parse_masked_contig(&local_view, rec.tid())?;
+                let new_tid = *genomic_tid.get(&chrom).ok_or_else(|| {
+                    SdError::Compute(format!(
+                        "remap: contig '{chrom}' (masked '{chrom}:{offset}') absent from {}",
+                        fai.display()
+                    ))
+                })?;
+                let new_pos = rec.pos() + offset;
+                rec.set_tid(new_tid);
+                rec.set_pos(new_pos);
+            }
+            // RNEXT/PNEXT: same uniform remap; keep `*` mate (mtid -1).
+            if rec.mtid() >= 0 {
+                let (mchrom, moffset) = parse_masked_contig(&local_view, rec.mtid())?;
+                let new_mtid = *genomic_tid.get(&mchrom).ok_or_else(|| {
+                    SdError::Compute(format!(
+                        "remap: mate contig '{mchrom}' (masked '{mchrom}:{moffset}') absent from {}",
+                        fai.display()
+                    ))
+                })?;
+                let new_mpos = rec.mpos() + moffset;
+                rec.set_mtid(new_mtid);
+                rec.set_mpos(new_mpos);
+            }
+            // QNAME → `{qname}:{rg_tag}` (Python appends the RG label).
+            let mut new_qname = rec.qname().to_vec();
+            new_qname.push(b':');
+            new_qname.extend_from_slice(rg_tag.as_bytes());
+            rec.set_qname(&new_qname);
+
+            writer
+                .write(&rec)
+                .map_err(|e| SdError::Htslib(format!("write record: {e}")))?;
+        }
+    }
+
+    // ── coordinate-sort + index (samtools leaf subprocess) ────────────────────
+    samtools_sort_index(Path::new(&unsorted), out_bam)?;
+    let _ = std::fs::remove_file(&unsorted);
+    Ok(())
+}
+
+/// Resolve the reference `.fai` for [`remap_masked_bam_to_genomic`]: a path already
+/// ending in `.fai` is used directly; otherwise `{path}.fai`, built with
+/// `samtools faidx` if missing (Python `generate_sq_lines`).
+fn resolve_or_build_fai(path: &Path) -> Result<PathBuf> {
+    if path.extension().and_then(|e| e.to_str()) == Some("fai") {
+        return Ok(path.to_path_buf());
+    }
+    let fai = PathBuf::from(format!("{}.fai", path.display()));
+    if fai.exists() {
+        return Ok(fai);
+    }
+    let out = Command::new("samtools")
+        .args(["faidx", &path.display().to_string()])
+        .output()
+        .map_err(|e| SdError::Io {
+            path: "samtools faidx".to_string(),
+            source: e,
+        })?;
+    if !out.status.success() {
+        return Err(SdError::Compute(format!(
+            "samtools faidx {} failed: {}",
+            path.display(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        )));
+    }
+    Ok(fai)
+}
+
+/// Read `(contig_name, length_text)` from a `.fai` (columns 1-2), in file order —
+/// the genomic `@SQ` dictionary order (= the remapped `tid` order).
+fn read_fai_sq(fai: &Path) -> Result<Vec<(String, String)>> {
+    let text = std::fs::read_to_string(fai).map_err(|e| SdError::Io {
+        path: fai.display().to_string(),
+        source: e,
+    })?;
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let mut f = line.split('\t');
+        if let (Some(name), Some(len)) = (f.next(), f.next()) {
+            if !name.is_empty() {
+                out.push((name.to_string(), len.to_string()));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Parse a masked-genome contig (`{chrom}:{start}`) referenced by `tid` in the local
+/// header into `(chrom, offset)`. The start is split off the RIGHT, so a chrom that
+/// itself contained `:` is still handled; in this pipeline chrom names never contain
+/// `:`, so this also matches Python's `split($3, arr, ":")` (left-split) numerically.
+fn parse_masked_contig(local: &HeaderView, tid: i32) -> Result<(String, i64)> {
+    let name =
+        std::str::from_utf8(local.tid2name(tid as u32)).map_err(|_| SdError::NonUtf8ReadName)?;
+    let (chrom, start) = name.rsplit_once(':').ok_or_else(|| {
+        SdError::Compute(format!(
+            "masked contig '{name}' is not in '{{chrom}}:{{start}}' form"
+        ))
+    })?;
+    let offset: i64 = start.parse().map_err(|_| {
+        SdError::Compute(format!(
+            "masked contig '{name}' start '{start}' is not an integer"
+        ))
+    })?;
+    Ok((chrom.to_string(), offset))
+}
+
+/// Coordinate-sort `input` → `output` and index it via `samtools` (the sanctioned
+/// leaf subprocess — matching `sd-prep/intrinsic.rs`; BAM sort is not re-implemented).
+fn samtools_sort_index(input: &Path, output: &Path) -> Result<()> {
+    let sort = Command::new("samtools")
+        .args([
+            "sort",
+            "-O",
+            "bam",
+            "-o",
+            &output.display().to_string(),
+            &input.display().to_string(),
+        ])
+        .output()
+        .map_err(|e| SdError::Io {
+            path: "samtools sort".to_string(),
+            source: e,
+        })?;
+    if !sort.status.success() {
+        return Err(SdError::Compute(format!(
+            "samtools sort failed: {}",
+            String::from_utf8_lossy(&sort.stderr).trim()
+        )));
+    }
+    let index = Command::new("samtools")
+        .args(["index", &output.display().to_string()])
+        .output()
+        .map_err(|e| SdError::Io {
+            path: "samtools index".to_string(),
+            source: e,
+        })?;
+    if !index.status.success() {
+        return Err(SdError::Compute(format!(
+            "samtools index failed: {}",
+            String::from_utf8_lossy(&index.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -835,5 +1073,105 @@ mod tests {
     fn merge_bams_is_stubbed() {
         let err = merge_bams(&[], Path::new("/dev/null"), Path::new("/dev/null"), 1).unwrap_err();
         assert!(matches!(err, SdError::Htslib(_)), "got {err:?}");
+    }
+
+    // ── remap_masked_bam_to_genomic (masked {chrom}:{start} → genomic) ─────────
+
+    #[test]
+    fn remap_masked_bam_to_genomic_basic() {
+        // The sort+index leaf step needs samtools (present in the SDrecall env).
+        if !samtools_available() {
+            eprintln!("samtools unavailable — skipping remap_masked_bam_to_genomic_basic");
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+
+        // Original-reference .fai: two genomic contigs (chr1 is index 0).
+        let fai = dir.path().join("ref.fasta.fai");
+        std::fs::write(&fai, "chr1\t1000000\t6\t60\t61\nchr2\t900000\t1016667\t60\t61\n").unwrap();
+
+        // Local-contig (masked-genome) BAM: contig `chr1:1000`, an @RG to preserve,
+        // a primary paired read at local pos 5 (mate at 105), plus a secondary
+        // read (FLAG 0x100) that must be dropped by the `< 256` filter.
+        let masked = dir.path().join("masked.bam");
+        {
+            let mut h = Header::new();
+            h.push_record(HeaderRecord::new(b"HD").push_tag(b"VN", "1.6"));
+            h.push_record(
+                HeaderRecord::new(b"SQ")
+                    .push_tag(b"SN", "chr1:1000")
+                    .push_tag(b"LN", 5000),
+            );
+            h.push_record(
+                HeaderRecord::new(b"RG")
+                    .push_tag(b"ID", "s1")
+                    .push_tag(b"SM", "sample1"),
+            );
+            let mut w = Writer::from_path(&masked, &h, Format::Bam).unwrap();
+
+            let span = 50u32;
+            let seq = vec![b'A'; span as usize];
+            let qual = vec![40u8; span as usize];
+            let cs = CigarString(vec![Cigar::Match(span)]);
+
+            let mut primary = Record::new();
+            primary.set(b"read1", Some(&cs), &seq, &qual);
+            primary.set_flags(PAIRED | PROPER | READ1); // 0x43 < 256
+            primary.set_tid(0);
+            primary.set_pos(5);
+            primary.set_mtid(0);
+            primary.set_mpos(105);
+            primary.set_insert_size(150);
+            primary.set_mapq(60);
+            w.write(&primary).unwrap();
+
+            let mut secondary = Record::new();
+            secondary.set(b"read2", Some(&cs), &seq, &qual);
+            secondary.set_flags(PAIRED | SECONDARY); // 0x101 ≥ 256 → dropped
+            secondary.set_tid(0);
+            secondary.set_pos(20);
+            secondary.set_mtid(0);
+            secondary.set_mpos(60);
+            w.write(&secondary).unwrap();
+        }
+
+        let out = dir.path().join("genomic.bam");
+        remap_masked_bam_to_genomic(&masked, &fai, "RG3", &out).unwrap();
+
+        let mut reader = bam::Reader::from_path(&out).unwrap();
+        let hv = reader.header().clone();
+
+        // Header carries the ORIGINAL reference contigs (chr1, chr2), not chr1:1000.
+        let names: Vec<String> = hv
+            .target_names()
+            .iter()
+            .map(|n| String::from_utf8_lossy(n).to_string())
+            .collect();
+        assert_eq!(names, vec!["chr1".to_string(), "chr2".to_string()]);
+        // Non-@SQ/@PG header lines (here @RG) survive verbatim.
+        let htext = String::from_utf8_lossy(hv.as_bytes()).to_string();
+        assert!(htext.contains("SM:sample1"), "@RG must be preserved:\n{htext}");
+
+        let mut recs = Vec::new();
+        let mut rec = Record::new();
+        while let Some(r) = reader.read(&mut rec) {
+            r.unwrap();
+            recs.push(rec.clone());
+        }
+        assert_eq!(recs.len(), 1, "secondary (FLAG ≥ 256) dropped, one primary kept");
+        let g = &recs[0];
+        assert_eq!(
+            String::from_utf8_lossy(hv.tid2name(g.tid() as u32)),
+            "chr1",
+            "remapped onto the genomic chr1"
+        );
+        assert_eq!(g.pos(), 1005, "local pos 5 + contig offset 1000");
+        assert_eq!(g.mpos(), 1105, "local mate pos 105 + offset 1000");
+        assert_eq!(g.insert_size(), 150, "TLEN unchanged");
+        assert_eq!(
+            String::from_utf8_lossy(g.qname()),
+            "read1:RG3",
+            ":RGx qname suffix appended"
+        );
     }
 }

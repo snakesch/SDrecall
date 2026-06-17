@@ -34,7 +34,9 @@ pub mod vcf;
 
 // Re-export the most-used items at the crate root so callers write
 // `sdrecall_io::{read_bed, build_bam_index, ...}`.
-pub use bam::{build_bam_index, is_read_noisy, merge_bams, BamIndex, NoisyFilter};
+pub use bam::{
+    build_bam_index, is_read_noisy, merge_bams, remap_masked_bam_to_genomic, BamIndex, NoisyFilter,
+};
 pub use bed::{
     complement, intersect, merge_bed_files, read_bed, slop, sort_merge_bed, subtract, write_bed,
 };
