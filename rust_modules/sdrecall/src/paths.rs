@@ -305,13 +305,14 @@ impl Paths {
             .join(format!("{}.sdrecall.merged.vcf.gz", self.sample_id))
     }
 
-    /// Bridge to `sd_prep::PrepPaths` — extracts the 5 fields sd-prep needs.
+    /// Bridge to `sd_prep::PrepPaths` — extracts the fields sd-prep needs.
     pub fn to_prep_paths(&self) -> sd_prep::PrepPaths {
         sd_prep::PrepPaths {
             ref_genome: self.ref_genome.clone(),
             input_bam: self.input_bam.clone(),
             reference_sd_map: self.reference_sd_map.clone(),
             target_bed: self.target_bed.clone().unwrap_or_default(),
+            multi_align_bed: self.multi_align_bed_path(),
             work_dir: self.work_dir.clone(),
         }
     }
@@ -681,6 +682,7 @@ mod tests {
             p.multi_align_bed_path().to_str().unwrap(),
             format!("{wd}/HG002_hg38_CMRG_SDrecall.CMRG.multialign.bed")
         );
+        assert_eq!(p.to_prep_paths().multi_align_bed, p.multi_align_bed_path());
         assert_eq!(
             p.multiplex_graph_path().to_str().unwrap(),
             format!("{wd}/HG002_hg38_CMRG_SDrecall_multiplexed_SDs.graphml")

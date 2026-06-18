@@ -32,6 +32,7 @@ fn main() {
         input_bam: PathBuf::from(&args[2]),
         reference_sd_map: PathBuf::from(&args[3]),
         target_bed: PathBuf::from(&args[4]),
+        multi_align_bed: PathBuf::from(&args[5]).join("multialign.bed"),
         work_dir: PathBuf::from(&args[5]),
     };
     let python_dir = PathBuf::from(&args[6]);

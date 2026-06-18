@@ -56,7 +56,7 @@ impl Default for PrepParams {
     }
 }
 
-/// Inputs + work directory for a Phase-1 run.
+/// Inputs + output paths for a Phase-1 run.
 #[derive(Clone, Debug)]
 pub struct PrepPaths {
     /// Reference genome FASTA (with `.fai`).
@@ -67,6 +67,8 @@ pub struct PrepPaths {
     pub reference_sd_map: PathBuf,
     /// Target BED.
     pub target_bed: PathBuf,
+    /// Multi-aligned-region BED written by Phase-1 and consumed by fp-control.
+    pub multi_align_bed: PathBuf,
     /// Work directory (per-RG outputs land under `work_dir/realign_groups/`).
     pub work_dir: PathBuf,
 }
@@ -568,6 +570,7 @@ pub struct RgOutputs {
 
 /// The full Phase-1 output manifest.
 pub struct PrepResult {
+    pub multi_align_bed: PathBuf,
     pub filtered_sd_map: PathBuf,
     pub rg_outputs: Vec<RgOutputs>,
     pub total_intrinsic_bam: PathBuf,
@@ -715,6 +718,14 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
         clamp_threads_u8(params.threads),
     )?;
     log::info!("Multi-align BED has {} intervals", multi_align.len());
+    if let Some(parent) = paths.multi_align_bed.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| SdError::Io {
+            path: parent.display().to_string(),
+            source: e,
+        })?;
+    }
+    sdrecall_io::write_bed(&paths.multi_align_bed, &multi_align)?;
+    log::info!("Wrote multi-align BED to {}", paths.multi_align_bed.display());
 
     // ── Steps 2-3: SD-map load + umbrella filter + dedup ─────────────────────
     let bin_rows = load_and_filter_sd_map(&paths.reference_sd_map, &multi_align, params.avg_frag)?;
@@ -773,6 +784,7 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
     }
 
     Ok(PrepResult {
+        multi_align_bed: paths.multi_align_bed.clone(),
         filtered_sd_map,
         rg_outputs: outputs,
         total_intrinsic_bam,
