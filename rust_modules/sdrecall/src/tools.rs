@@ -34,7 +34,7 @@ pub fn minimap2_align(
     let t = threads.to_string();
     let mmi = reference.with_extension("mmi");
     let tmp_mmi = mmi.with_extension(format!("mmi.tmp.{}", std::process::id()));
-    let rg = format!("@RG\tID:{sample_id}\tLB:SureSelectXT\tPL:ILLUMINA\tPU:1064\tSM:{sample_id}");
+    let rg = minimap2_read_group(sample_id);
     let script = format!(
         "set -o pipefail; \
          minimap2 -x sr -d {tmp_mmi} {ref_} && \
@@ -284,6 +284,12 @@ fn shquote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+fn minimap2_read_group(sample_id: &str) -> String {
+    format!(
+        "@RG\\tID:{sample_id}\\tLB:SureSelectXT\\tPL:ILLUMINA\\tPU:1064\\tSM:{sample_id}"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -292,5 +298,15 @@ mod tests {
     fn shell_quoting_handles_special_chars() {
         assert_eq!(sq(Path::new("/tmp/a b.bam")), "'/tmp/a b.bam'");
         assert_eq!(sq(Path::new("/tmp/it's.bam")), "'/tmp/it'\\''s.bam'");
+    }
+
+    #[test]
+    fn minimap2_read_group_uses_escaped_tabs() {
+        let rg = minimap2_read_group("HG002");
+        assert_eq!(
+            rg,
+            r"@RG\tID:HG002\tLB:SureSelectXT\tPL:ILLUMINA\tPU:1064\tSM:HG002"
+        );
+        assert!(!rg.contains('\t'));
     }
 }
