@@ -18,7 +18,7 @@
 //! the Python BAM is not asserted (alignment is the same minimap2 algorithm; record
 //! ordering/aux differs).
 
-use minimap2::Aligner;
+use minimap2::{ffi::MM_F_EQX, Aligner};
 use rust_htslib::bam::ext::BamRecordExtensions;
 use rust_htslib::bam::record::{Cigar, CigarString};
 use rust_htslib::bam::{self, header::HeaderRecord, Read as _};
@@ -135,9 +135,19 @@ pub fn intrinsic_bam(
         let mut writer = bam::Writer::from_path(&unsorted, &header, bam::Format::Bam)
             .map_err(|e| SdError::Htslib(format!("open {unsorted}: {e}")))?;
         for q in &queries {
-            // map(seq, cs=false, md=false, ...) — CIGAR comes from with_cigar().
+            // map(seq, cs=false, md=false, extra_flags=MM_F_EQX, ...) — Python's
+            // independent_minimap2_masked always passes `--eqx`, and fp-control's
+            // hap-vector encoding requires explicit `=`/`X` CIGAR ops.
+            let eqx_flags = [MM_F_EQX as u64];
             let mappings = aligner
-                .map(&q.seq, false, false, None, None, Some(q.name.as_bytes()))
+                .map(
+                    &q.seq,
+                    false,
+                    false,
+                    None,
+                    Some(&eqx_flags),
+                    Some(q.name.as_bytes()),
+                )
                 .map_err(|e| SdError::Compute(format!("minimap2 map {}: {e}", q.name)))?;
             for m in &mappings {
                 if let Some(rec) = mapping_to_record(q, m, &tid_of)? {
@@ -231,23 +241,14 @@ fn mapping_to_record(
         (m.query_start, qlen - m.query_end)
     };
 
-    // Build the CIGAR: leading/trailing soft-clips + the core ops. minimap2 op
-    // codes match BAM: 0=M,1=I,2=D,3=N,4=S,5=H. with_cigar() emits only M/I/D.
+    // Build the CIGAR: leading/trailing soft-clips + the core ops. With
+    // MM_F_EQX, minimap2 emits 7/8 for =/X instead of 0/M.
     let mut cigar: Vec<Cigar> = Vec::with_capacity(cigar_ops.len() + 2);
     if clip_front > 0 {
         cigar.push(Cigar::SoftClip(clip_front as u32));
     }
     for &(len, op) in cigar_ops {
-        let c = match op {
-            0 => Cigar::Match(len),
-            1 => Cigar::Ins(len),
-            2 => Cigar::Del(len),
-            3 => Cigar::RefSkip(len),
-            4 => Cigar::SoftClip(len),
-            5 => Cigar::HardClip(len),
-            _ => Cigar::Match(len),
-        };
-        cigar.push(c);
+        cigar.push(minimap2_cigar_op(len, op)?);
     }
     if clip_back > 0 {
         cigar.push(Cigar::SoftClip(clip_back as u32));
@@ -277,6 +278,23 @@ fn mapping_to_record(
     }
     rec.set_flags(flag);
     Ok(Some(rec))
+}
+
+fn minimap2_cigar_op(len: u32, op: u8) -> Result<Cigar> {
+    match op {
+        0 => Ok(Cigar::Match(len)),
+        1 => Ok(Cigar::Ins(len)),
+        2 => Ok(Cigar::Del(len)),
+        3 => Ok(Cigar::RefSkip(len)),
+        4 => Ok(Cigar::SoftClip(len)),
+        5 => Ok(Cigar::HardClip(len)),
+        6 => Ok(Cigar::Pad(len)),
+        7 => Ok(Cigar::Equal(len)),
+        8 => Ok(Cigar::Diff(len)),
+        _ => Err(SdError::Compute(format!(
+            "unexpected minimap2 CIGAR op {op}"
+        ))),
+    }
 }
 
 /// Per-distinct-interval enclosure status — port of `compute_interval_status`
@@ -538,6 +556,36 @@ mod tests {
             Some(("chr12".to_string(), 63557340, 63559211))
         );
         assert_eq!(parse_qname_interval("nocoords"), None);
+    }
+
+    #[test]
+    fn minimap2_cigar_op_preserves_eqx_ops() {
+        assert!(matches!(minimap2_cigar_op(5, 7).unwrap(), Cigar::Equal(5)));
+        assert!(matches!(minimap2_cigar_op(2, 8).unwrap(), Cigar::Diff(2)));
+        assert!(matches!(minimap2_cigar_op(3, 1).unwrap(), Cigar::Ins(3)));
+        assert!(minimap2_cigar_op(1, 9).is_err());
+    }
+
+    #[test]
+    fn minimap2_eqx_flag_emits_equal_or_diff_ops() {
+        let reference = b"ACGGTAGAGAGGAAGAAGAAGGAATAGCGGACTTGTGTATTTTATCGTCATTCGTGGTTATCATATAGTTTATTGATTTGAAGACTACGTAAGTAATTTGAGGACTGATTAAAATTTTCTTTTTTAGCTTAGAGTCAATTAAAGAGGGCAAAATTTTCTCAAAAGACCATGGTGCATATGACGATAGCTTTAGTAGTATGGATTGGGCTCTTCTTTCATGGATGTTATTCAGAAGGAGTGATATATCGAGGTGTTTGAAACACCAGCGACACCAGAAGGCTGTGGATGTTAAATCGTAGAACCTATAGACGAGTTCTAAAATATACTTTGGGGTTTTCAGCGATGCAAAA";
+        let mut query = reference.to_vec();
+        query[37] = if query[37] == b'A' { b'C' } else { b'A' };
+        let aligner = Aligner::builder()
+            .asm20()
+            .with_cigar()
+            .with_seq(reference)
+            .expect("build in-memory minimap2 index");
+        let eqx_flags = [MM_F_EQX as u64];
+        let mappings = aligner
+            .map(&query, false, false, None, Some(&eqx_flags), Some(b"query"))
+            .expect("map query");
+        let cigar = mappings
+            .iter()
+            .find_map(|m| m.alignment.as_ref()?.cigar.as_ref())
+            .expect("mapping with CIGAR");
+        assert!(cigar.iter().any(|(_, op)| *op == 7 || *op == 8));
+        assert!(!cigar.iter().any(|(_, op)| *op == 0));
     }
 
     #[test]
