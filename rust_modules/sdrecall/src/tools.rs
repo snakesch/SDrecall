@@ -239,12 +239,10 @@ pub fn samtools_sort_index(input_bam: &Path, output_bam: &Path, threads: usize) 
 }
 
 /// Sort a VCF with bcftools, bgzip it, and build a tabix index.
-pub fn bcftools_sort_index(input_vcf: &Path, output_vcf: &Path, threads: usize) -> Result<()> {
-    let t = threads.to_string();
+pub fn bcftools_sort_index(input_vcf: &Path, output_vcf: &Path, _threads: usize) -> Result<()> {
     let script = format!(
-        "bcftools sort --threads {t} -Oz -o {out} {inp} && \
+        "bcftools sort -Oz -o {out} {inp} && \
          tabix -f -p vcf {out}",
-        t = t,
         out = sq(output_vcf),
         inp = sq(input_vcf),
     );
