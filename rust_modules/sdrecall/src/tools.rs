@@ -10,7 +10,8 @@
 //! Each wrapper is a hard-error-on-nonzero-exit function following the
 //! `vcf-ops/src/norm.rs` pattern.
 
-use std::path::Path;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use sdrecall_utils::{Result, SdError};
@@ -101,11 +102,7 @@ pub fn bcftools_view_regions(
 }
 
 /// Concatenate VCF files (order-preserving) via `bcftools concat`.
-pub fn bcftools_concat(
-    inputs: &[&Path],
-    output_vcf: &Path,
-    threads: usize,
-) -> Result<()> {
+pub fn bcftools_concat(inputs: &[&Path], output_vcf: &Path, threads: usize) -> Result<()> {
     if inputs.is_empty() {
         return Err(SdError::Compute("bcftools_concat: no input VCFs".into()));
     }
@@ -124,15 +121,15 @@ pub fn bcftools_concat(
 
 // ─────────────────────────── samtools ────────────────────────────────────
 
+const SAMTOOLS_MERGE_CHUNK_SIZE: usize = 256;
+
 /// Merge multiple BAMs into one coordinate-sorted, indexed BAM.
 ///
 /// Uses `samtools merge` subprocess (the in-process `sdrecall_io::merge_bams`
-/// needs SQ-line reconciliation, deferred). Single-input case copies directly.
-pub fn samtools_merge(
-    inputs: &[&Path],
-    output_bam: &Path,
-    threads: usize,
-) -> Result<()> {
+/// needs SQ-line reconciliation, deferred). Inputs are passed via `samtools
+/// merge -b` list files and chunked to avoid OS argv limits and file-descriptor
+/// pressure. Single-input case copies directly.
+pub fn samtools_merge(inputs: &[&Path], output_bam: &Path, threads: usize) -> Result<()> {
     if inputs.is_empty() {
         return Err(SdError::Compute("samtools_merge: no input BAMs".into()));
     }
@@ -145,16 +142,16 @@ pub fn samtools_merge(
         );
         return run_bash(&script, "samtools cp+index (single BAM)");
     }
-    let t = threads.to_string();
-    let inp_list: String = inputs.iter().map(|p| sq(p)).collect::<Vec<_>>().join(" ");
-    let script = format!(
-        "samtools merge -@ {t} -f {out} {inp} && \
-         samtools index -@ {t} {out}",
-        t = t,
-        out = sq(output_bam),
-        inp = inp_list,
-    );
-    run_bash(&script, "samtools merge")
+
+    let mut temp_paths = Vec::new();
+    let result = samtools_merge_chunked(inputs, output_bam, threads, &mut temp_paths)
+        .and_then(|_| samtools_index(output_bam, threads));
+
+    for path in temp_paths {
+        let _ = std::fs::remove_file(path);
+    }
+
+    result
 }
 
 /// The collate → fixmate → sort → markdup pipeline that deduplicates a
@@ -217,11 +214,7 @@ pub fn samtools_view_region(
 
 /// Build a BAM index (.bai) for the given BAM.
 pub fn samtools_index(bam: &Path, threads: usize) -> Result<()> {
-    let script = format!(
-        "samtools index -@ {t} {bam}",
-        t = threads,
-        bam = sq(bam),
-    );
+    let script = format!("samtools index -@ {t} {bam}", t = threads, bam = sq(bam),);
     run_bash(&script, "samtools index")
 }
 
@@ -278,14 +271,105 @@ pub(crate) fn sq(p: &Path) -> String {
     shquote(&s)
 }
 
+fn samtools_merge_chunked(
+    inputs: &[&Path],
+    output_bam: &Path,
+    threads: usize,
+    temp_paths: &mut Vec<PathBuf>,
+) -> Result<()> {
+    if inputs.len() <= SAMTOOLS_MERGE_CHUNK_SIZE {
+        return samtools_merge_from_list(inputs, output_bam, threads, temp_paths);
+    }
+
+    let mut chunk_bams = Vec::new();
+    for chunk in inputs.chunks(SAMTOOLS_MERGE_CHUNK_SIZE) {
+        let idx = temp_paths.len();
+        let chunk_bam = merge_temp_path(output_bam, idx, "bam");
+        temp_paths.push(chunk_bam.clone());
+        samtools_merge_from_list(chunk, &chunk_bam, threads, temp_paths)?;
+        chunk_bams.push(chunk_bam);
+    }
+
+    let chunk_refs: Vec<&Path> = chunk_bams.iter().map(|p| p.as_path()).collect();
+    samtools_merge_chunked(&chunk_refs, output_bam, threads, temp_paths)
+}
+
+fn samtools_merge_from_list(
+    inputs: &[&Path],
+    output_bam: &Path,
+    threads: usize,
+    temp_paths: &mut Vec<PathBuf>,
+) -> Result<()> {
+    let list_path = merge_temp_path(output_bam, temp_paths.len(), "list");
+    temp_paths.push(list_path.clone());
+    write_path_list(inputs, &list_path)?;
+
+    let status = Command::new("samtools")
+        .arg("merge")
+        .arg("-@")
+        .arg(threads.to_string())
+        .arg("-f")
+        .arg("-o")
+        .arg(output_bam)
+        .arg("-b")
+        .arg(&list_path)
+        .status()
+        .map_err(|e| SdError::Io {
+            path: "<samtools merge>".to_string(),
+            source: e,
+        })?;
+
+    if !status.success() {
+        return Err(SdError::Compute(format!(
+            "samtools merge failed (exit {:?})",
+            status.code()
+        )));
+    }
+
+    Ok(())
+}
+
+fn write_path_list(inputs: &[&Path], list_path: &Path) -> Result<()> {
+    let mut file =
+        std::io::BufWriter::new(std::fs::File::create(list_path).map_err(|e| SdError::Io {
+            path: list_path.display().to_string(),
+            source: e,
+        })?);
+
+    for input in inputs {
+        writeln!(file, "{}", input.display()).map_err(|e| SdError::Io {
+            path: list_path.display().to_string(),
+            source: e,
+        })?;
+    }
+    file.flush().map_err(|e| SdError::Io {
+        path: list_path.display().to_string(),
+        source: e,
+    })?;
+
+    Ok(())
+}
+
+fn merge_temp_path(output_bam: &Path, idx: usize, ext: &str) -> PathBuf {
+    let parent = output_bam.parent().unwrap_or_else(|| Path::new("."));
+    let name = output_bam
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("merged.bam");
+    parent.join(format!(
+        ".{name}.merge.{}.{}.{}",
+        std::process::id(),
+        idx,
+        ext
+    ))
+}
+
 fn shquote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 fn minimap2_read_group(sample_id: &str) -> String {
-    format!(
-        "@RG\\tID:{sample_id}\\tLB:SureSelectXT\\tPL:ILLUMINA\\tPU:1064\\tSM:{sample_id}"
-    )
+    format!("@RG\\tID:{sample_id}\\tLB:SureSelectXT\\tPL:ILLUMINA\\tPU:1064\\tSM:{sample_id}")
 }
 
 #[cfg(test)]
@@ -306,5 +390,17 @@ mod tests {
             r"@RG\tID:HG002\tLB:SureSelectXT\tPL:ILLUMINA\tPU:1064\tSM:HG002"
         );
         assert!(!rg.contains('\t'));
+    }
+
+    #[test]
+    fn merge_temp_path_stays_next_to_output() {
+        let tmp = merge_temp_path(Path::new("/tmp/out.bam"), 7, "list");
+        assert_eq!(tmp.parent().unwrap(), Path::new("/tmp"));
+        assert!(tmp
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains(".out.bam.merge."));
+        assert!(tmp.to_string_lossy().ends_with(".7.list"));
     }
 }
