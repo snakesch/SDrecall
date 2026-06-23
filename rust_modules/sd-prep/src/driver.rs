@@ -77,6 +77,9 @@ impl PrepPaths {
     fn realign_dir(&self) -> PathBuf {
         self.work_dir.join("realign_groups")
     }
+    fn total_recall_sd_region_bed(&self) -> PathBuf {
+        self.realign_dir().join("all_target_recall_SD_regions.bed")
+    }
     fn filtered_sd_map(&self) -> PathBuf {
         self.realign_dir().join("filtered_SD_binary_map.tsv")
     }
@@ -574,6 +577,7 @@ pub struct PrepResult {
     pub filtered_sd_map: PathBuf,
     pub rg_outputs: Vec<RgOutputs>,
     pub total_intrinsic_bam: PathBuf,
+    pub total_recall_sd_region_bed: PathBuf,
 }
 
 /// Establish the per-RG BEDs, masked genome and intrinsic BAM (the analog of
@@ -660,6 +664,33 @@ fn establish_rg(
         masked_genome,
         intrinsic_bam,
     })
+}
+
+fn target_recall_intervals(
+    query_intervals: &[GenomicInterval],
+    multi_align: &[GenomicInterval],
+) -> Vec<GenomicInterval> {
+    let overlapping = sdrecall_io::intersect(query_intervals, multi_align);
+    sdrecall_io::sort_merge_bed(&overlapping, false)
+}
+
+fn write_total_recall_sd_region_bed(
+    outputs: &[RgOutputs],
+    multi_align: &[GenomicInterval],
+    path: &Path,
+) -> Result<()> {
+    let mut query_intervals = Vec::new();
+    for output in outputs {
+        query_intervals.extend(sdrecall_io::read_bed(&output.query_bed)?);
+    }
+    let target_recall = target_recall_intervals(&query_intervals, multi_align);
+    sdrecall_io::write_bed(path, &target_recall)?;
+    log::info!(
+        "Wrote target recall SD BED with {} intervals to {}",
+        target_recall.len(),
+        path.display()
+    );
+    Ok(())
 }
 
 /// Drive the full Phase-1 preparation — port of `prepare_recall_regions`
@@ -774,6 +805,9 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
         outputs.push(r?);
     }
 
+    let total_recall_sd_region_bed = paths.total_recall_sd_region_bed();
+    write_total_recall_sd_region_bed(&outputs, &multi_align, &total_recall_sd_region_bed)?;
+
     // total intrinsic BAM (samtools merge/sort/index — leaf subprocess).
     // Bug A: written to `work_dir/total_intrinsic_alignments.bam` (sdrecall paths.rs:259,
     // const.py:428) — NOT under `realign_groups/`, where the orchestrator can't find it.
@@ -788,6 +822,7 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
         filtered_sd_map,
         rg_outputs: outputs,
         total_intrinsic_bam,
+        total_recall_sd_region_bed,
     })
 }
 
@@ -876,6 +911,23 @@ mod tests {
                         chr3\t900\t950\t.\t.\t+\tFC:RG0_1\n\
                         chr2\t500\t600\tNaN\tNaN\t-\tNFC:RG0_0\n";
         assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn target_recall_intervals_clip_to_multialign_and_merge() {
+        let query = vec![
+            GenomicInterval::new("chr1", 10, 30),
+            GenomicInterval::new("chr1", 30, 50),
+            GenomicInterval::new("chr2", 10, 20),
+        ];
+        let multi = vec![
+            GenomicInterval::new("chr1", 20, 40),
+            GenomicInterval::new("chr2", 30, 40),
+        ];
+
+        let got = target_recall_intervals(&query, &multi);
+
+        assert_eq!(got, vec![GenomicInterval::new("chr1", 20, 40)]);
     }
 
     #[test]
