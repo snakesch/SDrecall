@@ -16,6 +16,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 use rayon::prelude::*;
 use rust_htslib::{bam, bam::Read};
@@ -107,18 +108,122 @@ fn prepare(
     prep: &crate::cli::PreparationArgs,
     paths: &Paths,
 ) -> Result<()> {
+    let marker = stage_marker(paths, "prepare");
+    let deps = prepare_checkpoint_deps(paths);
+    if let Some(outputs) = discovered_prepare_outputs(paths) {
+        if checkpoint_valid(&marker, &outputs, &deps) {
+            log::info!(
+                "[resume] prepare complete; using checkpoint {}",
+                marker.display()
+            );
+            return Ok(());
+        }
+    }
+
     log::info!(
         "[prepare] building recall regions into {:?}",
         paths.work_dir
     );
     let prep_paths = paths.to_prep_paths();
     let prep_params = paths.to_prep_params(common, prep);
-    let _prep_result = sd_prep::prepare_recall_regions(&prep_paths, &prep_params)?;
+    let prep_result = sd_prep::prepare_recall_regions(&prep_paths, &prep_params)?;
     log::info!(
         "[prepare] Phase 1 complete: {} RGs established",
-        _prep_result.rg_outputs.len()
+        prep_result.rg_outputs.len()
     );
+    let outputs = prepare_outputs_from_manifest(&prep_result);
+    write_checkpoint(&marker, &outputs, &deps)?;
     Ok(())
+}
+
+fn prepare_checkpoint_deps(paths: &Paths) -> Vec<PathBuf> {
+    let mut deps = vec![
+        paths.ref_genome.clone(),
+        paths.ref_genome_fai_path(),
+        paths.input_bam.clone(),
+        paths.reference_sd_map.clone(),
+    ];
+    if let Some(target_bed) = &paths.target_bed {
+        deps.push(target_bed.clone());
+    }
+    for idx in bam_index_paths(&paths.input_bam) {
+        if idx.exists() {
+            deps.push(idx);
+        }
+    }
+    deps
+}
+
+fn prepare_outputs_from_manifest(result: &sd_prep::PrepResult) -> Vec<CheckpointFile> {
+    let mut outputs = vec![
+        CheckpointFile::any(result.multi_align_bed.clone()),
+        CheckpointFile::nonempty(result.filtered_sd_map.clone()),
+        CheckpointFile::bam(result.total_intrinsic_bam.clone()),
+        CheckpointFile::any(result.total_recall_sd_region_bed.clone()),
+    ];
+
+    for rg in &result.rg_outputs {
+        outputs.extend(rg_prepare_outputs(
+            &rg.label,
+            &rg.query_bed,
+            &rg.counterparts_bed,
+            &rg.all_regions_bed,
+            &rg.masked_genome,
+            &rg.intrinsic_bam,
+        ));
+    }
+    outputs
+}
+
+fn discovered_prepare_outputs(paths: &Paths) -> Option<Vec<CheckpointFile>> {
+    let mut outputs = vec![
+        CheckpointFile::any(paths.multi_align_bed_path()),
+        CheckpointFile::nonempty(paths.realign_groups_dir.join("filtered_SD_binary_map.tsv")),
+        CheckpointFile::bam(paths.total_intrinsic_bam_path()),
+        CheckpointFile::any(paths.total_recall_sd_region_bed_path()),
+    ];
+
+    let entries = std::fs::read_dir(&paths.realign_groups_dir).ok()?;
+    let mut rg_count = 0usize;
+    for entry in entries.filter_map(|e| e.ok()) {
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let label = entry.file_name().to_string_lossy().to_string();
+        if !label.starts_with("RG") {
+            continue;
+        }
+        let dir = entry.path();
+        outputs.extend(rg_prepare_outputs(
+            &label,
+            &dir.join(format!("{label}.bed")),
+            &dir.join(format!("{label}_counterparts.bed")),
+            &dir.join(format!("{label}_related_homo_regions.bed")),
+            &dir.join(format!("{label}.masked.fasta")),
+            &dir.join(format!("{label}.intrinsic.bam")),
+        ));
+        rg_count += 1;
+    }
+
+    (rg_count > 0).then_some(outputs)
+}
+
+fn rg_prepare_outputs(
+    _label: &str,
+    query_bed: &Path,
+    counterparts_bed: &Path,
+    all_regions_bed: &Path,
+    masked_genome: &Path,
+    intrinsic_bam: &Path,
+) -> Vec<CheckpointFile> {
+    vec![
+        CheckpointFile::any(query_bed.to_path_buf()),
+        CheckpointFile::any(counterparts_bed.to_path_buf()),
+        CheckpointFile::nonempty(all_regions_bed.to_path_buf()),
+        CheckpointFile::nonempty(masked_genome.to_path_buf()),
+        CheckpointFile::nonempty(append_path_suffix(masked_genome, ".fai")),
+        CheckpointFile::bam(intrinsic_bam.to_path_buf()),
+    ]
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -247,6 +352,17 @@ fn prepare_masked_align_regions(
                     Err(e) => return Some(e),
                 };
                 let fc_out = rg_dir.join(format!("{}.fc_target.bed", rg.label));
+                let outputs = region_prep_outputs(&rg_dir, &rg.label, &rg.subgroup_ids);
+                let deps = region_prep_deps(paths, &whole_bed);
+                let marker = nested_marker(paths, "region_prep", &format!("{}.done", rg.label));
+                if checkpoint_valid(&marker, &outputs, &deps) {
+                    log::info!(
+                        "[resume] region-prep {} complete; using checkpoint {}",
+                        rg.label,
+                        marker.display()
+                    );
+                    return None;
+                }
 
                 match region_prep::prepare_masked_align_region_per_rg(
                     &rg.label,
@@ -258,6 +374,9 @@ fn prepare_masked_align_regions(
                     &rg_dir,
                 ) {
                     Ok(_records) => {
+                        if let Err(e) = write_checkpoint(&marker, &outputs, &deps) {
+                            return Some(e);
+                        }
                         log::info!("[region-prep] {} done", rg.label);
                         None
                     }
@@ -274,6 +393,26 @@ fn prepare_masked_align_regions(
         return Err(first_err);
     }
     Ok(())
+}
+
+fn region_prep_deps(paths: &Paths, whole_bed: &Path) -> Vec<PathBuf> {
+    let mut deps = vec![whole_bed.to_path_buf(), paths.ref_genome_fai_path()];
+    if let Some(target_bed) = &paths.target_bed {
+        deps.push(target_bed.clone());
+    }
+    deps
+}
+
+fn region_prep_outputs(rg_dir: &Path, label: &str, subgroup_ids: &[String]) -> Vec<CheckpointFile> {
+    let mut outputs = vec![CheckpointFile::any(
+        rg_dir.join(format!("{label}.fc_target.bed")),
+    )];
+    for sub in subgroup_ids {
+        outputs.push(CheckpointFile::any(
+            rg_dir.join(format!("{label}_{sub}.nfc.bed")),
+        ));
+    }
+    outputs
 }
 
 // ── Step 3: per-RG realign + variant call ───────────────────────────────
@@ -313,6 +452,18 @@ fn realign_per_rg(
                 let raw_bam = paths.rg_raw_masked_bam_path(rg_ref)?;
                 let raw_vcf = raw_bam.with_extension("vcf.gz");
                 let masked_genome = paths.masked_genome_path(rg_ref)?;
+                let counter_bed = paths.rg_counterparts_bed_path(rg_ref)?;
+                let outputs = realign_rg_outputs(&raw_bam, &raw_vcf);
+                let deps = realign_rg_deps(paths, &query_bed, &counter_bed, &masked_genome);
+                let marker = nested_marker(paths, "realign_rg", &format!("{}.done", rg.label));
+                if checkpoint_valid(&marker, &outputs, &deps) {
+                    log::info!(
+                        "[resume] realign {} complete; using checkpoint {}",
+                        rg.label,
+                        marker.display()
+                    );
+                    return Ok((raw_bam, raw_vcf));
+                }
 
                 // 3a: read extraction (BAM → FASTQ).
                 let r1_str = r1.to_string_lossy().to_string();
@@ -328,7 +479,6 @@ fn realign_per_rg(
                 .map_err(|e| SdError::Compute(format!("{}: read extraction: {e}", rg.label)))?;
 
                 // Also extract multi-aligned reads from the counterpart regions.
-                let counter_bed = paths.rg_counterparts_bed_path(rg_ref)?;
                 if counter_bed.exists() {
                     let r1c = rg_dir.join(format!("{}.nfc.r1.fastq", rg.label));
                     let r2c = rg_dir.join(format!("{}.nfc.r2.fastq", rg.label));
@@ -376,6 +526,7 @@ fn realign_per_rg(
 
                 // 3c: variant call on the GENOMIC BAM.
                 crate::tools::bcftools_call(&raw_bam, &ref_genome, &raw_vcf, tpj)?;
+                write_checkpoint(&marker, &outputs, &deps)?;
 
                 log::info!("[realign] {} done → {:?}", rg.label, raw_bam);
                 Ok((raw_bam, raw_vcf))
@@ -391,6 +542,42 @@ fn realign_per_rg(
         vcfs.push(v);
     }
     Ok((bams, vcfs))
+}
+
+fn realign_rg_outputs(raw_bam: &Path, raw_vcf: &Path) -> Vec<CheckpointFile> {
+    vec![
+        CheckpointFile::bam(raw_bam.to_path_buf()),
+        CheckpointFile::vcf(raw_vcf.to_path_buf(), true),
+    ]
+}
+
+fn realign_rg_deps(
+    paths: &Paths,
+    query_bed: &Path,
+    counter_bed: &Path,
+    masked_genome: &Path,
+) -> Vec<PathBuf> {
+    let mut deps = vec![
+        paths.input_bam.clone(),
+        paths.ref_genome.clone(),
+        paths.ref_genome_fai_path(),
+        query_bed.to_path_buf(),
+        masked_genome.to_path_buf(),
+        append_path_suffix(masked_genome, ".fai"),
+    ];
+    if counter_bed.exists() {
+        deps.push(counter_bed.to_path_buf());
+    }
+    for idx in bam_index_paths(&paths.input_bam) {
+        if idx.exists() {
+            deps.push(idx);
+        }
+    }
+    deps
+}
+
+fn bam_index_paths(bam: &Path) -> [PathBuf; 2] {
+    [append_path_suffix(bam, ".bai"), bam.with_extension("bai")]
 }
 
 fn append_file(src: &Path, dst: &Path) -> Result<()> {
@@ -575,6 +762,17 @@ fn merge_and_markdup_raw_bams(
     per_rg_bams: &[PathBuf],
     threads: usize,
 ) -> Result<()> {
+    let outputs = raw_bam_merge_outputs(paths);
+    let deps = per_rg_bams.to_vec();
+    let marker = stage_marker(paths, "merge_raw_bams");
+    if checkpoint_valid(&marker, &outputs, &deps) {
+        log::info!(
+            "[resume] raw BAM merge complete; using checkpoint {}",
+            marker.display()
+        );
+        return Ok(());
+    }
+
     log::info!(
         "[merge] merging {} per-RG BAMs + markdup",
         per_rg_bams.len()
@@ -587,6 +785,7 @@ fn merge_and_markdup_raw_bams(
     let deduped = paths.deduped_raw_bam_path();
     crate::tools::samtools_markdup_pipeline(&pooled, &deduped, threads)?;
 
+    write_checkpoint(&marker, &outputs, &deps)?;
     log::info!("[merge] markdup done → {:?}", deduped);
     Ok(())
 }
@@ -594,6 +793,17 @@ fn merge_and_markdup_raw_bams(
 // ── Step 5: concat raw VCFs ─────────────────────────────────────────────
 
 fn concat_raw_vcfs(paths: &Paths, per_rg_vcfs: &[PathBuf], threads: usize) -> Result<()> {
+    let outputs = vec![CheckpointFile::vcf(paths.recall_raw_vcf_path(), true)];
+    let deps = per_rg_vcfs.to_vec();
+    let marker = stage_marker(paths, "concat_raw_vcfs");
+    if checkpoint_valid(&marker, &outputs, &deps) {
+        log::info!(
+            "[resume] raw VCF concat complete; using checkpoint {}",
+            marker.display()
+        );
+        return Ok(());
+    }
+
     log::info!("[concat] concatenating {} per-RG VCFs", per_rg_vcfs.len());
     let refs: Vec<&Path> = per_rg_vcfs.iter().map(|p| p.as_path()).collect();
     sdrecall_io::concat_sort_vcfs(
@@ -602,8 +812,16 @@ fn concat_raw_vcfs(paths: &Paths, per_rg_vcfs: &[PathBuf], threads: usize) -> Re
         true,
         clamp_threads_u8(threads),
     )?;
+    write_checkpoint(&marker, &outputs, &deps)?;
     log::info!("[concat] raw VCF → {:?}", paths.recall_raw_vcf_path());
     Ok(())
+}
+
+fn raw_bam_merge_outputs(paths: &Paths) -> Vec<CheckpointFile> {
+    vec![
+        CheckpointFile::bam(paths.pooled_raw_bam_path()),
+        CheckpointFile::bam(paths.deduped_raw_bam_path()),
+    ]
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -624,29 +842,16 @@ fn eliminate_misalignments(
 
     // Python feeds fp-control with the multi-align BED, not the user target BED.
     let target_bed = paths.multi_align_bed_path();
-    let total_intrinsic_bam =
-        filter_redundant_intrinsic_origins(&paths.total_intrinsic_bam_path(), threads)?;
     let filtered_intrin = paths.tmp_dir.join("intrinsic.filtered.bam");
-    crate::tools::samtools_view_region(
-        &total_intrinsic_bam,
-        &target_bed,
-        &filtered_intrin,
-        threads,
-    )?;
+    prepare_fp_control_inputs(paths, &target_bed, &filtered_intrin, threads)?;
 
     // Load chrom sizes from the reference .fai for interval padding.
     let chrom_sizes = load_chrom_sizes(&paths.ref_genome_fai_path())?;
 
     // Slice into islands.
     let deduped = paths.deduped_raw_bam_path();
-    let islands = crate::island::split_bams_into_islands(
-        &deduped,
-        &filtered_intrin,
-        &target_bed,
-        &chrom_sizes,
-        threads,
-        &paths.tmp_dir.join("islands"),
-    )?;
+    let islands =
+        split_or_resume_islands(paths, &filtered_intrin, &target_bed, &chrom_sizes, threads)?;
     log::info!("[fp-control] {} islands to process", islands.len());
 
     if islands.is_empty() {
@@ -683,6 +888,152 @@ fn eliminate_misalignments(
     merge_island_outputs(paths, &clean_bams, &clean_vcfs, threads)?;
 
     Ok(())
+}
+
+fn prepare_fp_control_inputs(
+    paths: &Paths,
+    target_bed: &Path,
+    filtered_intrin: &Path,
+    threads: usize,
+) -> Result<()> {
+    let outputs = vec![CheckpointFile::bam(filtered_intrin.to_path_buf())];
+    let deps = vec![paths.total_intrinsic_bam_path(), target_bed.to_path_buf()];
+    let marker = stage_marker(paths, "fp_control_inputs");
+    if checkpoint_valid(&marker, &outputs, &deps) {
+        log::info!(
+            "[resume] fp-control intrinsic input complete; using checkpoint {}",
+            marker.display()
+        );
+        return Ok(());
+    }
+
+    let total_intrinsic_bam =
+        filter_redundant_intrinsic_origins(&paths.total_intrinsic_bam_path(), threads)?;
+    crate::tools::samtools_view_region(&total_intrinsic_bam, target_bed, filtered_intrin, threads)?;
+    write_checkpoint(&marker, &outputs, &deps)
+}
+
+fn split_or_resume_islands(
+    paths: &Paths,
+    filtered_intrin: &Path,
+    target_bed: &Path,
+    chrom_sizes: &ahash::AHashMap<String, i64>,
+    threads: usize,
+) -> Result<Vec<IslandPaths>> {
+    let islands_dir = paths.tmp_dir.join("islands");
+    let manifest = islands_manifest_path(paths);
+    let outputs = vec![CheckpointFile::nonempty(manifest.clone())];
+    let deps = vec![
+        paths.deduped_raw_bam_path(),
+        filtered_intrin.to_path_buf(),
+        target_bed.to_path_buf(),
+        paths.ref_genome_fai_path(),
+    ];
+    let marker = stage_marker(paths, "slice_islands");
+    if checkpoint_valid(&marker, &outputs, &deps) {
+        let islands = read_island_manifest(&manifest)?;
+        if islands.iter().all(island_slice_outputs_valid) {
+            log::info!(
+                "[resume] island slicing complete; using checkpoint {}",
+                marker.display()
+            );
+            return Ok(islands);
+        }
+    }
+
+    let islands = crate::island::split_bams_into_islands(
+        &paths.deduped_raw_bam_path(),
+        filtered_intrin,
+        target_bed,
+        chrom_sizes,
+        threads,
+        &islands_dir,
+    )?;
+    write_island_manifest(&manifest, &islands)?;
+    write_checkpoint(&marker, &outputs, &deps)?;
+    Ok(islands)
+}
+
+fn islands_manifest_path(paths: &Paths) -> PathBuf {
+    paths.tmp_dir.join("islands").join("islands.manifest.tsv")
+}
+
+fn island_slice_outputs_valid(island: &IslandPaths) -> bool {
+    CheckpointFile::bam(island.raw_bam.clone()).is_valid()
+        && CheckpointFile::bam(island.intrinsic_bam.clone()).is_valid()
+        && CheckpointFile::any(island.coverage_bed.clone()).is_valid()
+}
+
+fn write_island_manifest(path: &Path, islands: &[IslandPaths]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| SdError::Io {
+            path: parent.display().to_string(),
+            source: e,
+        })?;
+    }
+    let mut body = String::from("id\traw_bam\tintrinsic_bam\tcoverage_bed\n");
+    for island in islands {
+        body.push_str(&format!(
+            "{}\t{}\t{}\t{}\n",
+            island.id,
+            island.raw_bam.display(),
+            island.intrinsic_bam.display(),
+            island.coverage_bed.display()
+        ));
+    }
+    let tmp = marker_tmp_path(path);
+    std::fs::write(&tmp, body).map_err(|e| SdError::Io {
+        path: tmp.display().to_string(),
+        source: e,
+    })?;
+    std::fs::rename(&tmp, path).map_err(|e| SdError::Io {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    Ok(())
+}
+
+fn read_island_manifest(path: &Path) -> Result<Vec<IslandPaths>> {
+    let file = std::fs::File::open(path).map_err(|e| SdError::Io {
+        path: path.display().to_string(),
+        source: e,
+    })?;
+    let reader = std::io::BufReader::new(file);
+    let mut islands = Vec::new();
+    for (lineno, line) in reader.lines().enumerate() {
+        let line = line.map_err(|e| SdError::Io {
+            path: path.display().to_string(),
+            source: e,
+        })?;
+        if lineno == 0 && line.starts_with("id\t") {
+            continue;
+        }
+        if line.trim().is_empty() {
+            continue;
+        }
+        let cols: Vec<&str> = line.split('\t').collect();
+        if cols.len() != 4 {
+            return Err(SdError::Compute(format!(
+                "invalid island manifest row {} in {}",
+                lineno + 1,
+                path.display()
+            )));
+        }
+        let id = cols[0].parse::<usize>().map_err(|e| {
+            SdError::Compute(format!(
+                "invalid island id '{}' in {}: {e}",
+                cols[0],
+                path.display()
+            ))
+        })?;
+        islands.push(IslandPaths {
+            id,
+            raw_bam: PathBuf::from(cols[1]),
+            intrinsic_bam: PathBuf::from(cols[2]),
+            coverage_bed: PathBuf::from(cols[3]),
+        });
+    }
+    Ok(islands)
 }
 
 #[derive(Clone, Debug)]
@@ -858,6 +1209,24 @@ fn fp_control_per_island(
         islands
             .par_iter()
             .map(|island| {
+                let clean_bam = island.raw_bam.with_extension("clean.bam");
+                let clean_vcf = clean_bam.with_extension("vcf.gz");
+                let outputs = island_clean_outputs(&clean_bam, &clean_vcf);
+                let deps = island_process_deps(paths, island, &ref_genome_str);
+                let marker = nested_marker(
+                    paths,
+                    "fp_control_islands",
+                    &format!("island_{}.done", island.id),
+                );
+                if checkpoint_valid(&marker, &outputs, &deps) {
+                    log::info!(
+                        "[resume] fp-control island {} complete; using checkpoint {}",
+                        island.id,
+                        marker.display()
+                    );
+                    return IslandOutcome::Done(clean_bam, clean_vcf);
+                }
+
                 // catch_unwind per ROB-3: a panic in one island must NOT abort the
                 // whole batch. The outcome is recorded and the failure policy is
                 // applied after the join.
@@ -866,7 +1235,16 @@ fn fp_control_per_island(
                 }));
 
                 match result {
-                    Ok(Ok(Some((bam, vcf)))) => IslandOutcome::Done(bam, vcf),
+                    Ok(Ok(Some((bam, vcf)))) => {
+                        if let Err(e) = write_checkpoint(&marker, &outputs, &deps) {
+                            IslandOutcome::Failed {
+                                id: island.id.to_string(),
+                                reason: format!("checkpoint: {e}"),
+                            }
+                        } else {
+                            IslandOutcome::Done(bam, vcf)
+                        }
+                    }
                     Ok(Ok(None)) => {
                         log::debug!("[fp-control] island {} skipped (≤2 haplotypes)", island.id);
                         IslandOutcome::Skipped
@@ -937,6 +1315,22 @@ fn fp_control_per_island(
     }
 
     Ok((bams, vcfs))
+}
+
+fn island_clean_outputs(clean_bam: &Path, clean_vcf: &Path) -> Vec<CheckpointFile> {
+    vec![
+        CheckpointFile::bam(clean_bam.to_path_buf()),
+        CheckpointFile::vcf(clean_vcf.to_path_buf(), true),
+    ]
+}
+
+fn island_process_deps(paths: &Paths, island: &IslandPaths, ref_genome: &str) -> Vec<PathBuf> {
+    vec![
+        islands_manifest_path(paths),
+        island.intrinsic_bam.clone(),
+        island.coverage_bed.clone(),
+        PathBuf::from(ref_genome),
+    ]
 }
 
 /// Write a TSV of failed islands (`island_id\treason`) into the recall-results
@@ -1047,6 +1441,18 @@ fn merge_island_outputs(
         ));
     }
 
+    let mut deps = clean_bams.to_vec();
+    deps.extend(clean_vcfs.iter().cloned());
+    let outputs = clean_merge_outputs(paths);
+    let marker = stage_marker(paths, "merge_clean_outputs");
+    if checkpoint_valid(&marker, &outputs, &deps) {
+        log::info!(
+            "[resume] clean BAM/VCF merge complete; using checkpoint {}",
+            marker.display()
+        );
+        return Ok(());
+    }
+
     log::info!(
         "[merge-islands] merging {} clean BAMs + {} clean VCFs",
         clean_bams.len(),
@@ -1064,12 +1470,39 @@ fn merge_island_outputs(
         clamp_threads_u8(threads),
     )?;
 
+    write_checkpoint(&marker, &outputs, &deps)?;
     Ok(())
+}
+
+fn clean_merge_outputs(paths: &Paths) -> Vec<CheckpointFile> {
+    vec![
+        CheckpointFile::bam(paths.pooled_filtered_bam_path()),
+        CheckpointFile::vcf(paths.recall_filtered_vcf_path(), true),
+    ]
 }
 
 // ── Step 7: priority-merge + subset ─────────────────────────────────────
 
 fn merge_and_subset_final_vcf(paths: &Paths, threads: usize) -> Result<()> {
+    let outputs = vec![
+        CheckpointFile::vcf(paths.merged_recall_vcf_path(), true),
+        CheckpointFile::vcf(paths.final_recall_vcf_path(), true),
+    ];
+    let deps = vec![
+        paths.recall_raw_vcf_path(),
+        paths.recall_filtered_vcf_path(),
+        paths.total_recall_sd_region_bed_path(),
+        paths.ref_genome.clone(),
+    ];
+    let marker = stage_marker(paths, "merge_subset_final_vcf");
+    if checkpoint_valid(&marker, &outputs, &deps) {
+        log::info!(
+            "[resume] final VCF merge/subset complete; using checkpoint {}",
+            marker.display()
+        );
+        return Ok(());
+    }
+
     log::info!("[merge-final] priority merge raw vs clean → final VCF");
 
     let merged_vcf = paths.merged_recall_vcf_path();
@@ -1100,6 +1533,7 @@ fn merge_and_subset_final_vcf(paths: &Paths, threads: usize) -> Result<()> {
         "[merge-final] final VCF → {:?}",
         paths.final_recall_vcf_path()
     );
+    write_checkpoint(&marker, &outputs, &deps)?;
     Ok(())
 }
 
@@ -1113,6 +1547,18 @@ fn post_process_vcf(
     cohort: &crate::cli::CohortArgs,
     paths: &Paths,
 ) -> Result<PathBuf> {
+    let expected_final = post_process_expected_output(sdrecall_vcf, conventional, cohort, paths);
+    let outputs = vec![CheckpointFile::vcf(expected_final.clone(), true)];
+    let deps = post_process_deps(sdrecall_vcf, conventional, cohort, paths);
+    let marker = stage_marker(paths, "post_process_vcf");
+    if checkpoint_valid(&marker, &outputs, &deps) {
+        log::info!(
+            "[resume] post-process complete; using checkpoint {}",
+            marker.display()
+        );
+        return Ok(expected_final);
+    }
+
     let mut final_vcf = sdrecall_vcf.to_path_buf();
 
     if let Some(cohort_vcf) = &cohort.cohort_vcf {
@@ -1167,7 +1613,48 @@ fn post_process_vcf(
     let pooled_filtered_bam = paths.pooled_filtered_bam_path();
     crate::vcf_hp::annotate_vcf_hp(&final_vcf, &final_vcf, &pooled_filtered_bam, 4)?;
 
+    let outputs = vec![CheckpointFile::vcf(final_vcf.clone(), true)];
+    write_checkpoint(&marker, &outputs, &deps)?;
     Ok(final_vcf)
+}
+
+fn post_process_expected_output(
+    sdrecall_vcf: &Path,
+    conventional: &crate::cli::ConventionalVcfArgs,
+    cohort: &crate::cli::CohortArgs,
+    paths: &Paths,
+) -> PathBuf {
+    if let Some(conventional_vcf) = &conventional.conventional_vcf {
+        return conventional.merged_vcf.clone().unwrap_or_else(|| {
+            let stem = conventional_vcf
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy();
+            conventional_vcf.with_file_name(format!("{stem}.sdrecall_merged.vcf.gz"))
+        });
+    }
+    if cohort.cohort_vcf.is_some() {
+        return paths
+            .tmp_dir
+            .join(format!("{}.inhouse_common.vcf.gz", paths.sample_id));
+    }
+    sdrecall_vcf.to_path_buf()
+}
+
+fn post_process_deps(
+    sdrecall_vcf: &Path,
+    conventional: &crate::cli::ConventionalVcfArgs,
+    cohort: &crate::cli::CohortArgs,
+    paths: &Paths,
+) -> Vec<PathBuf> {
+    let mut deps = vec![sdrecall_vcf.to_path_buf(), paths.pooled_filtered_bam_path()];
+    if let Some(conventional_vcf) = &conventional.conventional_vcf {
+        deps.push(conventional_vcf.clone());
+    }
+    if let Some(cohort_vcf) = &cohort.cohort_vcf {
+        deps.push(cohort_vcf.clone());
+    }
+    deps
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -1201,6 +1688,190 @@ fn hts_err(e: impl std::fmt::Display) -> SdError {
     SdError::Htslib(e.to_string())
 }
 
+// ════════════════════════════════════════════════════════════════════════
+//  Resume checkpoints
+// ════════════════════════════════════════════════════════════════════════
+
+#[derive(Clone, Copy, Debug)]
+enum CheckpointKind {
+    AnyFile,
+    NonEmptyFile,
+    Bam,
+    Vcf { indexed: bool },
+}
+
+#[derive(Clone, Debug)]
+struct CheckpointFile {
+    path: PathBuf,
+    kind: CheckpointKind,
+}
+
+impl CheckpointFile {
+    fn any(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            kind: CheckpointKind::AnyFile,
+        }
+    }
+
+    fn nonempty(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            kind: CheckpointKind::NonEmptyFile,
+        }
+    }
+
+    fn bam(path: impl Into<PathBuf>) -> Self {
+        Self {
+            path: path.into(),
+            kind: CheckpointKind::Bam,
+        }
+    }
+
+    fn vcf(path: impl Into<PathBuf>, indexed: bool) -> Self {
+        Self {
+            path: path.into(),
+            kind: CheckpointKind::Vcf { indexed },
+        }
+    }
+
+    fn is_valid(&self) -> bool {
+        match self.kind {
+            CheckpointKind::AnyFile => self.path.is_file(),
+            CheckpointKind::NonEmptyFile => file_nonempty(&self.path),
+            CheckpointKind::Bam => file_nonempty(&self.path) && bam_index_exists(&self.path),
+            CheckpointKind::Vcf { indexed } => {
+                file_nonempty(&self.path) && (!indexed || vcf_index_exists(&self.path))
+            }
+        }
+    }
+}
+
+fn stage_marker(paths: &Paths, name: &str) -> PathBuf {
+    paths
+        .tmp_dir
+        .join("checkpoints")
+        .join(format!("{name}.done"))
+}
+
+fn nested_marker(paths: &Paths, stage: &str, name: &str) -> PathBuf {
+    paths.tmp_dir.join("checkpoints").join(stage).join(name)
+}
+
+fn checkpoint_valid(marker: &Path, outputs: &[CheckpointFile], deps: &[PathBuf]) -> bool {
+    let Some(marker_mtime) = modified_time(marker) else {
+        return false;
+    };
+    if !file_nonempty(marker) {
+        return false;
+    }
+
+    for output in outputs {
+        if !output.is_valid() {
+            return false;
+        }
+        let Some(output_mtime) = modified_time(&output.path) else {
+            return false;
+        };
+        if output_mtime > marker_mtime {
+            log::debug!(
+                "[resume] checkpoint {} is older than output {}",
+                marker.display(),
+                output.path.display()
+            );
+            return false;
+        }
+    }
+
+    for dep in deps {
+        let Some(dep_mtime) = modified_time(dep) else {
+            log::debug!(
+                "[resume] checkpoint {} dependency missing: {}",
+                marker.display(),
+                dep.display()
+            );
+            return false;
+        };
+        if dep_mtime > marker_mtime {
+            log::debug!(
+                "[resume] checkpoint {} is older than dependency {}",
+                marker.display(),
+                dep.display()
+            );
+            return false;
+        }
+    }
+
+    true
+}
+
+fn write_checkpoint(marker: &Path, outputs: &[CheckpointFile], deps: &[PathBuf]) -> Result<()> {
+    if let Some(parent) = marker.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| SdError::Io {
+            path: parent.display().to_string(),
+            source: e,
+        })?;
+    }
+
+    let mut body = String::from("status\tdone\n");
+    body.push_str("outputs\n");
+    for output in outputs {
+        body.push_str(&format!("{}\t{:?}\n", output.path.display(), output.kind));
+    }
+    body.push_str("dependencies\n");
+    for dep in deps {
+        body.push_str(&format!("{}\n", dep.display()));
+    }
+
+    let tmp = marker_tmp_path(marker);
+    std::fs::write(&tmp, body).map_err(|e| SdError::Io {
+        path: tmp.display().to_string(),
+        source: e,
+    })?;
+    std::fs::rename(&tmp, marker).map_err(|e| SdError::Io {
+        path: marker.display().to_string(),
+        source: e,
+    })?;
+    Ok(())
+}
+
+fn marker_tmp_path(marker: &Path) -> PathBuf {
+    let parent = marker.parent().unwrap_or_else(|| Path::new("."));
+    let name = marker
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("checkpoint.done");
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    parent.join(format!(".{name}.tmp.{}.{}", std::process::id(), nanos))
+}
+
+fn modified_time(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).and_then(|m| m.modified()).ok()
+}
+
+fn file_nonempty(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|m| m.is_file() && m.len() > 0)
+        .unwrap_or(false)
+}
+
+fn bam_index_exists(bam: &Path) -> bool {
+    append_path_suffix(bam, ".bai").is_file() || bam.with_extension("bai").is_file()
+}
+
+fn vcf_index_exists(vcf: &Path) -> bool {
+    append_path_suffix(vcf, ".csi").is_file() || append_path_suffix(vcf, ".tbi").is_file()
+}
+
+fn append_path_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1226,5 +1897,36 @@ mod tests {
     #[test]
     fn rgref_normalization_smoke() {
         assert_eq!(Paths::normalize_rg_label(RgRef::from(0u32)).unwrap(), "RG0");
+    }
+
+    #[test]
+    fn checkpoint_valid_requires_marker_newer_than_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("stage.done");
+        let output = dir.path().join("out.txt");
+        let deps: Vec<PathBuf> = Vec::new();
+        let outputs = vec![CheckpointFile::nonempty(output.clone())];
+
+        std::fs::write(&marker, "done\n").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        std::fs::write(&output, "out\n").unwrap();
+
+        assert!(!checkpoint_valid(&marker, &outputs, &deps));
+    }
+
+    #[test]
+    fn write_checkpoint_makes_valid_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("stage.done");
+        let output = dir.path().join("out.txt");
+        let dep = dir.path().join("dep.txt");
+        std::fs::write(&dep, "dep\n").unwrap();
+        std::fs::write(&output, "out\n").unwrap();
+
+        let outputs = vec![CheckpointFile::nonempty(output)];
+        let deps = vec![dep];
+        write_checkpoint(&marker, &outputs, &deps).unwrap();
+
+        assert!(checkpoint_valid(&marker, &outputs, &deps));
     }
 }
