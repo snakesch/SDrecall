@@ -14,7 +14,7 @@
 use rust_htslib::bcf::{self, Read};
 use sdrecall_utils::{Result, SdError};
 use std::cmp::Ordering;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Open a VCF/BCF reader (a sorted cursor; the caller streams records). The
 /// inputs are assumed coordinate-sorted (as every SDrecall island VCF is).
@@ -97,6 +97,7 @@ pub fn concat_sort_vcfs(
     if inputs.is_empty() {
         return Err(SdError::Vcf("concat_sort_vcfs: no inputs".to_string()));
     }
+    remove_vcf_indexes(out)?;
 
     // Output header from the first input.
     let first = read_vcf(inputs[0])?;
@@ -161,7 +162,62 @@ pub fn concat_sort_vcfs(
         keyed.len(),
         dedup_exact
     );
+    if is_indexable_vcf(out) {
+        index_vcf(out)?;
+    }
     Ok(())
+}
+
+fn is_indexable_vcf(path: &Path) -> bool {
+    let name = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    name.ends_with(".vcf.gz") || name.ends_with(".bcf")
+}
+
+fn index_vcf(path: &Path) -> Result<()> {
+    let status = std::process::Command::new("bcftools")
+        .arg("index")
+        .arg("-f")
+        .arg(path)
+        .status()
+        .map_err(|e| SdError::Vcf(format!("spawn bcftools index {}: {e}", path.display())))?;
+    if !status.success() {
+        return Err(SdError::Vcf(format!(
+            "bcftools index failed (exit {:?}) for {}",
+            status.code(),
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn remove_vcf_indexes(vcf: &Path) -> Result<()> {
+    for path in vcf_index_paths(vcf) {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => {
+                return Err(SdError::Vcf(format!(
+                    "remove stale VCF index {}: {e}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn vcf_index_paths(vcf: &Path) -> [PathBuf; 2] {
+    [append_path_suffix(vcf, ".csi"), append_path_suffix(vcf, ".tbi")]
+}
+
+fn append_path_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(suffix);
+    PathBuf::from(s)
 }
 
 #[cfg(test)]
@@ -210,6 +266,13 @@ mod tests {
             ));
         }
         out
+    }
+
+    #[test]
+    fn only_bgzipped_vcf_and_bcf_outputs_are_indexed() {
+        assert!(is_indexable_vcf(Path::new("a.vcf.gz")));
+        assert!(is_indexable_vcf(Path::new("a.bcf")));
+        assert!(!is_indexable_vcf(Path::new("a.vcf")));
     }
 
     #[test]

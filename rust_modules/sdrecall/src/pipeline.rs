@@ -1761,7 +1761,7 @@ impl CheckpointFile {
             CheckpointKind::NonEmptyFile => file_nonempty(&self.path),
             CheckpointKind::Bam => file_nonempty(&self.path) && bam_index_exists(&self.path),
             CheckpointKind::Vcf { indexed } => {
-                file_nonempty(&self.path) && (!indexed || vcf_index_exists(&self.path))
+                file_nonempty(&self.path) && (!indexed || vcf_fresh_index_exists(&self.path))
             }
         }
     }
@@ -1888,6 +1888,20 @@ fn bam_index_exists(bam: &Path) -> bool {
 
 fn vcf_index_exists(vcf: &Path) -> bool {
     append_path_suffix(vcf, ".csi").is_file() || append_path_suffix(vcf, ".tbi").is_file()
+}
+
+fn vcf_fresh_index_exists(vcf: &Path) -> bool {
+    let Some(vcf_mtime) = modified_time(vcf) else {
+        return false;
+    };
+    vcf_index_paths(vcf)
+        .into_iter()
+        .filter_map(|idx| modified_time(&idx))
+        .any(|idx_mtime| idx_mtime >= vcf_mtime)
+}
+
+fn vcf_index_paths(vcf: &Path) -> [PathBuf; 2] {
+    [append_path_suffix(vcf, ".csi"), append_path_suffix(vcf, ".tbi")]
 }
 
 fn append_path_suffix(path: &Path, suffix: &str) -> PathBuf {

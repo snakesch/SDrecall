@@ -69,6 +69,7 @@ pub fn bcftools_call(
     threads: usize,
 ) -> Result<()> {
     let t = threads.to_string();
+    remove_vcf_indexes(output_vcf)?;
     let script = format!(
         "set -o pipefail; \
          export OPENBLAS_NUM_THREADS={t}; \
@@ -80,7 +81,7 @@ pub fn bcftools_call(
          awk 'BEGIN{{FS=OFS=\"\\t\"}} {{printf \"%s\\t%s\\t%s\\t%s\\t%s\", $1, $2, $3, toupper($4), toupper($5); for(i=6;i<=NF;i++) printf \"\\t%s\", $i; printf \"\\n\"}}' | \
          bcftools filter --threads {t} -e 'GT != \"mis\"' -s {tag} - | \
          bcftools sort -Oz -o {out} && \
-         tabix -f -p vcf {out}",
+         bcftools index -f {out}",
         t = t,
         ref_ = sq(ref_genome),
         bam = sq(input_bam),
@@ -99,6 +100,7 @@ pub fn bcftools_view_regions(
     threads: usize,
 ) -> Result<()> {
     let t = threads.to_string();
+    remove_vcf_indexes(output_vcf)?;
     let script = format!(
         "bcftools view --threads {t} -R {bed} -Oz -o {out} {inp} && \
          bcftools index -f {out}",
@@ -116,6 +118,7 @@ pub fn bcftools_concat(inputs: &[&Path], output_vcf: &Path, threads: usize) -> R
         return Err(SdError::Compute("bcftools_concat: no input VCFs".into()));
     }
     let t = threads.to_string();
+    remove_vcf_indexes(output_vcf)?;
     let inp_list: String = inputs.iter().map(|p| sq(p)).collect::<Vec<_>>().join(" ");
     let script = format!(
         "set -o pipefail; \
@@ -242,13 +245,21 @@ pub fn samtools_sort_index(input_bam: &Path, output_bam: &Path, threads: usize) 
 
 /// Sort a VCF with bcftools, bgzip it, and build a tabix index.
 pub fn bcftools_sort_index(input_vcf: &Path, output_vcf: &Path, _threads: usize) -> Result<()> {
+    remove_vcf_indexes(output_vcf)?;
     let script = format!(
         "bcftools sort -Oz -o {out} {inp} && \
-         tabix -f -p vcf {out}",
+         bcftools index -f {out}",
         out = sq(output_vcf),
         inp = sq(input_vcf),
     );
     run_bash(&script, "bcftools sort+tabix")
+}
+
+/// Build a fresh VCF index after deleting both possible stale sidecars.
+pub fn bcftools_index_vcf(vcf: &Path, _threads: usize) -> Result<()> {
+    remove_vcf_indexes(vcf)?;
+    let script = format!("bcftools index -f {vcf}", vcf = sq(vcf));
+    run_bash(&script, "bcftools index")
 }
 
 // ─────────────────────────── internals ───────────────────────────────────
@@ -373,6 +384,32 @@ fn merge_temp_path(output_bam: &Path, idx: usize, ext: &str) -> PathBuf {
     ))
 }
 
+fn remove_vcf_indexes(vcf: &Path) -> Result<()> {
+    for path in vcf_index_paths(vcf) {
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(source) => {
+                return Err(SdError::Io {
+                    path: path.display().to_string(),
+                    source,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn vcf_index_paths(vcf: &Path) -> [PathBuf; 2] {
+    [append_path_suffix(vcf, ".csi"), append_path_suffix(vcf, ".tbi")]
+}
+
+fn append_path_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_os_string();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
 fn shquote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
@@ -411,5 +448,12 @@ mod tests {
             .to_string_lossy()
             .contains(".out.bam.merge."));
         assert!(tmp.to_string_lossy().ends_with(".7.list"));
+    }
+
+    #[test]
+    fn vcf_index_paths_use_htslib_sidecar_names() {
+        let paths = vcf_index_paths(Path::new("/tmp/a.vcf.gz"));
+        assert_eq!(paths[0], PathBuf::from("/tmp/a.vcf.gz.csi"));
+        assert_eq!(paths[1], PathBuf::from("/tmp/a.vcf.gz.tbi"));
     }
 }
