@@ -1,6 +1,6 @@
-use rust_htslib::{bam, bam::Read, bam::record::Aux};
+use rust_htslib::{bam, bam::Read};
 use std::collections::{HashMap, HashSet};
-use std::fs::{File, create_dir_all};
+use std::fs::{create_dir_all, File};
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
@@ -54,43 +54,22 @@ fn merge_regions(mut regions: Vec<(String, u64, u64)>) -> Vec<(String, u64, u64)
     merged
 }
 
-/// Check if a read should be included based on multi-aligned filter.
+/// Check if a read should be included based on the Python read-extraction shell
+/// predicates.
 fn should_include_read(record: &bam::Record, multi_aligned: bool) -> bool {
-    if record.mapq() >= 60 {
-        return false;
-    }
     if !multi_aligned {
+        // Python FC extraction:
+        // `samtools view -h -P -L {region_bed} -u {input_bam} | bamtofastq`
+        // No MAPQ/tag predicate is applied here.
         return true;
     }
 
-    // Filter: ![SA] && [XA] && abs(AS - XS) <= 10
+    // Python NFC extraction:
+    // `samtools view ... -e '![SA] && ([XA] || mapq < 50)'`.
     if record.aux(b"SA").is_ok() {
         return false;
     }
-    if record.aux(b"XA").is_err() {
-        return false;
-    }
-
-    let as_score = aux_int(record, b"AS");
-    let xs_score = aux_int(record, b"XS");
-
-    if let (Some(a), Some(x)) = (as_score, xs_score) {
-        (a - x).abs() <= 10
-    } else {
-        true
-    }
-}
-
-fn aux_int(record: &bam::Record, tag: &[u8; 2]) -> Option<i32> {
-    match record.aux(tag) {
-        Ok(Aux::I32(v)) => Some(v),
-        Ok(Aux::I16(v)) => Some(v as i32),
-        Ok(Aux::I8(v)) => Some(v as i32),
-        Ok(Aux::U32(v)) => Some(v as i32),
-        Ok(Aux::U16(v)) => Some(v as i32),
-        Ok(Aux::U8(v)) => Some(v as i32),
-        _ => None,
-    }
+    record.aux(b"XA").is_ok() || record.mapq() < 50
 }
 
 /// Encode BAM Phred qualities as a Sanger-FASTQ quality line.
@@ -122,9 +101,9 @@ fn quality_to_string(qual: &[u8], qname: &str) -> anyhow::Result<String> {
 /// writing R1/R2 FASTQ files. Returns `(r1_path, r2_path)`.
 ///
 /// When `multi_aligned` is true, applies the multi-alignment filter:
-/// `MAPQ < 60 && !SA && XA && |AS - XS| <= 10`. When false, only
-/// `MAPQ < 60` is required. Singleton reads (only one mate found) are
-/// discarded; if either mate of a pair passes, both are written.
+/// `!SA && (XA || MAPQ < 50)`. When false, every fetched read pair is eligible.
+/// Singleton reads (only one mate found) are discarded; if either mate of a pair
+/// passes, both are written.
 pub fn bam_to_fastq(
     input_bam: &str,
     region_bed: &str,
@@ -212,8 +191,7 @@ pub fn bam_to_fastq(
         for (r1_opt, r2_opt) in read_pairs.into_values() {
             let passes = match (&r1_opt, &r2_opt) {
                 (Some(r1), Some(r2)) => {
-                    should_include_read(r1, multi_aligned)
-                        || should_include_read(r2, multi_aligned)
+                    should_include_read(r1, multi_aligned) || should_include_read(r2, multi_aligned)
                 }
                 _ => false,
             };
@@ -250,6 +228,7 @@ fn write_fastq_record(w: &mut impl Write, rec: &bam::Record) -> anyhow::Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rust_htslib::bam::record::{Aux, Cigar, CigarString};
 
     #[test]
     fn quality_encodes_valid_phred_range() {
@@ -274,11 +253,43 @@ mod tests {
         assert!(quality_to_string(&[94], "r1").is_err());
     }
 
+    fn read_with_tags(mapq: u8, xa: bool, sa: bool) -> bam::Record {
+        let mut rec = bam::Record::new();
+        let cigar = CigarString(vec![Cigar::Match(1)]);
+        rec.set(b"read1", Some(&cigar), b"A", &[30]);
+        rec.set_mapq(mapq);
+        if xa {
+            rec.push_aux(b"XA", Aux::String("chr1,+100,1M,0;")).unwrap();
+        }
+        if sa {
+            rec.push_aux(b"SA", Aux::String("chr1,100,+,1M,60,0;"))
+                .unwrap();
+        }
+        rec
+    }
+
+    #[test]
+    fn fc_extraction_keeps_high_mapq_reads() {
+        let rec = read_with_tags(60, false, false);
+        assert!(should_include_read(&rec, false));
+    }
+
+    #[test]
+    fn nfc_extraction_matches_python_shell_predicate() {
+        assert!(should_include_read(&read_with_tags(60, true, false), true));
+        assert!(should_include_read(&read_with_tags(49, false, false), true));
+        assert!(!should_include_read(
+            &read_with_tags(50, false, false),
+            true
+        ));
+        assert!(!should_include_read(&read_with_tags(10, true, true), true));
+    }
+
     #[test]
     fn merge_regions_collapses_overlaps_and_sorts() {
         let regions = vec![
             ("chr1".to_string(), 50, 100),
-            ("chr1".to_string(), 10, 60),   // overlaps [50,100) → [10,100)
+            ("chr1".to_string(), 10, 60), // overlaps [50,100) → [10,100)
             ("chr1".to_string(), 100, 120), // book-ended → fuse to [10,120)
             ("chr2".to_string(), 5, 9),
         ];
@@ -309,8 +320,15 @@ mod python_bindings {
         threads: usize,
         _tmp_dir: &str,
     ) -> PyResult<(String, String)> {
-        crate::bam_to_fastq(input_bam, region_bed, output_freads, output_rreads, multi_aligned, threads)
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))
+        crate::bam_to_fastq(
+            input_bam,
+            region_bed,
+            output_freads,
+            output_rreads,
+            multi_aligned,
+            threads,
+        )
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))
     }
 
     #[pymodule]
