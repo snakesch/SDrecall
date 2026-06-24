@@ -525,7 +525,7 @@ fn realign_per_rg(
                 let _ = std::fs::remove_file(format!("{}.bai", local_bam.display()));
 
                 // 3c: variant call on the GENOMIC BAM.
-                crate::tools::bcftools_call(&raw_bam, &ref_genome, &raw_vcf, tpj)?;
+                crate::tools::bcftools_call(&raw_bam, &ref_genome, &raw_vcf, &rg.label, tpj)?;
                 write_checkpoint(&marker, &outputs, &deps)?;
 
                 log::info!("[realign] {} done → {:?}", rg.label, raw_bam);
@@ -567,6 +567,9 @@ fn realign_rg_deps(
     ];
     if counter_bed.exists() {
         deps.push(counter_bed.to_path_buf());
+    }
+    if let Some(exe) = current_exe_dependency() {
+        deps.push(exe);
     }
     for idx in bam_index_paths(&paths.input_bam) {
         if idx.exists() {
@@ -1231,7 +1234,13 @@ fn fp_control_per_island(
                 // whole batch. The outcome is recorded and the failure policy is
                 // applied after the join.
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    process_one_island(island, &ref_genome_str, mq_cutoff as u8, tpj)
+                    process_one_island(
+                        island,
+                        &ref_genome_str,
+                        &paths.sample_id,
+                        mq_cutoff as u8,
+                        tpj,
+                    )
                 }));
 
                 match result {
@@ -1325,12 +1334,16 @@ fn island_clean_outputs(clean_bam: &Path, clean_vcf: &Path) -> Vec<CheckpointFil
 }
 
 fn island_process_deps(paths: &Paths, island: &IslandPaths, ref_genome: &str) -> Vec<PathBuf> {
-    vec![
+    let mut deps = vec![
         islands_manifest_path(paths),
         island.intrinsic_bam.clone(),
         island.coverage_bed.clone(),
         PathBuf::from(ref_genome),
-    ]
+    ];
+    if let Some(exe) = current_exe_dependency() {
+        deps.push(exe);
+    }
+    deps
 }
 
 /// Write a TSV of failed islands (`island_id\treason`) into the recall-results
@@ -1357,6 +1370,7 @@ fn write_failed_island_manifest(paths: &Paths, failures: &[(String, String)]) ->
 fn process_one_island(
     island: &IslandPaths,
     ref_genome: &str,
+    sample_id: &str,
     mq_cutoff: u8,
     threads: usize,
 ) -> Result<Option<(PathBuf, PathBuf)>> {
@@ -1417,7 +1431,13 @@ fn process_one_island(
     // Variant-call on the clean BAM. HPSUP annotation happens once, at the very
     // end of post-processing, so these island VCFs stay atomization-safe.
     let clean_vcf = clean_bam.with_extension("vcf.gz");
-    crate::tools::bcftools_call(&clean_bam, Path::new(ref_genome), &clean_vcf, threads)?;
+    crate::tools::bcftools_call(
+        &clean_bam,
+        Path::new(ref_genome),
+        &clean_vcf,
+        sample_id,
+        threads,
+    )?;
 
     log::info!(
         "[fp-control] island {} done: {} correct, {} mismap",
@@ -1756,6 +1776,10 @@ fn stage_marker(paths: &Paths, name: &str) -> PathBuf {
 
 fn nested_marker(paths: &Paths, stage: &str, name: &str) -> PathBuf {
     paths.tmp_dir.join("checkpoints").join(stage).join(name)
+}
+
+fn current_exe_dependency() -> Option<PathBuf> {
+    std::env::current_exe().ok().filter(|p| p.is_file())
 }
 
 fn checkpoint_valid(marker: &Path, outputs: &[CheckpointFile], deps: &[PathBuf]) -> bool {

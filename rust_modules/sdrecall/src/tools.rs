@@ -65,18 +65,27 @@ pub fn bcftools_call(
     input_bam: &Path,
     ref_genome: &Path,
     output_vcf: &Path,
+    filter_tag: &str,
     threads: usize,
 ) -> Result<()> {
     let t = threads.to_string();
     let script = format!(
         "set -o pipefail; \
-         bcftools mpileup --threads {t} -f {ref_} -Ou {bam} \
-           | bcftools call --threads {t} -mv -Oz -o {out} && \
-         bcftools index -f {out}",
+         export OPENBLAS_NUM_THREADS={t}; \
+         bcftools mpileup --indels-2.0 --threads {t} -A -a FORMAT/AD,FORMAT/DP -q 10 -Q 15 -f {ref_} {bam} | \
+         bcftools call --threads {t} -mv -P '4e-2' -f GQ -Ou | \
+         bcftools norm --threads {t} -m -both -f {ref_} --multi-overlaps 0 -a -Ou - | \
+         bcftools norm --threads {t} -d exact - | \
+         bcftools view --threads {t} -i 'ALT!=\"*\"' -Ov | \
+         awk 'BEGIN{{FS=OFS=\"\\t\"}} {{printf \"%s\\t%s\\t%s\\t%s\\t%s\", $1, $2, $3, toupper($4), toupper($5); for(i=6;i<=NF;i++) printf \"\\t%s\", $i; printf \"\\n\"}}' | \
+         bcftools filter --threads {t} -e 'GT != \"mis\"' -s {tag} - | \
+         bcftools sort -Oz -o {out} && \
+         tabix -f -p vcf {out}",
         t = t,
         ref_ = sq(ref_genome),
         bam = sq(input_bam),
         out = sq(output_vcf),
+        tag = shquote(filter_tag),
     );
     run_bash(&script, "bcftools call")
 }
