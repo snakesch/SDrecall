@@ -1020,14 +1020,10 @@ fn process_one_island(
         return Ok(None);
     }
 
-    // Variant-call on the clean BAM, then annotate clean variants with HP support.
+    // Variant-call on the clean BAM. HPSUP annotation happens once, at the very
+    // end of post-processing, so these island VCFs stay atomization-safe.
     let clean_vcf = clean_bam.with_extension("vcf.gz");
-    let unannotated_vcf = clean_bam.with_extension("unannotated.vcf.gz");
-    crate::tools::bcftools_call(&clean_bam, Path::new(ref_genome), &unannotated_vcf, threads)?;
-    crate::vcf_hp::annotate_vcf_hp(&unannotated_vcf, &clean_vcf, &clean_bam, threads)?;
-    let _ = std::fs::remove_file(&unannotated_vcf);
-    let _ = std::fs::remove_file(format!("{}.csi", unannotated_vcf.display()));
-    let _ = std::fs::remove_file(format!("{}.tbi", unannotated_vcf.display()));
+    crate::tools::bcftools_call(&clean_bam, Path::new(ref_genome), &clean_vcf, threads)?;
 
     log::info!(
         "[fp-control] island {} done: {} correct, {} mismap",
@@ -1163,6 +1159,13 @@ fn post_process_vcf(
         })?;
         final_vcf = merged;
     }
+
+    log::info!(
+        "[post] annotating final VCF with HP support from {:?}",
+        paths.pooled_filtered_bam_path()
+    );
+    let pooled_filtered_bam = paths.pooled_filtered_bam_path();
+    crate::vcf_hp::annotate_vcf_hp(&final_vcf, &final_vcf, &pooled_filtered_bam, 4)?;
 
     Ok(final_vcf)
 }
