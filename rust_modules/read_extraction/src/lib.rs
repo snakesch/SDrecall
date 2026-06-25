@@ -215,14 +215,70 @@ pub fn bam_to_fastq(
 fn write_fastq_record(w: &mut impl Write, rec: &bam::Record) -> anyhow::Result<()> {
     let name = std::str::from_utf8(rec.qname())
         .map_err(|e| anyhow::anyhow!("Read name is not valid UTF-8: {e}"))?;
-    // Encode quality first so an invalid score errors before any partial record
-    // is written to the buffer.
-    let qual = quality_to_string(rec.qual(), name)?;
+    // Encode sequence/quality first so an invalid score errors before any
+    // partial record is written to the buffer. BAM stores reverse-strand
+    // alignments in mapping orientation; FASTQ must restore read orientation.
+    let seq = fastq_sequence(rec);
+    let qual = fastq_quality_string(rec, name)?;
     writeln!(w, "@{name}")?;
-    writeln!(w, "{}", String::from_utf8_lossy(&rec.seq().as_bytes()))?;
+    writeln!(w, "{}", String::from_utf8_lossy(&seq))?;
     writeln!(w, "+")?;
     writeln!(w, "{qual}")?;
     Ok(())
+}
+
+fn fastq_sequence(rec: &bam::Record) -> Vec<u8> {
+    let seq = rec.seq().as_bytes();
+    if rec.is_reverse() {
+        seq.iter().rev().map(|&b| complement_base(b)).collect()
+    } else {
+        seq
+    }
+}
+
+fn fastq_quality_string(rec: &bam::Record, qname: &str) -> anyhow::Result<String> {
+    if rec.is_reverse() {
+        let reversed: Vec<u8> = rec.qual().iter().rev().copied().collect();
+        quality_to_string(&reversed, qname)
+    } else {
+        quality_to_string(rec.qual(), qname)
+    }
+}
+
+fn complement_base(base: u8) -> u8 {
+    match base {
+        b'A' => b'T',
+        b'C' => b'G',
+        b'G' => b'C',
+        b'T' => b'A',
+        b'R' => b'Y',
+        b'Y' => b'R',
+        b'S' => b'S',
+        b'W' => b'W',
+        b'K' => b'M',
+        b'M' => b'K',
+        b'B' => b'V',
+        b'D' => b'H',
+        b'H' => b'D',
+        b'V' => b'B',
+        b'N' => b'N',
+        b'a' => b't',
+        b'c' => b'g',
+        b'g' => b'c',
+        b't' => b'a',
+        b'r' => b'y',
+        b'y' => b'r',
+        b's' => b's',
+        b'w' => b'w',
+        b'k' => b'm',
+        b'm' => b'k',
+        b'b' => b'v',
+        b'd' => b'h',
+        b'h' => b'd',
+        b'v' => b'b',
+        b'n' => b'n',
+        _ => b'N',
+    }
 }
 
 #[cfg(test)]
@@ -251,6 +307,17 @@ mod tests {
     fn quality_rejects_out_of_range() {
         // 94 is one past the Sanger cap and would still wrap-corrupt downstream.
         assert!(quality_to_string(&[94], "r1").is_err());
+    }
+
+    #[test]
+    fn reverse_strand_fastq_restores_read_orientation() {
+        let mut rec = bam::Record::new();
+        let cigar = CigarString(vec![Cigar::Match(5)]);
+        rec.set(b"read1", Some(&cigar), b"ACGTN", &[10, 20, 30, 40, 50]);
+        rec.set_flags(0x10);
+
+        assert_eq!(fastq_sequence(&rec), b"NACGT");
+        assert_eq!(fastq_quality_string(&rec, "read1").unwrap(), "SI?5+");
     }
 
     fn read_with_tags(mapq: u8, xa: bool, sa: bool) -> bam::Record {
