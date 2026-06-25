@@ -1,3 +1,4 @@
+use rust_htslib::bam::record::Aux;
 use rust_htslib::{bam, bam::Read};
 use std::collections::{HashMap, HashSet};
 use std::fs::{create_dir_all, File};
@@ -54,6 +55,42 @@ fn merge_regions(mut regions: Vec<(String, u64, u64)>) -> Vec<(String, u64, u64)
     merged
 }
 
+/// Maximum `|AS - XS|` gap below which a read is treated as a near-tied
+/// multi-mapper. BWA folds multi-mapping ambiguity into MAPQ, but the raw
+/// AS/XS gap is the direct measure: a small gap means the read's best and
+/// second-best alignments are essentially interchangeable, so it is a
+/// genuine SD multi-mapper that may carry the alt haplotype from a paralog
+/// even when BWA assigned a confident (high) MAPQ. Such reads would be
+/// dropped by the `mapq < 50` arm alone; this gap arm recruits them.
+const NFC_AS_XS_MAX_GAP: i64 = 10;
+
+/// Read an integer aux tag as `i64`. Returns `None` for a missing tag or a
+/// non-integer (string/array) variant, so a caller can treat absence as
+/// "not a near-tied multi-mapper" rather than erroring out of extraction.
+fn aux_integer(record: &bam::Record, tag: &[u8]) -> Option<i64> {
+    match record.aux(tag).ok()? {
+        Aux::I8(v) => Some(v as i64),
+        Aux::U8(v) => Some(v as i64),
+        Aux::I16(v) => Some(v as i64),
+        Aux::U16(v) => Some(v as i64),
+        Aux::I32(v) => Some(v as i64),
+        Aux::U32(v) => Some(v as i64),
+        _ => None,
+    }
+}
+
+/// `|AS - XS| <= NFC_AS_XS_MAX_GAP` — the read's best and second-best
+/// alignments are near-tied, so it is a genuine SD multi-mapper. Both tags
+/// must be present; minimap2 BAMs (which omit `XS`) simply return `false`.
+fn near_tied_multimapper(record: &bam::Record) -> bool {
+    match (aux_integer(record, b"AS"), aux_integer(record, b"XS")) {
+        (Some(as_score), Some(xs_score)) => {
+            (as_score - xs_score).abs() <= NFC_AS_XS_MAX_GAP
+        }
+        _ => false,
+    }
+}
+
 /// Check if a read should be included based on the Python read-extraction shell
 /// predicates.
 fn should_include_read(record: &bam::Record, multi_aligned: bool) -> bool {
@@ -64,12 +101,15 @@ fn should_include_read(record: &bam::Record, multi_aligned: bool) -> bool {
         return true;
     }
 
-    // Python NFC extraction:
-    // `samtools view ... -e '![SA] && ([XA] || mapq < 50)'`.
+    // Python NFC extraction: `![SA] && ([XA] || mapq < 50)`, with the AS/XS
+    // near-tie arm OR'd in — a read whose best two alignments are within
+    // `NFC_AS_XS_MAX_GAP` points is a genuine SD multi-mapper that may carry
+    // the alt haplotype from a paralog, so recruit it even when BWA assigned
+    // it a confident MAPQ (the `mapq < 50` arm would otherwise drop it).
     if record.aux(b"SA").is_ok() {
         return false;
     }
-    record.aux(b"XA").is_ok() || record.mapq() < 50
+    record.aux(b"XA").is_ok() || record.mapq() < 50 || near_tied_multimapper(record)
 }
 
 /// Encode BAM Phred qualities as a Sanger-FASTQ quality line.
@@ -320,7 +360,13 @@ mod tests {
         assert_eq!(fastq_quality_string(&rec, "read1").unwrap(), "SI?5+");
     }
 
-    fn read_with_tags(mapq: u8, xa: bool, sa: bool) -> bam::Record {
+    fn read_with_tags(
+        mapq: u8,
+        xa: bool,
+        sa: bool,
+        as_score: Option<i32>,
+        xs_score: Option<i32>,
+    ) -> bam::Record {
         let mut rec = bam::Record::new();
         let cigar = CigarString(vec![Cigar::Match(1)]);
         rec.set(b"read1", Some(&cigar), b"A", &[30]);
@@ -332,24 +378,80 @@ mod tests {
             rec.push_aux(b"SA", Aux::String("chr1,100,+,1M,60,0;"))
                 .unwrap();
         }
+        if let Some(v) = as_score {
+            rec.push_aux(b"AS", Aux::I32(v)).unwrap();
+        }
+        if let Some(v) = xs_score {
+            rec.push_aux(b"XS", Aux::I32(v)).unwrap();
+        }
         rec
     }
 
     #[test]
     fn fc_extraction_keeps_high_mapq_reads() {
-        let rec = read_with_tags(60, false, false);
+        let rec = read_with_tags(60, false, false, None, None);
         assert!(should_include_read(&rec, false));
     }
 
     #[test]
     fn nfc_extraction_matches_python_shell_predicate() {
-        assert!(should_include_read(&read_with_tags(60, true, false), true));
-        assert!(should_include_read(&read_with_tags(49, false, false), true));
-        assert!(!should_include_read(
-            &read_with_tags(50, false, false),
+        assert!(should_include_read(
+            &read_with_tags(60, true, false, None, None),
             true
         ));
-        assert!(!should_include_read(&read_with_tags(10, true, true), true));
+        assert!(should_include_read(
+            &read_with_tags(49, false, false, None, None),
+            true
+        ));
+        assert!(!should_include_read(
+            &read_with_tags(50, false, false, None, None),
+            true
+        ));
+        assert!(!should_include_read(
+            &read_with_tags(10, true, true, None, None),
+            true
+        ));
+    }
+
+    #[test]
+    fn nfc_extraction_recruits_near_tied_multimappers() {
+        // High MAPQ, no XA — the `mapq < 50` and `[XA]` arms would drop this,
+        // but |AS - XS| = 5 <= 10 marks it as a genuine SD multi-mapper to keep.
+        assert!(should_include_read(
+            &read_with_tags(60, false, false, Some(148), Some(143)),
+            true
+        ));
+        // |AS - XS| = 0 (perfect tie, e.g. BWA AS:i:148 XS:i:148) is kept.
+        assert!(should_include_read(
+            &read_with_tags(60, false, false, Some(148), Some(148)),
+            true
+        ));
+        // |AS - XS| = 10 (exactly the cap) is kept (inclusive bound).
+        assert!(should_include_read(
+            &read_with_tags(60, false, false, Some(150), Some(140)),
+            true
+        ));
+        // |AS - XS| = 11 (just over the cap), high MAPQ, no XA → dropped.
+        assert!(!should_include_read(
+            &read_with_tags(60, false, false, Some(150), Some(139)),
+            true
+        ));
+        // Missing XS (e.g. a minimap2 BAM) → no AS/XS arm, falls back to the
+        // other arms; high MAPQ + no XA → dropped (no false recruit).
+        assert!(!should_include_read(
+            &read_with_tags(60, false, false, Some(148), None),
+            true
+        ));
+    }
+
+    #[test]
+    fn nfc_as_xs_arm_does_not_override_split_alignments() {
+        // A near-tied read that also carries SA (split alignment) is still
+        // excluded — the `![SA]` gate wins, matching the Python predicate.
+        assert!(!should_include_read(
+            &read_with_tags(60, false, true, Some(148), Some(148)),
+            true
+        ));
     }
 
     #[test]
