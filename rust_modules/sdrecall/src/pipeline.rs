@@ -446,15 +446,19 @@ fn realign_per_rg(
                 let rg_ref = RgRef::Label(&rg.label);
                 let rg_dir = paths.rg_dir(rg_ref)?;
 
-                // Merge FC + NFC BEDs for read extraction.
-                let query_bed = paths.rg_query_bed_path(rg_ref)?;
+                // Use the target-trimmed region-prep BEDs for read extraction,
+                // matching Python `process_masked_bam`: `{RG}.targeted.bed`
+                // and `{RG}.counterparts_regions.targeted.bed` are produced
+                // from the per-subgroup region-prep outputs before extraction.
+                let fc_bed = targeted_fc_bed_path(&rg_dir, &rg.label);
+                let nfc_bed = targeted_nfc_bed_path(&rg_dir, &rg.label);
                 let (r1, r2) = paths.rg_realign_fastqs_path(rg_ref)?;
                 let raw_bam = paths.rg_raw_masked_bam_path(rg_ref)?;
                 let raw_vcf = raw_bam.with_extension("vcf.gz");
                 let masked_genome = paths.masked_genome_path(rg_ref)?;
-                let counter_bed = paths.rg_counterparts_bed_path(rg_ref)?;
+                let nfc_inputs = targeted_nfc_subgroup_beds(&rg_dir, &rg.label, &rg.subgroup_ids);
                 let outputs = realign_rg_outputs(&raw_bam, &raw_vcf);
-                let deps = realign_rg_deps(paths, &query_bed, &counter_bed, &masked_genome);
+                let deps = realign_rg_deps(paths, &fc_bed, &nfc_inputs, &masked_genome);
                 let marker = nested_marker(paths, "realign_rg", &format!("{}.done", rg.label));
                 if checkpoint_valid(&marker, &outputs, &deps) {
                     log::info!(
@@ -465,12 +469,14 @@ fn realign_per_rg(
                     return Ok((raw_bam, raw_vcf));
                 }
 
+                merge_targeted_nfc_beds(&nfc_inputs, &nfc_bed)?;
+
                 // 3a: read extraction (BAM → FASTQ).
                 let r1_str = r1.to_string_lossy().to_string();
                 let r2_str = r2.to_string_lossy().to_string();
                 rust_read_extraction::bam_to_fastq(
                     &input_bam_str,
-                    &query_bed.to_string_lossy(),
+                    &fc_bed.to_string_lossy(),
                     &r1_str,
                     &r2_str,
                     false,
@@ -479,12 +485,12 @@ fn realign_per_rg(
                 .map_err(|e| SdError::Compute(format!("{}: read extraction: {e}", rg.label)))?;
 
                 // Also extract multi-aligned reads from the counterpart regions.
-                if counter_bed.exists() {
+                if nfc_bed.exists() && file_nonempty(&nfc_bed) {
                     let r1c = rg_dir.join(format!("{}.nfc.r1.fastq", rg.label));
                     let r2c = rg_dir.join(format!("{}.nfc.r2.fastq", rg.label));
                     rust_read_extraction::bam_to_fastq(
                         &input_bam_str,
-                        &counter_bed.to_string_lossy(),
+                        &nfc_bed.to_string_lossy(),
                         &r1c.to_string_lossy(),
                         &r2c.to_string_lossy(),
                         true, // multi_aligned
@@ -553,21 +559,19 @@ fn realign_rg_outputs(raw_bam: &Path, raw_vcf: &Path) -> Vec<CheckpointFile> {
 
 fn realign_rg_deps(
     paths: &Paths,
-    query_bed: &Path,
-    counter_bed: &Path,
+    fc_bed: &Path,
+    nfc_beds: &[PathBuf],
     masked_genome: &Path,
 ) -> Vec<PathBuf> {
     let mut deps = vec![
         paths.input_bam.clone(),
         paths.ref_genome.clone(),
         paths.ref_genome_fai_path(),
-        query_bed.to_path_buf(),
+        fc_bed.to_path_buf(),
         masked_genome.to_path_buf(),
         append_path_suffix(masked_genome, ".fai"),
     ];
-    if counter_bed.exists() {
-        deps.push(counter_bed.to_path_buf());
-    }
+    deps.extend(nfc_beds.iter().cloned());
     if let Some(exe) = current_exe_dependency() {
         deps.push(exe);
     }
@@ -577,6 +581,35 @@ fn realign_rg_deps(
         }
     }
     deps
+}
+
+fn targeted_fc_bed_path(rg_dir: &Path, label: &str) -> PathBuf {
+    rg_dir.join(format!("{label}.fc_target.bed"))
+}
+
+fn targeted_nfc_bed_path(rg_dir: &Path, label: &str) -> PathBuf {
+    rg_dir.join(format!("{label}.counterparts_regions.targeted.bed"))
+}
+
+fn targeted_nfc_subgroup_beds(rg_dir: &Path, label: &str, subgroup_ids: &[String]) -> Vec<PathBuf> {
+    subgroup_ids
+        .iter()
+        .map(|sub| rg_dir.join(format!("{label}_{sub}.nfc.bed")))
+        .collect()
+}
+
+fn merge_targeted_nfc_beds(inputs: &[PathBuf], output: &Path) -> Result<()> {
+    if inputs.is_empty() {
+        std::fs::write(output, "").map_err(|e| SdError::Io {
+            path: output.display().to_string(),
+            source: e,
+        })?;
+        return Ok(());
+    }
+
+    let refs: Vec<&Path> = inputs.iter().map(|p| p.as_path()).collect();
+    let merged = sdrecall_io::merge_bed_files(&refs)?;
+    sdrecall_io::write_bed(output, &merged)
 }
 
 fn bam_index_paths(bam: &Path) -> [PathBuf; 2] {
@@ -1966,5 +1999,40 @@ mod tests {
         write_checkpoint(&marker, &outputs, &deps).unwrap();
 
         assert!(checkpoint_valid(&marker, &outputs, &deps));
+    }
+
+    #[test]
+    fn realign_uses_target_trimmed_region_prep_beds() {
+        let dir = tempfile::tempdir().unwrap();
+        let rg_dir = dir.path().join("RG0");
+        let subs = vec!["0".to_string(), "2".to_string()];
+
+        assert_eq!(
+            targeted_fc_bed_path(&rg_dir, "RG0"),
+            rg_dir.join("RG0.fc_target.bed")
+        );
+        assert_eq!(
+            targeted_nfc_bed_path(&rg_dir, "RG0"),
+            rg_dir.join("RG0.counterparts_regions.targeted.bed")
+        );
+        assert_eq!(
+            targeted_nfc_subgroup_beds(&rg_dir, "RG0", &subs),
+            vec![rg_dir.join("RG0_0.nfc.bed"), rg_dir.join("RG0_2.nfc.bed")]
+        );
+    }
+
+    #[test]
+    fn merge_targeted_nfc_beds_merges_region_prep_outputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("RG0_0.nfc.bed");
+        let b = dir.path().join("RG0_1.nfc.bed");
+        let out = dir.path().join("RG0.counterparts_regions.targeted.bed");
+        std::fs::write(&a, "chr1\t10\t20\nchr1\t25\t30\n").unwrap();
+        std::fs::write(&b, "chr1\t18\t25\nchr2\t1\t3\n").unwrap();
+
+        merge_targeted_nfc_beds(&[a, b], &out).unwrap();
+
+        let got = std::fs::read_to_string(out).unwrap();
+        assert_eq!(got, "chr1\t10\t30\nchr2\t1\t3\n");
     }
 }
