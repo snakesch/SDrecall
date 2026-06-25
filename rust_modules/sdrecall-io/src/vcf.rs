@@ -162,6 +162,9 @@ pub fn concat_sort_vcfs(
         keyed.len(),
         dedup_exact
     );
+    // Ensure all BGZF blocks and the terminator are flushed before an external
+    // bcftools process opens the file for indexing.
+    drop(writer);
     if is_indexable_vcf(out) {
         index_vcf(out)?;
     }
@@ -325,6 +328,31 @@ mod tests {
         concat_sort_vcfs(&[a.path(), b.path()], out.path(), false, 1).unwrap();
         let got = read_variants(out.path());
         assert_eq!(got.len(), 2);
+    }
+
+    #[test]
+    fn concat_bgzipped_vcf_is_closed_before_indexing() {
+        if std::process::Command::new("bcftools")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+
+        let a = write_test_vcf(&[(100, "A", "T")]);
+        let b = write_test_vcf(&[(200, "C", "G")]);
+        let out = tempfile::Builder::new()
+            .suffix(".vcf.gz")
+            .tempfile()
+            .unwrap();
+
+        concat_sort_vcfs(&[a.path(), b.path()], out.path(), false, 1).unwrap();
+
+        let got = read_variants(out.path());
+        let positions: Vec<i64> = got.iter().map(|(p, _, _)| *p).collect();
+        assert_eq!(positions, vec![100, 200]);
+        assert!(vcf_index_paths(out.path()).iter().any(|p| p.is_file()));
     }
 
     #[test]
