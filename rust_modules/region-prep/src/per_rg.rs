@@ -261,19 +261,21 @@ fn prepare_subgroup(
     nfc_out: &Path,
 ) -> Result<RgSubgroupRecord> {
     let (fc_row, nfc_views) = split_subgroup(rows, ctx.rg_label, subgroup_id)?;
-    // R9 (the 3-column-FC strand-stripping parity hazard): Python's
-    // `per_RG_subgroup` writes the FC bed with ONLY 3 columns
-    // (`fc_region_bedf.iloc[:, :3]`, prepare_masked_align_region.py:219), so the
-    // `main_interval` that `extract_and_pad_segments` reads has **no strand**
-    // (`'.'`). The line-101 test `interval_strand == main_interval_strand` is
-    // therefore essentially ALWAYS FALSE for real NFC rows (which carry `+`/`-`)
-    // → the **opposite-strand (reverse-complement) branch is taken for virtually
-    // every NFC interval**. We must mirror that: feed the FC interval as
-    // Strand::Unknown, NOT its real strand, or same-strand NFC rows wrongly take
-    // the straight-shift branch (proven by the HG002 differential: 21/576
-    // subgroups diverged by an asymmetric-clamp offset until this was fixed).
+    // FIX R9 (NFC projection strand bug): Python's `per_RG_subgroup` writes the
+    // FC bed with ONLY 3 columns (`fc_region_bedf.iloc[:, :3]`,
+    // prepare_masked_align_region.py:219), so the `main_interval` that
+    // `extract_and_pad_segments` reads has **no strand** (`'.'`). The line-101
+    // test `interval_strand == main_interval_strand` is therefore always FALSE
+    // → the opposite-strand reverse-complement flip runs for EVERY NFC row,
+    // even for +/+ same-strand SD pairs. This maps the NFC projection window to
+    // the WRONG end of the paralog, causing alt-carrying reads to fall outside
+    // the NFC extraction bed (root cause of Cat 2 FNs).
+    //
+    // Fix: use the FC's REAL strand from the all_regions_bed so the correct
+    // projection branch (same-strand or opposite-strand) is selected per SD
+    // pair. This diverges from Python but recovers FNs.
     let fc_interval =
-        GenomicInterval::with_strand(fc_row.chrom.clone(), fc_row.start, fc_row.end, Strand::Unknown);
+        GenomicInterval::with_strand(fc_row.chrom.clone(), fc_row.start, fc_row.end, fc_row.strand);
     let nfc_intervals: Vec<NfcInterval> = nfc_views
         .iter()
         .map(|r| NfcInterval {
@@ -606,8 +608,8 @@ mod tests {
         );
         assert_eq!(
             nfc,
-            vec![GenomicInterval::new("chr1", 5000, 5900)],
-            "R9: FC must be fed as Unknown strand → opposite-strand projection"
+            vec![GenomicInterval::new("chr1", 5100, 6000)],
+            "R9 fix: FC strand from all_regions_bed -> same-strand projection for +/+ SD pair"
         );
     }
 }
