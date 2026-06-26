@@ -74,7 +74,7 @@ pub fn bcftools_call(
         "set -o pipefail; \
          export OPENBLAS_NUM_THREADS={t}; \
          bcftools mpileup --indels-2.0 --threads {t} -A -a FORMAT/AD,FORMAT/DP -q 10 -Q 15 -f {ref_} {bam} | \
-         bcftools call --threads {t} -mv -P '4e-2' -f GQ -Ou | \
+         bcftools call --threads {t} -mv -f GQ -Ou | \
          bcftools norm --threads {t} -m -both -f {ref_} --multi-overlaps 0 -a -Ou - | \
          bcftools norm --threads {t} -d exact - | \
          bcftools view --threads {t} -i 'ALT!=\"*\"' -Ov | \
