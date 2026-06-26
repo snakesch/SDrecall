@@ -101,12 +101,6 @@ struct BinSdRow {
 }
 
 /// Main-contig regex equivalent: `^(chr)?([0-9]+|[XYM]|MT)$` (case-insensitive).
-fn is_main_contig(chrom: &str) -> bool {
-    let c = chrom.strip_prefix("chr").or_else(|| chrom.strip_prefix("CHR")).unwrap_or(chrom);
-    let cu = c.to_ascii_uppercase();
-    cu == "X" || cu == "Y" || cu == "M" || cu == "MT" || (!c.is_empty() && c.bytes().all(|b| b.is_ascii_digit()))
-}
-
 /// Flip a strand for the both-negative→both-positive normalisation.
 fn flip(s: Strand) -> Strand {
     match s {
@@ -134,13 +128,16 @@ fn strand_str(s: Strand) -> &'static str {
 }
 
 /// Load the reference SD map BED, filter by size, intersect with the multi-align
-/// BED, apply the main-contig filter and both-neg-strand flip — the analog of
-/// `prepare_recall_regions.py` steps 2-3 (l.119-158). Returns the `BinSdRow`s.
+/// BED, and apply the both-neg-strand flip — the analog of `prepare_recall_regions.py`
+/// steps 2-3 (l.119-158). Returns the `BinSdRow`s.
 ///
 /// The reference SD map is expected to have, per line: `chr_1 start_1 end_1 chr_2
 /// start_2 end_2 strand1 strand2 cigar mismatch_rate` (the expanded paired-SD map).
-/// Each SD interval must exceed `avg_frag` and overlap the multi-align BED.
-/// Read a text file, transparently gunzipping when the content is gzip-compressed
+/// Each SD interval must exceed `avg_frag` and overlap the multi-align BED. The
+/// contig-name filter has been removed: WGAC quality filtering and the downstream
+/// multi-align-BED overlap already constrain query nodes to primary chromosomes,
+/// so any contig (incl. `_alt`, `_random`) may serve as a counterpart. Read a text
+/// file, transparently gunzipping when the content is gzip-compressed
 /// (detected by the `1f 8b` magic, so it works regardless of the `.gz` extension).
 /// The production SD map is delivered as `.bed.gz`; Python/pandas auto-decompresses,
 /// so the Rust driver must too (otherwise the raw gzip bytes fail UTF-8 decoding).
@@ -203,10 +200,11 @@ fn load_and_filter_sd_map(
         if (e1 - s1) as f64 <= avg_frag {
             continue;
         }
-        // main-contig filter on both segments.
-        if !is_main_contig(chr1) || !is_main_contig(chr2) {
-            continue;
-        }
+        // No contig-name filter: the SD bed is already quality-filtered by
+        // WGAC (high-similarity pairs), and FC query nodes are constrained to
+        // primary chromosomes by the downstream multi-align-BED overlap, so
+        // any contig (incl. `_alt`, `_random`) may legitimately appear as an
+        // NFC counterpart. Re-filtering by name would drop real SD pairs.
         // both-negative → both-positive flip.
         if st1 == Strand::Reverse && st2 == Strand::Reverse {
             st1 = flip(st1);
@@ -760,7 +758,7 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
 
     // ── Steps 2-3: SD-map load + umbrella filter + dedup ─────────────────────
     let bin_rows = load_and_filter_sd_map(&paths.reference_sd_map, &multi_align, params.avg_frag)?;
-    log::info!("{} SD rows after target overlap + contig filter", bin_rows.len());
+    log::info!("{} SD rows after target overlap", bin_rows.len());
     let umbrella = umbrella_filter_and_dedup(&bin_rows);
     log::info!("{} SD pairs after umbrella filter + dedup", umbrella.sd_rows.len());
     let filtered_sd_map = paths.filtered_sd_map();
@@ -852,19 +850,6 @@ fn mean_read_length(bam: &Path) -> Result<Option<f64>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn main_contig_regex() {
-        assert!(is_main_contig("chr1"));
-        assert!(is_main_contig("1"));
-        assert!(is_main_contig("chrX"));
-        assert!(is_main_contig("chrM"));
-        assert!(is_main_contig("MT"));
-        assert!(is_main_contig("chr22"));
-        assert!(!is_main_contig("chr1_KI270706v1_random"));
-        assert!(!is_main_contig("GL000220.1"));
-        assert!(!is_main_contig("chrUn_KI270742v1"));
-    }
 
     #[test]
     fn both_negative_strand_flips_to_positive() {
