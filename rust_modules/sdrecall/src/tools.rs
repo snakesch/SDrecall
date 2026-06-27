@@ -79,7 +79,7 @@ pub fn bcftools_call(
          bcftools norm --threads {t} -d exact - | \
          bcftools view --threads {t} -i 'ALT!=\"*\"' -Ov | \
          awk 'BEGIN{{FS=OFS=\"\\t\"}} {{printf \"%s\\t%s\\t%s\\t%s\\t%s\", $1, $2, $3, toupper($4), toupper($5); for(i=6;i<=NF;i++) printf \"\\t%s\", $i; printf \"\\n\"}}' | \
-         bcftools filter --threads {t} -e 'GT != \"mis\"' -s {tag} - | \
+         bcftools filter --threads {t} -e 'GT == \"mis\"' -s {tag} - | \
          bcftools sort -Oz -o {out} && \
          bcftools index -f {out}",
         t = t,
