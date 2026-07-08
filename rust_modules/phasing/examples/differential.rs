@@ -46,8 +46,8 @@ struct Island {
 }
 
 fn load_island(dir: &Path) -> Result<Island> {
-    let wm: Array2<f32> =
-        ndarray_npy::read_npy(dir.join("weight_matrix.npy")).context("reading weight_matrix.npy")?;
+    let wm: Array2<f32> = ndarray_npy::read_npy(dir.join("weight_matrix.npy"))
+        .context("reading weight_matrix.npy")?;
     let n = wm.nrows();
 
     let meta: Meta = read_json(&dir.join("meta.json"))?;
@@ -122,10 +122,18 @@ fn compare_island(dir: &Path) -> Result<bool> {
         );
         // surface a couple of differing groups for triage
         for g in rust_partition.difference(&island.py_partition).take(2) {
-            println!("    only-rust group (n={}): {:?}", g.len(), &g[..g.len().min(4)]);
+            println!(
+                "    only-rust group (n={}): {:?}",
+                g.len(),
+                &g[..g.len().min(4)]
+            );
         }
         for g in island.py_partition.difference(&rust_partition).take(2) {
-            println!("    only-py   group (n={}): {:?}", g.len(), &g[..g.len().min(4)]);
+            println!(
+                "    only-py   group (n={}): {:?}",
+                g.len(),
+                &g[..g.len().min(4)]
+            );
         }
     }
     Ok(matched)

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::process::Command;
 
-use rust_htslib::bam::{self, Read, record::Aux};
+use rust_htslib::bam::{self, record::Aux, Read};
 use sdrecall_utils::{Result, SdError};
 
 /// Write a new BAM with `HP:Z:hap{N}` tags for each phased read.
@@ -23,12 +23,14 @@ pub fn write_hp_tagged_bam(
         .iter()
         .enumerate()
         .filter_map(|(idx, qname)| {
-            vertex_hap.get(&(idx as i32)).map(|&hap| (qname.as_str(), hap))
+            vertex_hap
+                .get(&(idx as i32))
+                .map(|&hap| (qname.as_str(), hap))
         })
         .collect();
 
-    let mut reader =
-        bam::Reader::from_path(input_bam).map_err(|e| SdError::Htslib(format!("open {input_bam}: {e}")))?;
+    let mut reader = bam::Reader::from_path(input_bam)
+        .map_err(|e| SdError::Htslib(format!("open {input_bam}: {e}")))?;
     if threads > 1 {
         reader
             .set_threads((threads - 1) as usize)

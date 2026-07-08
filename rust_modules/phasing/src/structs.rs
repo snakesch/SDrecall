@@ -1,10 +1,11 @@
-use std::collections::HashSet;
-use rust_htslib::bam::Record;
-use rustc_hash::FxHashMap;
 use ahash::AHashMap;
 use petgraph::Graph;
 use petgraph::Undirected;
-use ndarray::Array2;
+use rust_htslib::bam::Record;
+use rustc_hash::FxHashMap;
+use std::collections::HashSet;
+
+use crate::kernels::Csr;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Interval {
@@ -15,7 +16,11 @@ pub struct Interval {
 
 impl Interval {
     pub fn new(start: i64, end: i64, qname_idx: usize) -> Self {
-        Self { start, end, qname_idx }
+        Self {
+            start,
+            end,
+            qname_idx,
+        }
     }
 }
 
@@ -41,10 +46,10 @@ impl SortedVecIntervals {
         if self.is_finalized {
             return Err("Cannot add intervals after finalization".to_string());
         }
-        
+
         let interval = Interval::new(start, end, qname_idx);
         let intervals = self.interval_map.entry(qname_idx).or_insert([None, None]);
-        
+
         // Find first empty slot
         if intervals[0].is_none() {
             intervals[0] = Some(interval);
@@ -53,7 +58,10 @@ impl SortedVecIntervals {
             intervals[1] = Some(interval);
             Ok(())
         } else {
-            Err(format!("Cannot add more than 2 intervals for qname_idx {}", qname_idx))
+            Err(format!(
+                "Cannot add more than 2 intervals for qname_idx {}",
+                qname_idx
+            ))
         }
     }
 
@@ -62,7 +70,7 @@ impl SortedVecIntervals {
         if self.is_finalized {
             return Err("Cannot remove intervals after finalization".to_string());
         }
-        
+
         self.interval_map.remove(&qname_idx);
         Ok(())
     }
@@ -72,10 +80,9 @@ impl SortedVecIntervals {
         if self.is_finalized {
             return Err("Cannot remove intervals after finalization".to_string());
         }
-        
-        self.interval_map.retain(|_, intervals| {
-            intervals[0].is_some() && intervals[1].is_some()
-        });
+
+        self.interval_map
+            .retain(|_, intervals| intervals[0].is_some() && intervals[1].is_some());
         Ok(())
     }
 
@@ -91,7 +98,7 @@ impl SortedVecIntervals {
         // Pre-allocate Vec with known capacity (2 intervals per qname_idx)
         let total_intervals = self.interval_map.len() * 2;
         let mut all_intervals = Vec::with_capacity(total_intervals);
-        
+
         for intervals_array in self.interval_map.values() {
             for interval_opt in intervals_array {
                 if let Some(interval) = interval_opt {
@@ -99,13 +106,13 @@ impl SortedVecIntervals {
                 }
             }
         }
-        
+
         // Sort by start position, then by end position
         all_intervals.sort_by_key(|interval| (interval.start, interval.end));
-        
+
         self.sorted_intervals = Some(all_intervals);
         self.is_finalized = true;
-        
+
         // Clear the HashMap to save memory
         self.interval_map.clear();
         Ok(())
@@ -117,27 +124,31 @@ impl SortedVecIntervals {
             return Err("Must call finalize() before querying".to_string());
         }
 
-        let intervals = self.sorted_intervals.as_ref()
+        let intervals = self
+            .sorted_intervals
+            .as_ref()
             .ok_or("Sorted intervals not initialized")?;
-        
+
         // Use HashSet to ensure uniqueness, then convert to Vec
         let mut unique_qname_indices = std::collections::HashSet::new();
-        
+
         // Binary search for first interval that could overlap
-        let start_pos = intervals.iter().position(|interval| interval.end > query_start)
+        let start_pos = intervals
+            .iter()
+            .position(|interval| interval.end > query_start)
             .unwrap_or(intervals.len());
-        
+
         // Collect overlapping intervals and ensure uniqueness
         for interval in &intervals[start_pos..] {
             if interval.start >= query_end {
                 break; // No more overlaps possible
             }
-            
+
             if interval.end > query_start && interval.start < query_end {
                 unique_qname_indices.insert(interval.qname_idx);
             }
         }
-        
+
         // Convert HashSet to Vec - guaranteed unique qname_indices
         Ok(unique_qname_indices.into_iter().collect())
     }
@@ -146,9 +157,10 @@ impl SortedVecIntervals {
         if self.is_finalized {
             self.sorted_intervals.as_ref().map_or(0, |v| v.len())
         } else {
-            self.interval_map.values().map(|v| {
-                v.iter().filter(|interval| interval.is_some()).count()
-            }).sum()
+            self.interval_map
+                .values()
+                .map(|v| v.iter().filter(|interval| interval.is_some()).count())
+                .sum()
         }
     }
 
@@ -160,7 +172,7 @@ impl SortedVecIntervals {
 #[derive(Clone, Debug)]
 pub struct ReadPair {
     pub read1: Record,
-    pub read2: Option<Record>,  // Optional until complete
+    pub read2: Option<Record>, // Optional until complete
     pub qname: String,
     pub qname_idx: usize,
 }
@@ -174,7 +186,7 @@ impl ReadPair {
             qname_idx,
         }
     }
-    
+
     pub fn new_complete(read1: Record, read2: Record, qname: String, qname_idx: usize) -> Self {
         Self {
             read1,
@@ -183,19 +195,19 @@ impl ReadPair {
             qname_idx,
         }
     }
-    
+
     pub fn complete_with_read2(&mut self, read2: Record) {
         self.read2 = Some(read2);
     }
-    
+
     pub fn is_complete(&self) -> bool {
         self.read2.is_some()
     }
-    
+
     pub fn update_read1(&mut self, new_record: Record) {
         self.read1 = new_record;
     }
-    
+
     pub fn update_read2(&mut self, new_record: Record) {
         self.read2 = Some(new_record);
     }
@@ -226,7 +238,12 @@ impl ReadPairMap {
     }
 
     /// Find overlapping qname indices using efficient interval search
-    pub fn find_overlapping_qname_indices(&self, chrom: &str, start: i64, end: i64) -> Result<Vec<usize>, String> {
+    pub fn find_overlapping_qname_indices(
+        &self,
+        chrom: &str,
+        start: i64,
+        end: i64,
+    ) -> Result<Vec<usize>, String> {
         match self.interval_trees.get(chrom) {
             Some(tree) => tree.find_overlaps(start, end),
             None => Ok(Vec::new()),
@@ -239,7 +256,12 @@ impl ReadPairMap {
     }
 
     /// Iterator for overlapping ReadPairs (combines interval search + HashMap lookup)
-    pub fn overlapping_readpairs(&self, chrom: &str, start: i64, end: i64) -> impl Iterator<Item = &ReadPair> {
+    pub fn overlapping_readpairs(
+        &self,
+        chrom: &str,
+        start: i64,
+        end: i64,
+    ) -> impl Iterator<Item = &ReadPair> {
         self.find_overlapping_qname_indices(chrom, start, end)
             .unwrap_or_default()
             .into_iter()
@@ -270,24 +292,27 @@ impl AlleleDepthMap {
             chromosomes: AHashMap::new(),
         }
     }
-    
+
     pub fn insert(&mut self, chrom: &str, pos: u32, data: PositionAlleleDepth) {
         self.chromosomes
             .entry(chrom.to_string())
             .or_insert_with(FxHashMap::default)
             .insert(pos, data);
     }
-    
+
     pub fn get(&self, chrom: &str, pos: u32) -> Option<&PositionAlleleDepth> {
         self.chromosomes.get(chrom)?.get(&pos)
     }
-    
+
     pub fn get_mut(&mut self, chrom: &str, pos: u32) -> Option<&mut PositionAlleleDepth> {
         self.chromosomes.get_mut(chrom)?.get_mut(&pos)
     }
-    
+
     /// Iterator over all positions in a chromosome
-    pub fn chromosome_positions(&self, chrom: &str) -> Option<impl Iterator<Item = (&u32, &PositionAlleleDepth)>> {
+    pub fn chromosome_positions(
+        &self,
+        chrom: &str,
+    ) -> Option<impl Iterator<Item = (&u32, &PositionAlleleDepth)>> {
         self.chromosomes.get(chrom).map(|pos_map| pos_map.iter())
     }
 }
@@ -298,14 +323,14 @@ impl AlleleDepthMap {
     pub fn new_position_data(total_depth: u32) -> PositionAlleleDepth {
         [0, 0, 0, 0, 0, total_depth] // [A, T, C, G, N, total]
     }
-    
+
     /// Set allele depth at given index
     pub fn set_allele_depth(data: &mut PositionAlleleDepth, allele_index: usize, depth: u32) {
         if allele_index < 5 {
             data[allele_index] = depth;
         }
     }
-    
+
     /// Get allele depth at given index
     pub fn get_allele_depth(data: &PositionAlleleDepth, allele_index: usize) -> u32 {
         if allele_index < 5 {
@@ -314,18 +339,17 @@ impl AlleleDepthMap {
             0
         }
     }
-    
+
     /// Get total depth
     pub fn total_depth(data: &PositionAlleleDepth) -> u32 {
         data[5]
     }
-    
+
     /// Check if the map is empty (no chromosomes or no data)
     pub fn is_empty(&self) -> bool {
-        self.chromosomes.is_empty() || 
-        self.chromosomes.values().all(|pos_map| pos_map.is_empty())
+        self.chromosomes.is_empty() || self.chromosomes.values().all(|pos_map| pos_map.is_empty())
     }
-    
+
     /// Get the number of chromosomes in the map
     pub fn chromosome_count(&self) -> usize {
         self.chromosomes.len()
@@ -338,16 +362,16 @@ impl AlleleDepthMap {
 pub struct OverlapInterval<'a> {
     pub start: i64,
     pub end: i64,
-    pub read1: &'a Record,  // Direct reference to first read
-    pub read2: &'a Record,  // Direct reference to second read
+    pub read1: &'a Record, // Direct reference to first read
+    pub read2: &'a Record, // Direct reference to second read
 }
 
 /// Read haplotype vector - stores variant information for a read
 /// This is equivalent to the Python read_hap_vectors dictionary
-pub type ReadHaplotypeVector = Vec<i16>;  // Could be variant calls, error flags, etc.
+pub type ReadHaplotypeVector = Vec<i16>; // Could be variant calls, error flags, etc.
 
 /// Read error vector - stores error information for a read  
-pub type ReadErrorVector = Vec<f32>;     // Error probabilities or quality scores
+pub type ReadErrorVector = Vec<f32>; // Error probabilities or quality scores
 
 /// Fast interval storage for tracking inspected overlaps
 /// Equivalent to Python's FastIntervals class
@@ -368,7 +392,7 @@ impl FastIntervals {
             current_size: 0,
         }
     }
-    
+
     pub fn add(&mut self, start: i64, end: i64) {
         if self.current_size < self.max_size {
             self.starts.push(start);
@@ -376,41 +400,49 @@ impl FastIntervals {
             self.current_size += 1;
         }
     }
-    
+
     pub fn clear(&mut self) {
         self.starts.clear();
         self.ends.clear();
         self.current_size = 0;
     }
-    
+
     pub fn get_intervals(&self) -> (&[i64], &[i64]) {
-        (&self.starts[..self.current_size], &self.ends[..self.current_size])
+        (
+            &self.starts[..self.current_size],
+            &self.ends[..self.current_size],
+        )
     }
 }
 
 /// Phasing graph structure using petgraph with unit nodes and f32 weights
 /// Node data is () since we use direct correspondence: qname_idx = NodeIndex.index()
 /// Edge weight is f32 for Python compatibility
-/// This ensures direct mapping: qname_idx = NodeIndex = matrix index
+/// This ensures direct mapping: qname_idx = NodeIndex = weight index
 pub type PhasingGraph = Graph<(), f32, Undirected>;
 
 /// Complete phasing graph result
 pub struct PhasingGraphResult {
     /// The main graph structure with unit nodes (direct qname_idx ↔ NodeIndex correspondence)
     pub graph: PhasingGraph,
-    
-    /// Weight matrix using f32 precision for Python compatibility
-    pub weight_matrix: Option<Array2<f32>>,
-    
+
+    /// Sparse weight store using f32 precision for Python compatibility.
+    ///
+    /// Entries use dense-matrix assignment semantics: repeated `(row, col)` entries keep
+    /// the last value when converted to CSR. The diagonal is initialized to `1.0` to match
+    /// the previous dense matrix behavior.
+    weight_size: Option<usize>,
+    sparse_weight_entries: Vec<(usize, usize, f32)>,
+
     /// Read haplotype vectors
     pub read_hap_vectors: AHashMap<String, ReadHaplotypeVector>,
-    
+
     /// Read error vectors  
     pub read_error_vectors: AHashMap<String, ReadErrorVector>,
-    
+
     /// Read reference position dictionary
     pub read_ref_pos_dict: AHashMap<String, (i64, i64)>,
-    
+
     /// Low quality/noisy qnames that were filtered out during BAM processing
     pub lowqual_qnames: HashSet<String>,
 
@@ -422,7 +454,8 @@ impl PhasingGraphResult {
     pub fn new() -> Self {
         Self {
             graph: Graph::new_undirected(),
-            weight_matrix: None,
+            weight_size: None,
+            sparse_weight_entries: Vec::new(),
             read_hap_vectors: AHashMap::new(),
             read_error_vectors: AHashMap::new(),
             read_ref_pos_dict: AHashMap::new(),
@@ -430,56 +463,82 @@ impl PhasingGraphResult {
             node_read_ids: Vec::new(),
         }
     }
-    
-    /// Initialize the weight matrix with f32 precision
-    pub fn initialize_weight_matrix(&mut self, size: usize) {
-        if self.weight_matrix.is_none() {
-            // Create identity matrix with f32 precision
-            let mut matrix = Array2::<f32>::zeros((size, size));
-            
-            // Set diagonal to 1.0
-            for i in 0..size {
-                matrix[[i, i]] = 1.0;
-            }
-            
-            self.weight_matrix = Some(matrix);
+
+    /// Initialize the sparse weight store with f32 precision.
+    pub fn initialize_weight_store(&mut self, size: usize) {
+        if let Some(existing) = self.weight_size {
+            assert_eq!(
+                existing, size,
+                "weight store already initialized with a different size"
+            );
+            return;
+        }
+
+        self.weight_size = Some(size);
+        self.sparse_weight_entries = Vec::with_capacity(size);
+
+        // Preserve previous dense behavior: diagonal starts at 1.0.
+        for i in 0..size {
+            self.sparse_weight_entries.push((i, i, 1.0));
         }
     }
-    
+
+    /// Backward-compatible wrapper for older call sites.
+    pub fn initialize_weight_matrix(&mut self, size: usize) {
+        self.initialize_weight_store(size);
+    }
+
     /// Set weight between two nodes with f32 precision
     pub fn set_weight(&mut self, i: usize, j: usize, weight: f32) -> Result<(), String> {
-        match &mut self.weight_matrix {
-            Some(ref mut matrix) => {
-                // Check bounds
-                if i >= matrix.nrows() || j >= matrix.ncols() {
-                    return Err(format!("Index out of bounds: ({}, {}) for matrix of size {}x{}", 
-                                     i, j, matrix.nrows(), matrix.ncols()));
-                }
-                
-                // Set symmetric values directly with f32
-                matrix[[i, j]] = weight;
-                matrix[[j, i]] = weight;
-                Ok(())
-            }
-            None => Err("Weight matrix not initialized. Call initialize_weight_matrix() first.".to_string())
+        let size = self.weight_size.ok_or_else(|| {
+            "Weight store not initialized. Call initialize_weight_store() first.".to_string()
+        })?;
+
+        if i >= size || j >= size {
+            return Err(format!(
+                "Index out of bounds: ({i}, {j}) for sparse weight store of size {size}x{size}"
+            ));
         }
+
+        // Set symmetric values directly with f32 dense-assignment semantics.
+        self.sparse_weight_entries.push((i, j, weight));
+        if i != j {
+            self.sparse_weight_entries.push((j, i, weight));
+        }
+        Ok(())
     }
-    
+
     /// Get weight as f32
     pub fn get_weight(&self, i: usize, j: usize) -> Option<f32> {
-        self.weight_matrix.as_ref()?.get([i, j]).copied()
+        self.weight_csr().map(|csr| csr.get(i, j))
     }
-    
-    /// Get reference to weight matrix
-    pub fn weight_matrix(&self) -> Option<&Array2<f32>> {
-        self.weight_matrix.as_ref()
+
+    /// Build a CSR copy of the current sparse weight store.
+    pub fn weight_csr(&self) -> Option<Csr> {
+        let size = self.weight_size?;
+        Some(Csr::from_entries(
+            size,
+            self.sparse_weight_entries.iter().copied(),
+        ))
     }
-    
+
+    /// Consume the sparse weight entries into CSR without cloning them.
+    pub fn take_weight_csr(&mut self) -> Option<Csr> {
+        let size = self.weight_size.take()?;
+        let entries = std::mem::take(&mut self.sparse_weight_entries);
+        Some(Csr::from_entries(size, entries))
+    }
+
+    /// Number of stored sparse weight assignments before CSR duplicate compaction.
+    pub fn sparse_weight_entry_count(&self) -> usize {
+        self.sparse_weight_entries.len()
+    }
+
     /// Get number of vertices in the graph
     pub fn vertex_count(&self) -> usize {
         self.graph.node_count()
     }
-    
+
     /// Get number of edges in the graph  
     pub fn edge_count(&self) -> usize {
         self.graph.edge_count()
@@ -492,7 +551,7 @@ impl PhasingGraphResult {
 pub struct HaplotypeConfig {
     pub mean_read_length: f32,
     pub edge_weight_cutoff: f32,
-    pub score_array: Vec<f32>,  // Equivalent to Python's score_arr
+    pub score_array: Vec<f32>, // Equivalent to Python's score_arr
 }
 
 impl HaplotypeConfig {
@@ -501,10 +560,10 @@ impl HaplotypeConfig {
         let score_array: Vec<f32> = (0..50)
             .map(|i| mean_read_length + mean_read_length * (i as f32))
             .collect();
-            
+
         Self {
             mean_read_length,
-            edge_weight_cutoff: 0.301,  // Default heuristic cutoff from Python
+            edge_weight_cutoff: 0.301, // Default heuristic cutoff from Python
             score_array,
         }
     }
@@ -513,24 +572,59 @@ impl HaplotypeConfig {
 /// Variant types found in reads
 #[derive(Debug, Clone)]
 pub enum Variant {
-    Snv { position: i64, alt_base: u8, quality: u8 },
-    Insertion { position: i64, length: u32 },
-    Deletion { position: i64, length: u32 },
+    Snv {
+        position: i64,
+        alt_base: u8,
+        quality: u8,
+    },
+    Insertion {
+        position: i64,
+        length: u32,
+    },
+    Deletion {
+        position: i64,
+        length: u32,
+    },
 }
 
 impl Variant {
     pub fn position(&self) -> i64 {
         match self {
-            Variant::Snv { position, .. } |
-            Variant::Insertion { position, .. } |
-            Variant::Deletion { position, .. } => *position,
+            Variant::Snv { position, .. }
+            | Variant::Insertion { position, .. }
+            | Variant::Deletion { position, .. } => *position,
         }
     }
 }
 
 /// Result of variant compatibility analysis
 pub enum VariantCompatibility {
-    Compatible(usize),  // Number of shared variants
-    Incompatible,       // Conflicting variants found
+    Compatible(usize), // Number of shared variants
+    Incompatible,      // Conflicting variants found
     NoData,            // Not enough data to determine
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sparse_weight_store_preserves_dense_assignment_semantics() {
+        let mut result = PhasingGraphResult::new();
+        result.initialize_weight_store(3);
+        assert_eq!(result.sparse_weight_entry_count(), 3);
+
+        result.set_weight(0, 1, 0.8).unwrap();
+        result.set_weight(1, 2, -1.0).unwrap();
+        assert_eq!(result.get_weight(0, 0), Some(1.0));
+        assert_eq!(result.get_weight(0, 1), Some(0.8));
+        assert_eq!(result.get_weight(1, 0), Some(0.8));
+        assert_eq!(result.get_weight(1, 2), Some(-1.0));
+        assert_eq!(result.get_weight(0, 2), Some(0.0));
+
+        let csr = result.take_weight_csr().unwrap();
+        assert_eq!(csr.get(0, 1), 0.8);
+        assert_eq!(csr.get(1, 2), -1.0);
+        assert_eq!(result.sparse_weight_entry_count(), 0);
+    }
 }

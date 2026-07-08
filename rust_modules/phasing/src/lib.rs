@@ -16,7 +16,7 @@
 //! The individual stages are public modules:
 //! - [`bam_reading`] — BAM → ReadPairMap + AlleleDepthMap
 //! - [`graph_builder`] — ReadPairMap → PhasingGraphResult
-//! - [`phasing`] — weight matrix → vertex→haplotype partition
+//! - [`phasing`] — sparse weights → vertex→haplotype partition
 //! - [`hp_writer`] — partition → HP-tagged BAM
 
 // Graph construction (from build_phasing_graph)
@@ -26,8 +26,8 @@ pub mod haplotype_determination;
 pub mod structs;
 
 // Phasing algorithm
-pub mod kernels;
 pub mod gce;
+pub mod kernels;
 pub mod phasing;
 
 // HP tag output
@@ -36,8 +36,9 @@ pub mod hp_writer;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-pub use phasing::{phase, qname_partition, PhasingInput, Round};
+pub use phasing::{phase, phase_sparse, qname_partition, PhasingInput, Round, SparsePhasingInput};
 
+use crate::kernels::Csr;
 use sdrecall_utils::{Result, SdError};
 
 /// Parameters for the standalone BAM phaser.
@@ -78,12 +79,8 @@ pub struct PhaserOutput {
 ///
 /// Extracts edges, flattens node_read_ids, converts ahash maps to std HashMap.
 /// Previously lived in fp-control as glue between the two separate crates.
-pub fn phasing_input_from_graph(
-    graph: &structs::PhasingGraphResult,
-    weight_matrix: ndarray::Array2<f32>,
-    edge_weight_cutoff: f32,
-) -> PhasingInput {
-    let edges: Vec<(i32, i32)> = graph
+fn graph_edges(graph: &structs::PhasingGraphResult) -> Vec<(i32, i32)> {
+    graph
         .graph
         .edge_indices()
         .filter_map(|e| {
@@ -92,8 +89,16 @@ pub fn phasing_input_from_graph(
                 .edge_endpoints(e)
                 .map(|(s, t)| (s.index() as i32, t.index() as i32))
         })
-        .collect();
+        .collect()
+}
 
+fn graph_read_evidence(
+    graph: &structs::PhasingGraphResult,
+) -> (
+    Vec<Vec<String>>,
+    HashMap<String, Vec<i16>>,
+    HashMap<String, Vec<f32>>,
+) {
     let node_read_ids: Vec<Vec<String>> = graph
         .node_read_ids
         .iter()
@@ -114,8 +119,38 @@ pub fn phasing_input_from_graph(
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
 
+    (node_read_ids, read_hap, read_err)
+}
+
+pub fn phasing_input_from_graph(
+    graph: &structs::PhasingGraphResult,
+    weight_matrix: ndarray::Array2<f32>,
+    edge_weight_cutoff: f32,
+) -> PhasingInput {
+    let edges = graph_edges(graph);
+    let (node_read_ids, read_hap, read_err) = graph_read_evidence(graph);
+
     PhasingInput {
         weight_matrix,
+        edges,
+        edge_weight_cutoff,
+        node_read_ids,
+        read_hap,
+        read_err,
+    }
+}
+
+/// Assemble the sparse phasing-stage input from the graph result.
+pub fn sparse_phasing_input_from_graph(
+    graph: &structs::PhasingGraphResult,
+    weights: Csr,
+    edge_weight_cutoff: f32,
+) -> SparsePhasingInput {
+    let edges = graph_edges(graph);
+    let (node_read_ids, read_hap, read_err) = graph_read_evidence(graph);
+
+    SparsePhasingInput {
+        weights,
         edges,
         edge_weight_cutoff,
         node_read_ids,
@@ -132,8 +167,8 @@ pub fn phasing_input_from_graph(
 fn validate_input(bam: &str) -> Result<()> {
     use rust_htslib::bam::{self, Read};
 
-    let mut reader =
-        bam::Reader::from_path(bam).map_err(|e| SdError::Htslib(format!("cannot open {bam}: {e}")))?;
+    let mut reader = bam::Reader::from_path(bam)
+        .map_err(|e| SdError::Htslib(format!("cannot open {bam}: {e}")))?;
 
     let mut paired_count = 0u32;
     let mut total_count = 0u32;
@@ -155,7 +190,9 @@ fn validate_input(bam: &str) -> Result<()> {
     }
 
     if total_count == 0 {
-        return Err(SdError::Compute("BAM file contains no primary alignments".into()));
+        return Err(SdError::Compute(
+            "BAM file contains no primary alignments".into(),
+        ));
     }
 
     let paired_frac = paired_count as f64 / total_count as f64;
@@ -182,10 +219,7 @@ fn validate_input(bam: &str) -> Result<()> {
 }
 
 /// Build the vertex_idx → qname lookup from a ReadPairMap.
-fn build_vertex_qname(
-    read_pair_map: &structs::ReadPairMap,
-    n: usize,
-) -> Vec<String> {
+fn build_vertex_qname(read_pair_map: &structs::ReadPairMap, n: usize) -> Vec<String> {
     let mut vertex_qname = vec![String::new(); n];
     for (&qname_idx, rp) in &read_pair_map.readpair_dict {
         if qname_idx < n {
@@ -215,8 +249,8 @@ pub struct PhasedReads {
 /// ([`phase_bam`]) and the fused FP-control pipeline (`fp_control::run_fp_control`).
 ///
 /// Runs stages 1–2 — read+pair the BAM, build the allele-depth map and phasing
-/// graph, then phase the weight matrix. Returns `Ok(None)` for the single
-/// early-out both callers special-case: the graph has no weight matrix (no ALT
+/// graph, then phase the sparse weight store. Returns `Ok(None)` for the single
+/// early-out both callers special-case: the graph has no sparse weights (no ALT
 /// alleles). The downstream gates differ between callers (the phaser writes an
 /// unphased BAM; fp-control skips the island / applies the ≤2-vertex and
 /// ≤2-haplotype shortcuts), so they stay with the callers.
@@ -282,12 +316,14 @@ pub fn build_and_phase_with_intrinsic(
             params.mapq_cutoff,
             params.basequal_median_cutoff,
         )
-        .map_err(|e| SdError::Compute(format!("intrinsic allele-depth map failed for {ib}: {e}")))?,
+        .map_err(|e| {
+            SdError::Compute(format!("intrinsic allele-depth map failed for {ib}: {e}"))
+        })?,
         None => structs::AlleleDepthMap::new(),
     };
 
     let config = structs::HaplotypeConfig::new(params.mean_read_length);
-    let graph = graph_builder::build_phasing_graph(
+    let mut graph = graph_builder::build_phasing_graph(
         &read_pair_map,
         &allele_depth_map,
         &intrinsic_ad_map,
@@ -296,15 +332,16 @@ pub fn build_and_phase_with_intrinsic(
     )
     .map_err(|e| SdError::Compute(format!("graph build failed for {bam}: {e}")))?;
 
-    let weight_matrix = match graph.weight_matrix {
-        Some(ref wm) => wm.clone(),
+    let weight_csr = match graph.take_weight_csr() {
+        Some(csr) => csr,
         None => return Ok(None),
     };
 
     let n = graph.graph.node_count();
     let vertex_qname = build_vertex_qname(&read_pair_map, n);
-    let phasing_input = phasing_input_from_graph(&graph, weight_matrix, params.edge_weight_cutoff);
-    let vertex_hap = phase(&phasing_input);
+    let phasing_input =
+        sparse_phasing_input_from_graph(&graph, weight_csr, params.edge_weight_cutoff);
+    let vertex_hap = phase_sparse(&phasing_input);
 
     Ok(Some(PhasedReads {
         vertex_hap,
@@ -345,7 +382,7 @@ pub fn phase_bam_with_intrinsic(
     let phased = match build_and_phase_with_intrinsic(bam, reference, intrinsic_bam, params)? {
         Some(p) => p,
         None => {
-            log::warn!("[phase_bam] no ALT alleles / empty weight matrix; writing unphased BAM");
+            log::warn!("[phase_bam] no ALT alleles / empty sparse weights; writing unphased BAM");
             let n_tagged = hp_writer::write_hp_tagged_bam(
                 bam,
                 output_bam,
@@ -424,5 +461,32 @@ mod tests {
         assert_eq!(pi.read_hap["qA:65"], vec![1, 1, 1]);
         assert_eq!(pi.read_err["qA:65"], vec![0.01, 0.01, 0.01]);
         assert_eq!(pi.weight_matrix.dim(), (3, 3));
+    }
+
+    #[test]
+    fn sparse_phasing_input_glue_uses_csr_weights() {
+        let mut g = structs::PhasingGraphResult::new();
+        let a = g.graph.add_node(());
+        let b = g.graph.add_node(());
+        g.graph.add_edge(a, b, 0.8);
+        g.node_read_ids = vec![
+            ("qA:65".to_string(), Some("qA:129".to_string())),
+            ("qB:65".to_string(), None),
+        ];
+
+        g.initialize_weight_store(2);
+        g.set_weight(0, 1, 0.8).unwrap();
+        let csr = g.take_weight_csr().unwrap();
+        let pi = sparse_phasing_input_from_graph(&g, csr, 0.301);
+
+        assert_eq!(pi.edges, vec![(0, 1)]);
+        assert_eq!(pi.weights.get(0, 0), 1.0);
+        assert_eq!(pi.weights.get(0, 1), 0.8);
+        assert_eq!(pi.weights.get(1, 0), 0.8);
+        assert_eq!(
+            pi.node_read_ids[0],
+            vec!["qA:65".to_string(), "qA:129".to_string()]
+        );
+        assert_eq!(pi.node_read_ids[1], vec!["qB:65".to_string()]);
     }
 }

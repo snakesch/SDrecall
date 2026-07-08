@@ -43,7 +43,75 @@ impl Csr {
             }
             indptr.push(data.len() as i32);
         }
-        Csr { data, indices, indptr, size }
+        Csr {
+            data,
+            indices,
+            indptr,
+            size,
+        }
+    }
+
+    /// Build CSR directly from matrix entries, without materializing the dense matrix.
+    ///
+    /// Entries with exact value `0.0` are dropped, matching [`Csr::from_dense`]. Duplicate
+    /// `(row, col)` entries keep the last value in input order, matching repeated assignment
+    /// into a dense matrix before conversion. Stored columns are sorted ascending within rows.
+    pub fn from_entries<I>(size: usize, entries: I) -> Self
+    where
+        I: IntoIterator<Item = (usize, usize, f32)>,
+    {
+        let mut entries: Vec<(usize, usize, usize, f32)> = entries
+            .into_iter()
+            .enumerate()
+            .map(|(order, (row, col, value))| {
+                assert!(
+                    row < size,
+                    "CSR row index {row} out of bounds for size {size}"
+                );
+                assert!(
+                    col < size,
+                    "CSR col index {col} out of bounds for size {size}"
+                );
+                (row, col, order, value)
+            })
+            .collect();
+
+        entries.sort_unstable_by_key(|&(row, col, order, _)| (row, col, order));
+
+        let mut data = Vec::with_capacity(entries.len());
+        let mut indices = Vec::with_capacity(entries.len());
+        let mut indptr = Vec::with_capacity(size + 1);
+        indptr.push(0i32);
+
+        let mut pos = 0usize;
+        for row in 0..size {
+            let row_start = pos;
+            while pos < entries.len() && entries[pos].0 == row {
+                let col = entries[pos].1;
+                let mut value = entries[pos].3;
+                pos += 1;
+                while pos < entries.len() && entries[pos].0 == row && entries[pos].1 == col {
+                    value = entries[pos].3;
+                    pos += 1;
+                }
+                if value != 0.0 {
+                    data.push(value);
+                    indices.push(col as i32);
+                }
+            }
+            debug_assert!(
+                pos >= row_start,
+                "entry cursor should not move backwards while building CSR"
+            );
+            indptr.push(data.len() as i32);
+        }
+
+        Csr {
+            data,
+            indices,
+            indptr,
+            size,
+        }
     }
 
     #[inline]
@@ -51,6 +119,39 @@ impl Csr {
         let s = self.indptr[i] as usize;
         let e = self.indptr[i + 1] as usize;
         (&self.data[s..e], &self.indices[s..e])
+    }
+
+    /// Dense-matrix-compatible lookup. Missing structural entries are exact `0.0`.
+    #[inline]
+    pub fn get(&self, row: usize, col: usize) -> f32 {
+        assert!(
+            row < self.size,
+            "CSR row index {row} out of bounds for size {}",
+            self.size
+        );
+        assert!(
+            col < self.size,
+            "CSR col index {col} out of bounds for size {}",
+            self.size
+        );
+        let (rd, rc) = self.row(row);
+        match rc.binary_search(&(col as i32)) {
+            Ok(k) => rd[k],
+            Err(_) => 0.0,
+        }
+    }
+
+    /// `np.all(weight_matrix <= threshold, axis=1)` without materializing dense rows.
+    ///
+    /// Since absent entries are zero, they are always `<= threshold` for the positive
+    /// thresholds used by phasing. Stored `-1.0` incompatibilities also count as small.
+    pub fn small_row_mask(&self, threshold: f32) -> Vec<bool> {
+        (0..self.size)
+            .map(|row| {
+                let (rd, _) = self.row(row);
+                rd.iter().all(|&v| v <= threshold)
+            })
+            .collect()
     }
 
     /// Reindex to the sub-matrix over rows/cols where `mask` is true, compacting indices.
@@ -85,13 +186,23 @@ impl Csr {
             }
             indptr.push(data.len() as i32);
         }
-        Csr { data, indices, indptr, size: new_size }
+        Csr {
+            data,
+            indices,
+            indptr,
+            size: new_size,
+        }
     }
 }
 
 /// Extract the dense sub-matrix over rows/cols where `mask` is true (`np.ix_` semantics).
 pub fn dense_submatrix(m: &Array2<f32>, mask: &[bool]) -> Array2<f32> {
-    let idx: Vec<usize> = mask.iter().enumerate().filter(|(_, &b)| b).map(|(i, _)| i).collect();
+    let idx: Vec<usize> = mask
+        .iter()
+        .enumerate()
+        .filter(|(_, &b)| b)
+        .map(|(i, _)| i)
+        .collect();
     let n = idx.len();
     let mut out = Array2::<f32>::zeros((n, n));
     for (ri, &oi) in idx.iter().enumerate() {
@@ -130,7 +241,12 @@ pub fn max_idx_mem(data: &[f32], index_mask: Option<&[bool]>) -> (i32, f32) {
 
 /// `efficient_mask`: for one CSR row, mark columns whose stored value equals `mask_value`
 /// (default `-1.0`) as `false`; everything else stays `true`.
-pub fn efficient_mask(row_data: &[f32], row_cols: &[i32], size: usize, mask_value: f32) -> Vec<bool> {
+pub fn efficient_mask(
+    row_data: &[f32],
+    row_cols: &[i32],
+    size: usize,
+    mask_value: f32,
+) -> Vec<bool> {
     let mut mask = vec![true; size];
     for (k, &v) in row_data.iter().enumerate() {
         if v == mask_value {
@@ -221,7 +337,11 @@ pub fn count_true(mask: &[bool]) -> usize {
 
 /// `apply_index_mask`: the indices (0..size) where `mask` is true, as i32.
 pub fn apply_index_mask(mask: &[bool]) -> Vec<i32> {
-    mask.iter().enumerate().filter(|(_, &b)| b).map(|(i, _)| i as i32).collect()
+    mask.iter()
+        .enumerate()
+        .filter(|(_, &b)| b)
+        .map(|(i, _)| i as i32)
+        .collect()
 }
 
 /// `numba_isin` over a 0..size arange: true where the index is in `set`.
@@ -256,6 +376,47 @@ mod tests {
         let (rd3, rc3) = csr.row(3);
         assert_eq!(rc3, &[1, 2]);
         assert_eq!(rd3, &[0.5, 0.9]);
+    }
+
+    #[test]
+    fn csr_from_entries_matches_dense_and_keeps_last_duplicate() {
+        let mut m = sample_matrix();
+        let mut entries = Vec::new();
+        for i in 0..m.nrows() {
+            for j in 0..m.ncols() {
+                entries.push((i, j, m[[i, j]]));
+            }
+        }
+        entries.push((1, 3, 0.2));
+        entries.push((1, 3, 0.5)); // final dense assignment wins
+        entries.push((2, 3, 0.0)); // final zero assignment deletes a stored non-zero
+        m[[2, 3]] = 0.0;
+
+        let csr = Csr::from_entries(m.nrows(), entries);
+        let dense_csr = Csr::from_dense(&m);
+        assert_eq!(csr.data, dense_csr.data);
+        assert_eq!(csr.indices, dense_csr.indices);
+        assert_eq!(csr.indptr, dense_csr.indptr);
+        assert_eq!(csr.size, dense_csr.size);
+    }
+
+    #[test]
+    fn csr_get_matches_dense_semantics() {
+        let m = sample_matrix();
+        let csr = Csr::from_dense(&m);
+        assert_eq!(csr.get(0, 1), 0.8);
+        assert_eq!(csr.get(0, 2), -1.0);
+        assert_eq!(csr.get(0, 3), 0.0);
+    }
+
+    #[test]
+    fn csr_small_row_mask_matches_dense_rule() {
+        let m = sample_matrix();
+        let csr = Csr::from_dense(&m);
+        assert_eq!(csr.small_row_mask(0.1), vec![false, false, false, false]);
+
+        let only_weak = Csr::from_entries(3, [(0, 1, 0.05), (1, 0, 0.05), (1, 2, -1.0)]);
+        assert_eq!(only_weak.small_row_mask(0.1), vec![true, true, true]);
     }
 
     #[test]
@@ -340,10 +501,19 @@ mod tests {
 
     #[test]
     fn mask_helpers() {
-        assert_eq!(reverse_boolean_mask(4, &[1, 3]), vec![true, false, true, false]);
-        assert_eq!(boolean_mask_from_indices(4, &[1, 3]), vec![false, true, false, true]);
+        assert_eq!(
+            reverse_boolean_mask(4, &[1, 3]),
+            vec![true, false, true, false]
+        );
+        assert_eq!(
+            boolean_mask_from_indices(4, &[1, 3]),
+            vec![false, true, false, true]
+        );
         assert_eq!(apply_index_mask(&[false, true, true, false]), vec![1, 2]);
         assert_eq!(count_true(&[true, false, true, true]), 3);
-        assert_eq!(and_masks(&[true, true, false], &[true, false, false]), vec![true, false, false]);
+        assert_eq!(
+            and_masks(&[true, true, false], &[true, false, false]),
+            vec![true, false, false]
+        );
     }
 }

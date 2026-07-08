@@ -122,11 +122,28 @@ pub fn gce_algorithm(
     weight_matrix: &Array2<f32>,
     cutoff: f32,
 ) -> Vec<HashSet<i32>> {
+    gce_algorithm_csr(selected_indices, Csr::from_dense(weight_matrix), cutoff)
+}
+
+/// CSR-native Greedy-Clique-Expansion entry point.
+///
+/// `selected_indices[k]` maps local CSR row `k` back to its index in the original
+/// graph. This is behavior-equivalent to [`gce_algorithm`] but avoids the dense
+/// matrix allocation and the dense-to-CSR conversion.
+pub fn gce_algorithm_csr(
+    selected_indices: &[i32],
+    weight_csr: Csr,
+    cutoff: f32,
+) -> Vec<HashSet<i32>> {
     let mut cliques: Vec<HashSet<i32>> = Vec::new();
     let mut sel = selected_indices.to_vec();
-    let mut csr = Csr::from_dense(weight_matrix);
+    let mut csr = weight_csr;
     let mut size = csr.size;
-    assert_eq!(sel.len(), size, "selected_indices must match the sub-matrix size");
+    assert_eq!(
+        sel.len(),
+        size,
+        "selected_indices must match the sub-matrix size"
+    );
 
     loop {
         if size == 0 {
@@ -236,5 +253,22 @@ mod tests {
         want.insert(vec![10, 11, 12]);
         want.insert(vec![13, 14, 15]);
         assert_eq!(got, want);
+    }
+
+    #[test]
+    fn csr_entry_point_matches_dense_entry_point() {
+        let n1 = -1.0f32;
+        let m = array![
+            [1.0, 0.8, 0.8, n1, n1, n1],
+            [0.8, 1.0, 0.8, n1, n1, n1],
+            [0.8, 0.8, 1.0, n1, n1, n1],
+            [n1, n1, n1, 1.0, 0.8, 0.8],
+            [n1, n1, n1, 0.8, 1.0, 0.8],
+            [n1, n1, n1, 0.8, 0.8, 1.0]
+        ];
+        let sel: Vec<i32> = (0..6).collect();
+        let dense = gce_algorithm(&sel, &m, 0.2);
+        let sparse = gce_algorithm_csr(&sel, Csr::from_dense(&m), 0.2);
+        assert_eq!(clique_set(&sparse), clique_set(&dense));
     }
 }

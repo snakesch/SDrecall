@@ -11,8 +11,8 @@ use std::collections::{HashMap, HashSet};
 
 use ndarray::Array2;
 
-use crate::gce::gce_algorithm;
-use crate::kernels::{and_masks, apply_index_mask, dense_submatrix, isin_arange};
+use crate::gce::{gce_algorithm, gce_algorithm_csr};
+use crate::kernels::{and_masks, apply_index_mask, dense_submatrix, isin_arange, Csr};
 
 /// Which clique-finding round produced a clique (kept for parity/debugging; does not affect the
 /// final partition).
@@ -38,6 +38,34 @@ pub struct PhasingInput {
     pub read_err: HashMap<String, Vec<f32>>,
 }
 
+/// Sparse equivalent of [`PhasingInput`] for the CSR refactor.
+pub struct SparsePhasingInput {
+    /// CSR weights: `-1` incompatible, absent/`0` no overlap, `0..1` edge weight.
+    pub weights: Csr,
+    /// Phasing-graph adjacency (positive-weight overlaps); defines connected components.
+    pub edges: Vec<(i32, i32)>,
+    pub edge_weight_cutoff: f32,
+    /// `vertex -> [read_id]` (1–2 mate read ids per read-pair vertex).
+    pub node_read_ids: Vec<Vec<String>>,
+    /// `read_id -> per-base haplotype vector` (1 == matches reference).
+    pub read_hap: HashMap<String, Vec<i16>>,
+    /// `read_id -> per-base error probability` (≤ 0.03 == high quality).
+    pub read_err: HashMap<String, Vec<f32>>,
+}
+
+impl From<&PhasingInput> for SparsePhasingInput {
+    fn from(input: &PhasingInput) -> Self {
+        Self {
+            weights: Csr::from_dense(&input.weight_matrix),
+            edges: input.edges.clone(),
+            edge_weight_cutoff: input.edge_weight_cutoff,
+            node_read_ids: input.node_read_ids.clone(),
+            read_hap: input.read_hap.clone(),
+            read_err: input.read_err.clone(),
+        }
+    }
+}
+
 /// Iterative union-find with path compression and union-by-rank.
 struct UnionFind {
     parent: Vec<usize>,
@@ -46,7 +74,10 @@ struct UnionFind {
 
 impl UnionFind {
     fn new(n: usize) -> Self {
-        UnionFind { parent: (0..n).collect(), rank: vec![0; n] }
+        UnionFind {
+            parent: (0..n).collect(),
+            rank: vec![0; n],
+        }
     }
 
     fn find(&mut self, x: usize) -> usize {
@@ -105,13 +136,45 @@ fn connected_components(size: usize, edges: &[(i32, i32)]) -> Vec<i32> {
 /// `np.all(weight_matrix <= 0.1, axis=1)`: a row is "small" when it has no entry above 0.1.
 fn small_row_mask(m: &Array2<f32>) -> Vec<bool> {
     let n = m.nrows();
-    (0..n).map(|i| (0..m.ncols()).all(|j| m[[i, j]] <= 0.1)).collect()
+    (0..n)
+        .map(|i| (0..m.ncols()).all(|j| m[[i, j]] <= 0.1))
+        .collect()
 }
 
 /// Does any member read of `clique` carry a high-quality non-reference base?
 /// Mirrors the round-2 no-variant gate in `phasing.py` (an empty high-quality set counts as
 /// "no variant", matching numpy's `array([]).all() == True`).
 fn clique_has_variant(clique: &HashSet<i32>, input: &PhasingInput) -> bool {
+    for &qid in clique {
+        let rids = match input.node_read_ids.get(qid as usize) {
+            Some(r) => r,
+            None => continue,
+        };
+        for rid in rids {
+            let (hap, err) = match (input.read_hap.get(rid), input.read_err.get(rid)) {
+                (Some(h), Some(e)) => (h, e),
+                _ => continue,
+            };
+            let mut any_valid = false;
+            let mut all_one = true;
+            for (h, e) in hap.iter().zip(err.iter()) {
+                if *e <= 0.03 {
+                    any_valid = true;
+                    if *h != 1 {
+                        all_one = false;
+                        break;
+                    }
+                }
+            }
+            if any_valid && !all_one {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn clique_has_variant_sparse(clique: &HashSet<i32>, input: &SparsePhasingInput) -> bool {
     for &qid in clique {
         let rids = match input.node_read_ids.get(qid as usize) {
             Some(r) => r,
@@ -222,6 +285,85 @@ fn find_cliques_in_components(input: &PhasingInput) -> Vec<(Round, HashSet<i32>)
     result
 }
 
+/// CSR-native version of [`find_cliques_in_components`].
+fn find_cliques_in_components_sparse(input: &SparsePhasingInput) -> Vec<(Round, HashSet<i32>)> {
+    let weights = &input.weights;
+    let size = weights.size;
+    let cutoff = input.edge_weight_cutoff;
+
+    let comp = connected_components(size, &input.edges);
+    let mut component_dict: HashMap<i32, Vec<i32>> = HashMap::new();
+    for (v, &cid) in comp.iter().enumerate() {
+        component_dict.entry(cid).or_default().push(v as i32);
+    }
+
+    let small_mask = weights.small_row_mask(0.1);
+    let big_mask: Vec<bool> = small_mask.iter().map(|&b| !b).collect();
+    let mut small_row_indices: HashSet<i32> = small_mask
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &b)| if b { Some(i as i32) } else { None })
+        .collect();
+
+    let mut result: Vec<(Round, HashSet<i32>)> = Vec::new();
+
+    let mut comp_ids: Vec<i32> = component_dict.keys().copied().collect();
+    comp_ids.sort_unstable();
+
+    // ---- Round 1: largest cliques per component (cutoff) ----
+    for cid in comp_ids {
+        let comp_verts = &component_dict[&cid];
+        if comp_verts.len() <= 5 {
+            small_row_indices.extend(comp_verts.iter().copied());
+            continue;
+        }
+        let mut comp_index_mask = vec![false; size];
+        for &v in comp_verts {
+            comp_index_mask[v as usize] = true;
+        }
+        let comp_index_mask = and_masks(&comp_index_mask, &big_mask);
+        let selected = apply_index_mask(&comp_index_mask);
+        if selected.is_empty() {
+            continue;
+        }
+        let big_wm = weights.select(&comp_index_mask);
+        for clique in gce_algorithm_csr(&selected, big_wm, cutoff) {
+            if clique.len() <= 5 {
+                small_row_indices.extend(clique);
+            } else {
+                result.push((Round::Main, clique));
+            }
+        }
+    }
+
+    // ---- Round 2: rescue fragmented read-pairs (cutoff * 2/3) ----
+    if !small_row_indices.is_empty() {
+        let mask = isin_arange(size, &small_row_indices);
+        let selected = apply_index_mask(&mask);
+        let small_wm = weights.select(&mask);
+        small_row_indices = HashSet::new();
+        for clique in gce_algorithm_csr(&selected, small_wm, cutoff * 2.0 / 3.0) {
+            if clique.len() > 5 || clique_has_variant_sparse(&clique, input) {
+                result.push((Round::Second, clique));
+            } else {
+                small_row_indices.extend(clique);
+            }
+        }
+    }
+
+    // ---- Round 3: assemble whatever remains (cutoff / 3) ----
+    if !small_row_indices.is_empty() {
+        let mask = isin_arange(size, &small_row_indices);
+        let selected = apply_index_mask(&mask);
+        let small_wm = weights.select(&mask);
+        for clique in gce_algorithm_csr(&selected, small_wm, cutoff / 3.0) {
+            result.push((Round::Third, clique));
+        }
+    }
+
+    result
+}
+
 /// Split each clique into haplotypes by the connectivity of its induced sub-graph (original edges
 /// among clique members) plus supplemented weak edges (`0.1 < w <= cutoff`). Returns `vertex -> hap_id`.
 fn find_components_inside_cliques(
@@ -283,15 +425,83 @@ fn find_components_inside_cliques(
     vertex_hap
 }
 
+/// CSR-native version of [`find_components_inside_cliques`].
+fn find_components_inside_cliques_sparse(
+    cliques: &[(Round, HashSet<i32>)],
+    input: &SparsePhasingInput,
+) -> HashMap<i32, i32> {
+    let weights = &input.weights;
+    let cutoff = input.edge_weight_cutoff;
+
+    let mut adj: HashMap<i32, HashSet<i32>> = HashMap::new();
+    for &(u, v) in &input.edges {
+        adj.entry(u).or_default().insert(v);
+        adj.entry(v).or_default().insert(u);
+    }
+
+    let mut vertex_hap: HashMap<i32, i32> = HashMap::new();
+    let mut haplotype_idx = 0i32;
+
+    for (_round, clique) in cliques {
+        let mut members: Vec<i32> = clique.iter().copied().collect();
+        members.sort_unstable();
+        let idx_of: HashMap<i32, usize> =
+            members.iter().enumerate().map(|(i, &v)| (v, i)).collect();
+        let mut uf = UnionFind::new(members.len());
+
+        for (li, &u) in members.iter().enumerate() {
+            if let Some(neigh) = adj.get(&u) {
+                for &w in neigh {
+                    if let Some(&lj) = idx_of.get(&w) {
+                        uf.union(li, lj);
+                    }
+                }
+            }
+        }
+
+        for a in 0..members.len() {
+            for b in (a + 1)..members.len() {
+                let w = weights.get(members[a] as usize, members[b] as usize);
+                if w > 0.1 && w <= cutoff {
+                    uf.union(a, b);
+                }
+            }
+        }
+
+        let mut root_hap: HashMap<usize, i32> = HashMap::new();
+        for (li, &v) in members.iter().enumerate() {
+            let r = uf.find(li);
+            let hid = *root_hap.entry(r).or_insert_with(|| {
+                let h = haplotype_idx;
+                haplotype_idx += 1;
+                h
+            });
+            vertex_hap.insert(v, hid);
+        }
+    }
+
+    vertex_hap
+}
+
 /// Run the full phasing: returns `vertex -> hap_id` (the `qname_hap_info` map, keyed by vertex).
 pub fn phase(input: &PhasingInput) -> HashMap<i32, i32> {
     let cliques = find_cliques_in_components(input);
     find_components_inside_cliques(&cliques, input)
 }
 
+/// CSR-native phasing prototype. Intended to prove parity before replacing the
+/// production dense `Array2<f32>` graph build.
+pub fn phase_sparse(input: &SparsePhasingInput) -> HashMap<i32, i32> {
+    let cliques = find_cliques_in_components_sparse(input);
+    find_components_inside_cliques_sparse(&cliques, input)
+}
+
 /// Collapse a `vertex -> hap_id` map into a qname **partition** (set of qname sets), for
 /// relabeling-invariant comparison against the Python `hap_qname_info`.
-pub fn qname_partition(vertex_hap: &HashMap<i32, i32>, vertex_qname: &[String]) -> HashSet<Vec<String>> {
+pub fn qname_partition(
+    vertex_hap: &HashMap<i32, i32>,
+    vertex_qname: &[String],
+) -> HashSet<Vec<String>> {
     let mut hap_qnames: HashMap<i32, HashSet<String>> = HashMap::new();
     for (&v, &h) in vertex_hap {
         if let Some(qname) = vertex_qname.get(v as usize) {
@@ -313,8 +523,71 @@ mod tests {
     use super::*;
     use ndarray::array;
 
-    fn empty_reads() -> (Vec<Vec<String>>, HashMap<String, Vec<i16>>, HashMap<String, Vec<f32>>) {
+    fn empty_reads() -> (
+        Vec<Vec<String>>,
+        HashMap<String, Vec<i16>>,
+        HashMap<String, Vec<f32>>,
+    ) {
         (Vec::new(), HashMap::new(), HashMap::new())
+    }
+
+    fn vertex_partition(vertex_hap: &HashMap<i32, i32>) -> HashSet<Vec<i32>> {
+        let mut groups: HashMap<i32, Vec<i32>> = HashMap::new();
+        for (&vertex, &hap) in vertex_hap {
+            groups.entry(hap).or_default().push(vertex);
+        }
+        groups
+            .into_values()
+            .map(|mut group| {
+                group.sort_unstable();
+                group
+            })
+            .collect()
+    }
+
+    fn dense_sparse_pair() -> (PhasingInput, SparsePhasingInput) {
+        let n = 14usize;
+        let mut m = Array2::<f32>::zeros((n, n));
+        let mut entries = Vec::new();
+        let mut edges = Vec::new();
+
+        for i in 0..n {
+            m[[i, i]] = 1.0;
+            entries.push((i, i, 1.0));
+        }
+
+        for a in 0..n {
+            for b in (a + 1)..n {
+                let same = (a < 7) == (b < 7);
+                let w = if same { 0.8 } else { -1.0 };
+                m[[a, b]] = w;
+                m[[b, a]] = w;
+                entries.push((a, b, w));
+                entries.push((b, a, w));
+                if w > 0.0 {
+                    edges.push((a as i32, b as i32));
+                }
+            }
+        }
+
+        let (node_read_ids, read_hap, read_err) = empty_reads();
+        let dense = PhasingInput {
+            weight_matrix: m,
+            edges: edges.clone(),
+            edge_weight_cutoff: 0.301,
+            node_read_ids: node_read_ids.clone(),
+            read_hap: read_hap.clone(),
+            read_err: read_err.clone(),
+        };
+        let sparse = SparsePhasingInput {
+            weights: Csr::from_entries(n, entries),
+            edges,
+            edge_weight_cutoff: 0.301,
+            node_read_ids,
+            read_hap,
+            read_err,
+        };
+        (dense, sparse)
     }
 
     #[test]
@@ -336,11 +609,7 @@ mod tests {
 
     #[test]
     fn small_row_mask_detects_no_strong_edge() {
-        let m = array![
-            [0.0, 0.8, 0.0],
-            [0.8, 0.0, 0.05],
-            [0.0, 0.05, 0.0]
-        ];
+        let m = array![[0.0, 0.8, 0.0], [0.8, 0.0, 0.05], [0.0, 0.05, 0.0]];
         // row 2 has max 0.05 (<= 0.1) -> small; rows 0,1 have 0.8 -> big
         assert_eq!(small_row_mask(&m), vec![false, false, true]);
     }
@@ -383,6 +652,64 @@ mod tests {
             group_a.iter().next().unwrap(),
             group_b.iter().next().unwrap(),
             "the two groups are different haplotypes"
+        );
+    }
+
+    #[test]
+    fn sparse_phase_matches_dense_phase_partition() {
+        let (dense, sparse) = dense_sparse_pair();
+        let dense_hap = phase(&dense);
+        let sparse_hap = phase_sparse(&sparse);
+        assert_eq!(vertex_partition(&sparse_hap), vertex_partition(&dense_hap));
+    }
+
+    #[test]
+    fn sparse_final_split_matches_dense_weak_edge_supplement() {
+        let mut m = Array2::<f32>::zeros((3, 3));
+        for i in 0..3 {
+            m[[i, i]] = 1.0;
+        }
+        m[[0, 1]] = 0.8;
+        m[[1, 0]] = 0.8;
+        m[[1, 2]] = 0.2;
+        m[[2, 1]] = 0.2;
+
+        let cliques = vec![(Round::Main, HashSet::from([0, 1, 2]))];
+        let (node_read_ids, read_hap, read_err) = empty_reads();
+        let dense = PhasingInput {
+            weight_matrix: m,
+            edges: vec![(0, 1)], // weak 1-2 is intentionally only in the matrix
+            edge_weight_cutoff: 0.301,
+            node_read_ids: node_read_ids.clone(),
+            read_hap: read_hap.clone(),
+            read_err: read_err.clone(),
+        };
+        let sparse = SparsePhasingInput {
+            weights: Csr::from_entries(
+                3,
+                [
+                    (0, 0, 1.0),
+                    (1, 1, 1.0),
+                    (2, 2, 1.0),
+                    (0, 1, 0.8),
+                    (1, 0, 0.8),
+                    (1, 2, 0.2),
+                    (2, 1, 0.2),
+                ],
+            ),
+            edges: vec![(0, 1)],
+            edge_weight_cutoff: 0.301,
+            node_read_ids,
+            read_hap,
+            read_err,
+        };
+
+        let dense_hap = find_components_inside_cliques(&cliques, &dense);
+        let sparse_hap = find_components_inside_cliques_sparse(&cliques, &sparse);
+        assert_eq!(vertex_partition(&sparse_hap), vertex_partition(&dense_hap));
+        assert_eq!(
+            vertex_partition(&sparse_hap),
+            HashSet::from([vec![0, 1, 2]])
         );
     }
 
