@@ -8,7 +8,7 @@
 use std::fmt;
 
 use highs::{HighsModelStatus, RowProblem, Sense};
-use log::info;
+use log::debug;
 use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::structs::{BilcRecord, RegionKey};
@@ -95,7 +95,7 @@ pub fn lp_solve_remained_haplotypes_with_obj(
         .map(|(idx, &hid)| (hid, idx))
         .collect();
 
-    info!(
+    debug!(
         "BILC: {} unique haplotypes, index_to_hapid: {:?}",
         hap_no,
         &index_to_hapid[..std::cmp::min(10, hap_no)]
@@ -123,7 +123,7 @@ pub fn lp_solve_remained_haplotypes_with_obj(
     }
     let inspect_region_no = region_groups.len();
 
-    info!(
+    debug!(
         "BILC: constraint matrix shape ({inspect_region_no}, {hap_no})"
     );
 
@@ -140,7 +140,7 @@ pub fn lp_solve_remained_haplotypes_with_obj(
             let cost = -coeff; // minimize negative = maximize
             let col = pb.add_integer_column(cost, 0.0..=1.0);
             if i < 10 {
-                info!(
+                debug!(
                     "BILC: var {} hap_id={} cost={}",
                     i, index_to_hapid[i], cost
                 );
@@ -195,7 +195,7 @@ pub fn lp_solve_remained_haplotypes_with_obj(
         // Constraint: 0 <= sum(x_i for i in region_haps) <= upper_bound
         pb.add_row(0.0..=(upper_bound as f64), &row_factors);
 
-        info!(
+        debug!(
             "BILC: region {}, {} haps {:?}, indices {:?}, upper_bound={}",
             region_str,
             n_haps,
@@ -214,7 +214,7 @@ pub fn lp_solve_remained_haplotypes_with_obj(
     let solved = model.solve();
 
     let status = solved.status();
-    info!("BILC: model status = {status:?}");
+    debug!("BILC: model status = {status:?}");
 
     let bilc_status = BilcStatus::from(status);
 
@@ -239,7 +239,7 @@ pub fn lp_solve_remained_haplotypes_with_obj(
         }
     }
 
-    info!(
+    debug!(
         "BILC: select_hap_ids={select_hap_ids:?}, drop_hap_ids={drop_hap_ids:?}, obj_value={objective_value}"
     );
 

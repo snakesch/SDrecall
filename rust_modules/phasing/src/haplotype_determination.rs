@@ -3,7 +3,7 @@ use ahash::AHashMap;
 ///
 /// This module contains the core algorithm for determining whether two read pairs
 /// come from the same haplotype by analyzing their sequences and CIGAR operations.
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use rust_htslib::bam::ext::BamRecordExtensions;
 use rust_htslib::bam::Record;
 
@@ -989,7 +989,7 @@ pub fn determine_same_haplotype(
     // Empty sequences can occur when the overlap interval falls in soft-clipped regions
     // Two empty sequences would incorrectly be treated as "identical" by compare_sequences
     if interval_seq1.is_empty() || interval_seq2.is_empty() {
-        warn!("[determine_same_haplotype] Empty sliced sequence(s) detected: read1_len={}, read2_len={} for interval {}:{}-{}. \
+        info!("[determine_same_haplotype] Empty sliced sequence(s) detected: read1_len={}, read2_len={} for interval {}:{}-{}. \
                This may indicate the overlap interval falls in soft-clipped regions. Returning UNKNOWN.",
                interval_seq1.len(), interval_seq2.len(), chrom, start, end);
         return Ok((HaplotypeResult::Unknown, None));
@@ -1120,7 +1120,7 @@ pub fn determine_same_haplotype(
 
         // If no mismatches found (shouldn't happen since sequences differ), treat as unknown
         if mismatch_positions.is_empty() && discrepant_shared_snv_pos.is_empty() {
-            warn!("[determine_same_haplotype] No mismatches found despite sequence differences -> Different Haplotypes for conservative estimation, interval_seq1={:?}, interval_seq2={:?}, interval_hap1={:?}, interval_hap2={:?}. The different hap genomic positions are: {:?}. The shared mismatch positions with different ALT alleles are: {:?}", interval_seq1, interval_seq2, interval_hap1, interval_hap2, mismatch_positions, discrepant_shared_snv_pos);
+            info!("[determine_same_haplotype] No mismatches found despite sequence differences -> Different Haplotypes for conservative estimation, interval_seq1={:?}, interval_seq2={:?}, interval_hap1={:?}, interval_hap2={:?}. The different hap genomic positions are: {:?}. The shared mismatch positions with different ALT alleles are: {:?}", interval_seq1, interval_seq2, interval_hap1, interval_hap2, mismatch_positions, discrepant_shared_snv_pos);
             return Ok((HaplotypeResult::Different, None));
         }
 
