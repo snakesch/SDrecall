@@ -11,7 +11,9 @@ use std::collections::{HashMap, HashSet};
 
 use ndarray::Array2;
 
-use crate::gce::{gce_algorithm, gce_algorithm_csr_subset};
+use crate::gce::{
+    gce_algorithm, gce_algorithm_csr_subset_with_context, structural_transpose, GceContext,
+};
 use crate::kernels::{and_masks, apply_index_mask, dense_submatrix, isin_arange, Csr};
 
 /// Which clique-finding round produced a clique (kept for parity/debugging; does not affect the
@@ -290,6 +292,8 @@ fn find_cliques_in_components_sparse(input: &SparsePhasingInput) -> Vec<(Round, 
     let weights = &input.weights;
     let size = weights.size;
     let cutoff = input.edge_weight_cutoff;
+    let gce_ctx = GceContext::new(weights);
+    let refinement_transpose = structural_transpose(weights);
 
     let comp = connected_components(size, &input.edges);
     let mut component_dict: HashMap<i32, Vec<i32>> = HashMap::new();
@@ -326,7 +330,13 @@ fn find_cliques_in_components_sparse(input: &SparsePhasingInput) -> Vec<(Round, 
         if selected.is_empty() {
             continue;
         }
-        for clique in gce_algorithm_csr_subset(&selected, weights, cutoff) {
+        for clique in gce_algorithm_csr_subset_with_context(
+            &selected,
+            weights,
+            &gce_ctx,
+            Some(&refinement_transpose),
+            cutoff,
+        ) {
             if clique.len() <= 5 {
                 small_row_indices.extend(clique);
             } else {
@@ -340,7 +350,13 @@ fn find_cliques_in_components_sparse(input: &SparsePhasingInput) -> Vec<(Round, 
         let mask = isin_arange(size, &small_row_indices);
         let selected = apply_index_mask(&mask);
         small_row_indices = HashSet::new();
-        for clique in gce_algorithm_csr_subset(&selected, weights, cutoff * 2.0 / 3.0) {
+        for clique in gce_algorithm_csr_subset_with_context(
+            &selected,
+            weights,
+            &gce_ctx,
+            Some(&refinement_transpose),
+            cutoff * 2.0 / 3.0,
+        ) {
             if clique.len() > 5 || clique_has_variant_sparse(&clique, input) {
                 result.push((Round::Second, clique));
             } else {
@@ -353,7 +369,13 @@ fn find_cliques_in_components_sparse(input: &SparsePhasingInput) -> Vec<(Round, 
     if !small_row_indices.is_empty() {
         let mask = isin_arange(size, &small_row_indices);
         let selected = apply_index_mask(&mask);
-        for clique in gce_algorithm_csr_subset(&selected, weights, cutoff / 3.0) {
+        for clique in gce_algorithm_csr_subset_with_context(
+            &selected,
+            weights,
+            &gce_ctx,
+            Some(&refinement_transpose),
+            cutoff / 3.0,
+        ) {
             result.push((Round::Third, clique));
         }
     }
@@ -430,6 +452,94 @@ fn find_components_inside_cliques_sparse(
     let weights = &input.weights;
     let cutoff = input.edge_weight_cutoff;
 
+    let member_lists: Vec<Vec<i32>> = cliques
+        .iter()
+        .map(|(_, clique)| {
+            let mut members: Vec<i32> = clique.iter().copied().collect();
+            members.sort_unstable();
+            members.dedup();
+            members
+        })
+        .collect();
+
+    let mut clique_of = vec![usize::MAX; weights.size];
+    let mut local_of = vec![usize::MAX; weights.size];
+    for (clique_id, members) in member_lists.iter().enumerate() {
+        for (local, &node) in members.iter().enumerate() {
+            let node = node as usize;
+            if node >= weights.size {
+                continue;
+            }
+            if clique_of[node] != usize::MAX {
+                return find_components_inside_cliques_sparse_legacy(cliques, input);
+            }
+            clique_of[node] = clique_id;
+            local_of[node] = local;
+        }
+    }
+
+    let mut finders: Vec<UnionFind> = member_lists
+        .iter()
+        .map(|members| UnionFind::new(members.len()))
+        .collect();
+
+    for &(u, v) in &input.edges {
+        let (left, right) = (u as usize, v as usize);
+        if left >= weights.size || right >= weights.size {
+            continue;
+        }
+        let clique_id = clique_of[left];
+        if clique_id != usize::MAX && clique_id == clique_of[right] {
+            finders[clique_id].union(local_of[left], local_of[right]);
+        }
+    }
+
+    for members in &member_lists {
+        for &left_i32 in members {
+            let left = left_i32 as usize;
+            if left >= weights.size {
+                continue;
+            }
+            let clique_id = clique_of[left];
+            let (row_data, row_cols) = weights.row(left);
+            for (&weight, &right_i32) in row_data.iter().zip(row_cols.iter()) {
+                if right_i32 > left_i32
+                    && weight > 0.1
+                    && weight <= cutoff
+                    && clique_of[right_i32 as usize] == clique_id
+                {
+                    finders[clique_id].union(local_of[left], local_of[right_i32 as usize]);
+                }
+            }
+        }
+    }
+
+    let mut vertex_hap: HashMap<i32, i32> = HashMap::new();
+    let mut haplotype_idx = 0i32;
+    for (clique_id, members) in member_lists.iter().enumerate() {
+        let finder = &mut finders[clique_id];
+        let mut root_hap: HashMap<usize, i32> = HashMap::new();
+        for (li, &v) in members.iter().enumerate() {
+            let r = finder.find(li);
+            let hid = *root_hap.entry(r).or_insert_with(|| {
+                let h = haplotype_idx;
+                haplotype_idx += 1;
+                h
+            });
+            vertex_hap.insert(v, hid);
+        }
+    }
+
+    vertex_hap
+}
+
+fn find_components_inside_cliques_sparse_legacy(
+    cliques: &[(Round, HashSet<i32>)],
+    input: &SparsePhasingInput,
+) -> HashMap<i32, i32> {
+    let weights = &input.weights;
+    let cutoff = input.edge_weight_cutoff;
+
     let mut adj: HashMap<i32, HashSet<i32>> = HashMap::new();
     for &(u, v) in &input.edges {
         adj.entry(u).or_default().insert(v);
@@ -438,7 +548,6 @@ fn find_components_inside_cliques_sparse(
 
     let mut vertex_hap: HashMap<i32, i32> = HashMap::new();
     let mut haplotype_idx = 0i32;
-
     for (_round, clique) in cliques {
         let mut members: Vec<i32> = clique.iter().copied().collect();
         members.sort_unstable();

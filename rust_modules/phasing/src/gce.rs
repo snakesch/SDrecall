@@ -10,6 +10,7 @@
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashSet};
+use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 
 use ndarray::Array2;
 
@@ -20,6 +21,93 @@ use crate::kernels::{
 
 const REFINE_SWEEP_CEILING: usize = 1000;
 const REFINE_EPS: f32 = 1e-6;
+
+struct UnionFind {
+    parent: Vec<usize>,
+    rank: Vec<u8>,
+}
+
+impl UnionFind {
+    fn new(n: usize) -> Self {
+        Self {
+            parent: (0..n).collect(),
+            rank: vec![0; n],
+        }
+    }
+
+    fn find(&mut self, x: usize) -> usize {
+        let mut root = x;
+        while self.parent[root] != root {
+            root = self.parent[root];
+        }
+        let mut cur = x;
+        while self.parent[cur] != root {
+            let next = self.parent[cur];
+            self.parent[cur] = root;
+            cur = next;
+        }
+        root
+    }
+
+    fn union(&mut self, a: usize, b: usize) {
+        let (ra, rb) = (self.find(a), self.find(b));
+        if ra == rb {
+            return;
+        }
+        match self.rank[ra].cmp(&self.rank[rb]) {
+            Ordering::Less => self.parent[ra] = rb,
+            Ordering::Greater => self.parent[rb] = ra,
+            Ordering::Equal => {
+                self.parent[rb] = ra;
+                self.rank[ra] += 1;
+            }
+        }
+    }
+}
+
+fn thread_count() -> usize {
+    if let Ok(value) = std::env::var("RUST_GCE_THREADS") {
+        if let Ok(parsed) = value.trim().parse::<usize>() {
+            return parsed.max(1);
+        }
+    }
+    std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1)
+        .min(8)
+}
+
+fn par_chunk_reduce<T, M, R>(n: usize, threads: usize, map: M, mut reduce: R, init: T) -> T
+where
+    T: Send,
+    M: Fn(std::ops::Range<usize>) -> T + Sync,
+    R: FnMut(T, T) -> T,
+{
+    let threads = threads.clamp(1, n.max(1));
+    if threads == 1 || n == 0 {
+        return reduce(init, map(0..n));
+    }
+    let chunk = n.div_ceil(threads);
+    let results = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..threads)
+            .map(|t| {
+                let start = t * chunk;
+                let end = ((t + 1) * chunk).min(n);
+                let map = &map;
+                scope.spawn(move || map(start..end))
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("GCE worker thread panicked"))
+            .collect::<Vec<T>>()
+    });
+    let mut acc = init;
+    for value in results {
+        acc = reduce(acc, value);
+    }
+    acc
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct HeapWeight(f32);
@@ -91,77 +179,44 @@ impl<'a> FastGraph<'a> {
     }
 }
 
-struct SubsetFastGraph<'a> {
-    csr: &'a Csr,
-    nodes: &'a [usize],
-    local_of_global: Vec<usize>,
-    safe_mode: bool,
-    t_indptr: Vec<usize>,
-    t_rows: Vec<u32>,
+/// Reusable GCE engine state for one CSR matrix.
+///
+/// The production phasing pipeline calls GCE for many component/round subsets
+/// of the same graph. This context pays the finite-weight/safe-mode scan once,
+/// then partitions every subset as a masked view of the original CSR.
+pub struct GceContext<'a> {
+    graph: FastGraph<'a>,
 }
 
-impl<'a> SubsetFastGraph<'a> {
-    fn new(csr: &'a Csr, nodes: &'a [usize]) -> Self {
-        assert!(
-            u32::try_from(nodes.len()).is_ok() && nodes.len() < u32::MAX as usize,
-            "fast GCE supports fewer than u32::MAX selected nodes"
-        );
-        let mut local_of_global = vec![usize::MAX; csr.size];
-        for (local, &global) in nodes.iter().enumerate() {
-            assert!(global < csr.size, "selected node index out of bounds");
-            assert!(
-                local_of_global[global] == usize::MAX,
-                "selected nodes must be unique"
-            );
-            local_of_global[global] = local;
-        }
-
-        let mut safe_mode = false;
-        for &value in &csr.data {
-            assert!(
-                value.is_finite(),
-                "fast GCE requires finite edge weights, found {value}"
-            );
-            if value < 0.0 && value != -1.0 {
-                safe_mode = true;
-            }
-        }
-
-        let (t_indptr, t_rows) = if safe_mode {
-            build_structural_transpose(csr.size, &csr.indptr, &csr.indices)
-        } else {
-            (Vec::new(), Vec::new())
-        };
-
+impl<'a> GceContext<'a> {
+    pub fn new(csr: &'a Csr) -> Self {
         Self {
-            csr,
-            nodes,
-            local_of_global,
-            safe_mode,
-            t_indptr,
-            t_rows,
+            graph: FastGraph::from_csr(csr),
         }
     }
 
-    #[inline]
-    fn len(&self) -> usize {
-        self.nodes.len()
+    fn partition(&self, cutoff: f32) -> Vec<Vec<usize>> {
+        let n = self.graph.n;
+        partition_on_mask(&self.graph, vec![true; n], n, cutoff)
     }
 
-    #[inline]
-    fn global(&self, local: usize) -> usize {
-        self.nodes[local]
-    }
-
-    #[inline]
-    fn row(&self, local: usize) -> (&[f32], &[i32]) {
-        self.csr.row(self.global(local))
-    }
-
-    #[inline]
-    fn local_of(&self, global: usize) -> Option<usize> {
-        let local = self.local_of_global[global];
-        (local != usize::MAX).then_some(local)
+    pub fn partition_subset(&self, nodes: &[usize], cutoff: f32) -> Vec<Vec<usize>> {
+        if nodes.is_empty() {
+            return Vec::new();
+        }
+        assert!(
+            nodes.windows(2).all(|pair| pair[0] < pair[1]),
+            "subset nodes must be strictly ascending"
+        );
+        assert!(
+            *nodes.last().expect("nonempty node subset") < self.graph.n,
+            "selected node index out of bounds"
+        );
+        let mut active = vec![false; self.graph.n];
+        for &node in nodes {
+            active[node] = true;
+        }
+        partition_on_mask(&self.graph, active, nodes.len(), cutoff)
     }
 }
 
@@ -185,6 +240,10 @@ fn build_structural_transpose(n: usize, indptr: &[i32], cols: &[i32]) -> (Vec<us
         }
     }
     (t_indptr, t_rows)
+}
+
+pub(crate) fn structural_transpose(csr: &Csr) -> (Vec<usize>, Vec<u32>) {
+    build_structural_transpose(csr.size, &csr.indptr, &csr.indices)
 }
 
 #[inline]
@@ -352,200 +411,45 @@ fn push_affected_rows(
     }
 }
 
-#[inline]
-fn effective_best_subset(graph: &SubsetFastGraph<'_>, local: usize, active: &[bool]) -> f32 {
-    let global_node = graph.global(local);
-    let (vals, cols) = graph.row(local);
-    let mut best = f32::NEG_INFINITY;
-    let mut found = false;
-    for (&value, &global_col) in vals.iter().zip(cols.iter()) {
-        let global_col = global_col as usize;
-        if global_col == global_node || value == -1.0 {
-            continue;
-        }
-        let Some(local_col) = graph.local_of(global_col) else {
-            continue;
-        };
-        if active[local_col] {
-            if value > best {
-                best = value;
-            }
-            found = true;
-        }
-    }
-    let effective = if found { best } else { 0.0 };
-    if effective == 0.0 {
-        0.0
-    } else {
-        effective
-    }
-}
-
-#[inline]
-fn row_best_candidate_subset(
-    graph: &SubsetFastGraph<'_>,
-    local: usize,
-    cand: &[bool],
-) -> (usize, f32) {
-    let (vals, cols) = graph.row(local);
-    let mut best_col = usize::MAX;
-    let mut best_value = -2.0f32;
-    let mut found = false;
-    for (&value, &global_col) in vals.iter().zip(cols.iter()) {
-        let Some(local_col) = graph.local_of(global_col as usize) else {
-            continue;
-        };
-        if value != -1.0 && cand[local_col] && (!found || value >= best_value) {
-            best_col = local_col;
-            best_value = value;
-            found = true;
-        }
-    }
-    (best_col, best_value)
-}
-
-#[inline]
-fn apply_member_to_subset_candidates(
-    graph: &SubsetFastGraph<'_>,
-    local: usize,
-    cand: &mut [bool],
-    cand_count: &mut usize,
-) {
-    if cand[local] {
-        cand[local] = false;
-        *cand_count -= 1;
-    }
-    let (vals, cols) = graph.row(local);
-    for (&value, &global_col) in vals.iter().zip(cols.iter()) {
-        if value != -1.0 {
-            continue;
-        }
-        let Some(local_col) = graph.local_of(global_col as usize) else {
-            continue;
-        };
-        if cand[local_col] {
-            cand[local_col] = false;
-            *cand_count -= 1;
-        }
-    }
-}
-
-fn grow_subset_clique(
-    graph: &SubsetFastGraph<'_>,
-    seed: usize,
+fn partition_on_mask_sequential(
+    graph: &FastGraph<'_>,
+    mut active: Vec<bool>,
+    mut active_count: usize,
     cutoff: f32,
-    active: &[bool],
-    active_count: usize,
-    cand: &mut [bool],
-) -> Vec<usize> {
-    cand.copy_from_slice(active);
-    let mut cand_count = active_count;
-    apply_member_to_subset_candidates(graph, seed, cand, &mut cand_count);
-
-    let mut select_indices = vec![seed];
-    let mut member_count = 1usize;
-    let mut max_row_ind = seed;
-
-    while cand_count > 0 {
-        let (mut next_max_ind, mut next_max_value) =
-            row_best_candidate_subset(graph, max_row_ind, cand);
-
-        let lookback_start = member_count.saturating_sub(9);
-        for &member in &select_indices[lookback_start..member_count] {
-            if member == max_row_ind {
-                continue;
-            }
-            let (trial_max_ind, trial_max_value) = row_best_candidate_subset(graph, member, cand);
-            if trial_max_value <= cutoff || trial_max_ind == usize::MAX {
-                continue;
-            }
-            let (_best_neighbor, best_value) =
-                row_best_candidate_subset(graph, trial_max_ind, cand);
-            if best_value - trial_max_value > 1e-4 {
-                continue;
-            }
-            if trial_max_value > next_max_value {
-                next_max_ind = trial_max_ind;
-                next_max_value = trial_max_value;
-            }
-        }
-
-        if next_max_value <= cutoff {
-            let mut trial = 0usize;
-            while next_max_value <= cutoff && trial < member_count {
-                let member = select_indices[trial];
-                let (candidate, value) = row_best_candidate_subset(graph, member, cand);
-                next_max_ind = candidate;
-                next_max_value = value;
-                trial += 1;
-            }
-            if next_max_value <= cutoff && trial >= member_count {
-                break;
-            }
-            max_row_ind = next_max_ind;
-        } else {
-            max_row_ind = next_max_ind;
-        }
-
-        if max_row_ind == usize::MAX {
-            break;
-        }
-
-        select_indices.push(max_row_ind);
-        member_count += 1;
-        if member_count >= active_count {
-            break;
-        }
-
-        apply_member_to_subset_candidates(graph, max_row_ind, cand, &mut cand_count);
-    }
-
-    select_indices
-}
-
-fn push_affected_subset_rows(
-    graph: &SubsetFastGraph<'_>,
-    removed: &[usize],
-    active: &[bool],
-    heap: &mut BinaryHeap<(HeapWeight, u32)>,
-    touched_epoch: &mut [u32],
-    epoch: u32,
-) {
-    for &local_member in removed {
-        let member = graph.global(local_member);
-        let start = graph.t_indptr[member];
-        let end = graph.t_indptr[member + 1];
-        for &global_row in &graph.t_rows[start..end] {
-            let Some(local_row) = graph.local_of(global_row as usize) else {
-                continue;
-            };
-            if active[local_row] && touched_epoch[local_row] != epoch {
-                touched_epoch[local_row] = epoch;
-                let value = effective_best_subset(graph, local_row, active);
-                #[allow(clippy::cast_possible_truncation)]
-                heap.push((HeapWeight(value), local_row as u32));
-            }
-        }
-    }
-}
-
-fn partition_disjoint_cliques(csr: &Csr, cutoff: f32) -> Vec<Vec<usize>> {
-    let graph = FastGraph::from_csr(csr);
+) -> Vec<Vec<usize>> {
     let n = graph.n;
-    if n == 0 {
+    if n == 0 || active_count == 0 {
         return Vec::new();
     }
 
-    let mut active = vec![true; n];
-    let mut active_count = n;
     let mut cand = vec![false; n];
-
-    let mut heap: BinaryHeap<(HeapWeight, u32)> = BinaryHeap::with_capacity(n + n / 4 + 16);
-    for node in 0..n {
-        let value = effective_best(&graph, node, &active);
-        #[allow(clippy::cast_possible_truncation)]
-        heap.push((HeapWeight(value), node as u32));
-    }
+    let seed_threads = if active_count < 20_000 {
+        1
+    } else {
+        thread_count()
+    };
+    let entries = par_chunk_reduce(
+        n,
+        seed_threads,
+        |range| {
+            let mut chunk = Vec::new();
+            for node in range {
+                if !active[node] {
+                    continue;
+                }
+                let value = effective_best(graph, node, &active);
+                #[allow(clippy::cast_possible_truncation)]
+                chunk.push((HeapWeight(value), node as u32));
+            }
+            chunk
+        },
+        |mut acc, mut chunk| {
+            acc.append(&mut chunk);
+            acc
+        },
+        Vec::with_capacity(active_count),
+    );
+    let mut heap: BinaryHeap<(HeapWeight, u32)> = BinaryHeap::from(entries);
 
     let mut touched_epoch = vec![u32::MAX; if graph.safe_mode { n } else { 0 }];
     let mut epoch = 0u32;
@@ -559,7 +463,7 @@ fn partition_disjoint_cliques(csr: &Csr, cutoff: f32) -> Vec<Vec<usize>> {
         if !active[node] {
             continue;
         }
-        let current = effective_best(&graph, node, &active);
+        let current = effective_best(graph, node, &active);
         if current != cached {
             heap.push((HeapWeight(current), node_u32));
             continue;
@@ -570,7 +474,7 @@ fn partition_disjoint_cliques(csr: &Csr, cutoff: f32) -> Vec<Vec<usize>> {
             active_count -= 1;
             if graph.safe_mode {
                 push_affected_rows(
-                    &graph,
+                    graph,
                     &[node],
                     &active,
                     &mut heap,
@@ -583,14 +487,14 @@ fn partition_disjoint_cliques(csr: &Csr, cutoff: f32) -> Vec<Vec<usize>> {
             continue;
         }
 
-        let mut clique = grow_clique(&graph, node, cutoff, &active, active_count, &mut cand);
+        let mut clique = grow_clique(graph, node, cutoff, &active, active_count, &mut cand);
         for &member in &clique {
             active[member] = false;
         }
         active_count -= clique.len();
         if graph.safe_mode {
             push_affected_rows(
-                &graph,
+                graph,
                 &clique,
                 &active,
                 &mut heap,
@@ -606,90 +510,204 @@ fn partition_disjoint_cliques(csr: &Csr, cutoff: f32) -> Vec<Vec<usize>> {
     cliques
 }
 
-fn partition_disjoint_cliques_in_subset(
-    csr: &Csr,
-    nodes: &[usize],
+type CliqueStream = Vec<(HeapWeight, u32, Vec<usize>)>;
+
+fn run_component_phase(
+    graph: &FastGraph<'_>,
+    comp: &[usize],
+    cutoff: f32,
+    local_active: &mut [bool],
+    cand: &mut [bool],
+) -> CliqueStream {
+    for &node in comp {
+        local_active[node] = true;
+    }
+    let mut local_count = comp.len();
+
+    let mut entries = Vec::with_capacity(comp.len());
+    for &node in comp {
+        let value = effective_best(graph, node, local_active);
+        #[allow(clippy::cast_possible_truncation)]
+        entries.push((HeapWeight(value), node as u32));
+    }
+    let mut heap = BinaryHeap::from(entries);
+
+    let mut stream = Vec::new();
+    while local_count > 0 {
+        let Some((HeapWeight(cached), node_u32)) = heap.pop() else {
+            break;
+        };
+        let node = node_u32 as usize;
+        if !local_active[node] {
+            continue;
+        }
+        let current = effective_best(graph, node, local_active);
+        if current != cached {
+            heap.push((HeapWeight(current), node_u32));
+            continue;
+        }
+        if current <= cutoff {
+            break;
+        }
+        let mut clique = grow_clique(graph, node, cutoff, local_active, local_count, cand);
+        for &member in &clique {
+            local_active[member] = false;
+        }
+        local_count -= clique.len();
+        clique.sort_unstable();
+        stream.push((HeapWeight(current), node_u32, clique));
+    }
+
+    for &node in comp {
+        local_active[node] = false;
+    }
+    stream
+}
+
+fn partition_on_mask(
+    graph: &FastGraph<'_>,
+    mut active: Vec<bool>,
+    mut active_count: usize,
     cutoff: f32,
 ) -> Vec<Vec<usize>> {
-    let graph = SubsetFastGraph::new(csr, nodes);
-    let n = graph.len();
-    if n == 0 {
+    let n = graph.n;
+    if n == 0 || active_count == 0 {
         return Vec::new();
     }
-
-    let mut active = vec![true; n];
-    let mut active_count = n;
-    let mut cand = vec![false; n];
-
-    let mut heap: BinaryHeap<(HeapWeight, u32)> = BinaryHeap::with_capacity(n + n / 4 + 16);
-    for local in 0..n {
-        let value = effective_best_subset(&graph, local, &active);
-        #[allow(clippy::cast_possible_truncation)]
-        heap.push((HeapWeight(value), local as u32));
+    if cutoff < 0.0 {
+        return partition_on_mask_sequential(graph, active, active_count, cutoff);
     }
 
-    let mut touched_epoch = vec![u32::MAX; if graph.safe_mode { n } else { 0 }];
-    let mut epoch = 0u32;
-    let mut cliques = Vec::new();
-
-    while active_count > 0 {
-        let (HeapWeight(cached), local_u32) = heap
-            .pop()
-            .expect("every active node keeps at least one heap entry");
-        let local = local_u32 as usize;
-        if !active[local] {
+    let mut finder = UnionFind::new(n);
+    for row in 0..n {
+        if !active[row] {
             continue;
         }
-        let current = effective_best_subset(&graph, local, &active);
-        if current != cached {
-            heap.push((HeapWeight(current), local_u32));
-            continue;
-        }
-
-        if cutoff >= 0.0 && current <= cutoff {
-            active[local] = false;
-            active_count -= 1;
-            if graph.safe_mode {
-                push_affected_subset_rows(
-                    &graph,
-                    &[local],
-                    &active,
-                    &mut heap,
-                    &mut touched_epoch,
-                    epoch,
-                );
-                epoch += 1;
+        let (vals, cols) = graph.row(row);
+        for (&value, &col) in vals.iter().zip(cols.iter()) {
+            let col = col as usize;
+            if value > cutoff && col != row && active[col] {
+                finder.union(row, col);
             }
-            cliques.push(vec![graph.global(local)]);
+        }
+    }
+
+    let mut comp_size = vec![0u32; n];
+    for node in 0..n {
+        if active[node] {
+            comp_size[finder.find(node)] += 1;
+        }
+    }
+    let mut comp_index = vec![usize::MAX; n];
+    let mut comps: Vec<Vec<usize>> = Vec::new();
+    for node in 0..n {
+        if !active[node] {
             continue;
         }
+        let root = finder.find(node);
+        if comp_size[root] < 2 {
+            continue;
+        }
+        let idx = if comp_index[root] == usize::MAX {
+            comp_index[root] = comps.len();
+            comps.push(Vec::with_capacity(comp_size[root] as usize));
+            comps.len() - 1
+        } else {
+            comp_index[root]
+        };
+        comps[idx].push(node);
+    }
 
-        let clique_local =
-            grow_subset_clique(&graph, local, cutoff, &active, active_count, &mut cand);
-        for &member in &clique_local {
+    if comps.is_empty() {
+        return partition_on_mask_sequential(graph, active, active_count, cutoff);
+    }
+
+    let mut order: Vec<usize> = (0..comps.len()).collect();
+    order.sort_unstable_by_key(|&idx| std::cmp::Reverse(comps[idx].len()));
+    let workers = thread_count().min(comps.len());
+
+    let mut streams: Vec<CliqueStream> = Vec::with_capacity(comps.len());
+    if workers <= 1 {
+        let mut local_active = vec![false; n];
+        let mut cand = vec![false; n];
+        streams.resize_with(comps.len(), Vec::new);
+        for &idx in &order {
+            streams[idx] =
+                run_component_phase(graph, &comps[idx], cutoff, &mut local_active, &mut cand);
+        }
+    } else {
+        let next = AtomicUsize::new(0);
+        let mut collected: Vec<Vec<(usize, CliqueStream)>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..workers)
+                .map(|_| {
+                    let order = &order;
+                    let comps = &comps;
+                    let next = &next;
+                    scope.spawn(move || {
+                        let mut local_active = vec![false; n];
+                        let mut cand = vec![false; n];
+                        let mut produced = Vec::new();
+                        loop {
+                            let slot = next.fetch_add(1, AtomicOrdering::Relaxed);
+                            if slot >= order.len() {
+                                break;
+                            }
+                            let idx = order[slot];
+                            let stream = run_component_phase(
+                                graph,
+                                &comps[idx],
+                                cutoff,
+                                &mut local_active,
+                                &mut cand,
+                            );
+                            produced.push((idx, stream));
+                        }
+                        produced
+                    })
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|handle| handle.join().expect("GCE component worker panicked"))
+                .collect()
+        });
+        streams.resize_with(comps.len(), Vec::new);
+        for batch in &mut collected {
+            for (idx, stream) in batch.drain(..) {
+                streams[idx] = stream;
+            }
+        }
+    }
+
+    let mut cliques = Vec::new();
+    let mut merge: BinaryHeap<(HeapWeight, u32, usize)> = BinaryHeap::new();
+    let mut cursor = vec![0usize; streams.len()];
+    for (idx, stream) in streams.iter().enumerate() {
+        if let Some(&(key, seed, _)) = stream.first() {
+            merge.push((key, seed, idx));
+        }
+    }
+    while let Some((_, _, idx)) = merge.pop() {
+        let position = cursor[idx];
+        cursor[idx] += 1;
+        let clique = std::mem::take(&mut streams[idx][position].2);
+        for &member in &clique {
             active[member] = false;
         }
-        active_count -= clique_local.len();
-        if graph.safe_mode {
-            push_affected_subset_rows(
-                &graph,
-                &clique_local,
-                &active,
-                &mut heap,
-                &mut touched_epoch,
-                epoch,
-            );
-            epoch += 1;
-        }
-        let mut clique: Vec<usize> = clique_local
-            .into_iter()
-            .map(|local_idx| graph.global(local_idx))
-            .collect();
-        clique.sort_unstable();
+        active_count -= clique.len();
         cliques.push(clique);
+        if let Some(&(key, seed, _)) = streams[idx].get(cursor[idx]) {
+            merge.push((key, seed, idx));
+        }
     }
 
+    let mut tail = partition_on_mask_sequential(graph, active, active_count, cutoff);
+    cliques.append(&mut tail);
     cliques
+}
+
+fn partition_disjoint_cliques(csr: &Csr, cutoff: f32) -> Vec<Vec<usize>> {
+    GceContext::new(csr).partition(cutoff)
 }
 
 /// Find the single largest-edge-weight clique reachable from the best seed within
@@ -860,6 +878,17 @@ fn refine_partition_in_subset(
     cutoff: f32,
     max_rounds: usize,
 ) -> (Vec<Vec<usize>>, RefineStats) {
+    refine_partition_in_subset_with(csr, nodes, cliques, cutoff, max_rounds, None)
+}
+
+fn refine_partition_in_subset_with(
+    csr: &Csr,
+    nodes: &[usize],
+    cliques: &[Vec<usize>],
+    cutoff: f32,
+    max_rounds: usize,
+    shared_transpose: Option<&(Vec<usize>, Vec<u32>)>,
+) -> (Vec<Vec<usize>>, RefineStats) {
     let n = csr.size;
     let clique_count = cliques.len();
     let mut assignment = vec![usize::MAX; n];
@@ -887,11 +916,27 @@ fn refine_partition_in_subset(
     let mut rounds_run = 0usize;
     let mut converged = false;
 
+    let owned_transpose;
+    let transpose = if let Some(shared) = shared_transpose {
+        (max_rounds > 1).then_some(shared)
+    } else {
+        owned_transpose = (max_rounds > 1).then(|| structural_transpose(csr));
+        owned_transpose.as_ref()
+    };
+    let mut dirty = vec![false; n];
+    for &node in nodes {
+        dirty[node] = true;
+    }
+
     for _ in 0..max_rounds {
         let mut moves_this_round = 0usize;
         for &node in nodes {
+            if !dirty[node] {
+                continue;
+            }
             let current = assignment[node];
             if current == usize::MAX {
+                dirty[node] = false;
                 continue;
             }
 
@@ -950,6 +995,7 @@ fn refine_partition_in_subset(
                     .then(a.cmp(&b))
             });
 
+            let mut moved = false;
             for &target in &candidates {
                 if scores[target].max_w < current_max - REFINE_EPS {
                     break;
@@ -976,7 +1022,23 @@ fn refine_partition_in_subset(
                 members[target].push(node);
                 assignment[node] = target;
                 moves_this_round += 1;
+                moved = true;
                 break;
+            }
+
+            if moved {
+                if let Some((t_indptr, t_rows)) = &transpose {
+                    let (_, row_cols) = csr.row(node);
+                    for &neighbor in row_cols {
+                        dirty[neighbor as usize] = true;
+                    }
+                    for &row in &t_rows[t_indptr[node]..t_indptr[node + 1]] {
+                        dirty[row as usize] = true;
+                    }
+                }
+                dirty[node] = true;
+            } else {
+                dirty[node] = false;
             }
         }
 
@@ -1066,15 +1128,32 @@ pub fn gce_algorithm_csr_subset(
     weight_csr: &Csr,
     cutoff: f32,
 ) -> Vec<HashSet<i32>> {
+    let ctx = GceContext::new(weight_csr);
+    gce_algorithm_csr_subset_with_context(selected_indices, weight_csr, &ctx, None, cutoff)
+}
+
+pub(crate) fn gce_algorithm_csr_subset_with_context(
+    selected_indices: &[i32],
+    weight_csr: &Csr,
+    ctx: &GceContext<'_>,
+    shared_transpose: Option<&(Vec<usize>, Vec<u32>)>,
+    cutoff: f32,
+) -> Vec<HashSet<i32>> {
     let nodes: Vec<usize> = selected_indices
         .iter()
         .map(|&idx| {
             usize::try_from(idx).expect("selected_indices must be non-negative CSR row ids")
         })
         .collect();
-    let cliques = partition_disjoint_cliques_in_subset(weight_csr, &nodes, cutoff);
-    let (cliques, refine_stats) =
-        refine_partition_in_subset(weight_csr, &nodes, &cliques, cutoff, REFINE_SWEEP_CEILING);
+    let cliques = ctx.partition_subset(&nodes, cutoff);
+    let (cliques, refine_stats) = refine_partition_in_subset_with(
+        weight_csr,
+        &nodes,
+        &cliques,
+        cutoff,
+        REFINE_SWEEP_CEILING,
+        shared_transpose,
+    );
     if !refine_stats.converged {
         log::warn!(
             "GCE refinement was still moving nodes after {} sweeps; using final sweep state",
