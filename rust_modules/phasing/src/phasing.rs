@@ -11,7 +11,7 @@ use std::collections::{HashMap, HashSet};
 
 use ndarray::Array2;
 
-use crate::gce::{gce_algorithm, gce_algorithm_csr};
+use crate::gce::{gce_algorithm, gce_algorithm_csr_subset};
 use crate::kernels::{and_masks, apply_index_mask, dense_submatrix, isin_arange, Csr};
 
 /// Which clique-finding round produced a clique (kept for parity/debugging; does not affect the
@@ -326,8 +326,7 @@ fn find_cliques_in_components_sparse(input: &SparsePhasingInput) -> Vec<(Round, 
         if selected.is_empty() {
             continue;
         }
-        let big_wm = weights.select(&comp_index_mask);
-        for clique in gce_algorithm_csr(&selected, big_wm, cutoff) {
+        for clique in gce_algorithm_csr_subset(&selected, weights, cutoff) {
             if clique.len() <= 5 {
                 small_row_indices.extend(clique);
             } else {
@@ -340,9 +339,8 @@ fn find_cliques_in_components_sparse(input: &SparsePhasingInput) -> Vec<(Round, 
     if !small_row_indices.is_empty() {
         let mask = isin_arange(size, &small_row_indices);
         let selected = apply_index_mask(&mask);
-        let small_wm = weights.select(&mask);
         small_row_indices = HashSet::new();
-        for clique in gce_algorithm_csr(&selected, small_wm, cutoff * 2.0 / 3.0) {
+        for clique in gce_algorithm_csr_subset(&selected, weights, cutoff * 2.0 / 3.0) {
             if clique.len() > 5 || clique_has_variant_sparse(&clique, input) {
                 result.push((Round::Second, clique));
             } else {
@@ -355,8 +353,7 @@ fn find_cliques_in_components_sparse(input: &SparsePhasingInput) -> Vec<(Round, 
     if !small_row_indices.is_empty() {
         let mask = isin_arange(size, &small_row_indices);
         let selected = apply_index_mask(&mask);
-        let small_wm = weights.select(&mask);
-        for clique in gce_algorithm_csr(&selected, small_wm, cutoff / 3.0) {
+        for clique in gce_algorithm_csr_subset(&selected, weights, cutoff / 3.0) {
             result.push((Round::Third, clique));
         }
     }
