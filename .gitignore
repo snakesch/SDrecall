@@ -19,6 +19,11 @@ rust_modules/target
 *.log
 *.png
 */*.log
+*.o[0-9]*
+*.e[0-9]*
+logs/
+graphify-out/
+rust_modules/vf
 CLAUDE.md
 progress.md
 .claude/
