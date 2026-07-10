@@ -55,13 +55,11 @@ fn merge_regions(mut regions: Vec<(String, u64, u64)>) -> Vec<(String, u64, u64)
     merged
 }
 
-/// Maximum `|AS - XS|` gap below which a read is treated as a near-tied
-/// multi-mapper. BWA folds multi-mapping ambiguity into MAPQ, but the raw
-/// AS/XS gap is the direct measure: a small gap means the read's best and
-/// second-best alignments are essentially interchangeable, so it is a
-/// genuine SD multi-mapper that may carry the alt haplotype from a paralog
-/// even when BWA assigned a confident (high) MAPQ. Such reads would be
-/// dropped by the `mapq < 50` arm alone; this gap arm recruits them.
+/// Maximum exclusive `|AS - XS|` gap below which a read is treated as a
+/// near-tied multi-mapper. BWA folds multi-mapping ambiguity into MAPQ, but
+/// the raw AS/XS gap is the direct measure: a small gap means the read's best
+/// and second-best alignments are essentially interchangeable, so it is a
+/// genuine SD multi-mapper that may carry the alt haplotype from a paralog.
 const NFC_AS_XS_MAX_GAP: i64 = 10;
 
 /// Read an integer aux tag as `i64`. Returns `None` for a missing tag or a
@@ -79,20 +77,17 @@ fn aux_integer(record: &bam::Record, tag: &[u8]) -> Option<i64> {
     }
 }
 
-/// `|AS - XS| <= NFC_AS_XS_MAX_GAP` — the read's best and second-best
+/// `|AS - XS| < NFC_AS_XS_MAX_GAP` — the read's best and second-best
 /// alignments are near-tied, so it is a genuine SD multi-mapper. Both tags
 /// must be present; minimap2 BAMs (which omit `XS`) simply return `false`.
 fn near_tied_multimapper(record: &bam::Record) -> bool {
     match (aux_integer(record, b"AS"), aux_integer(record, b"XS")) {
-        (Some(as_score), Some(xs_score)) => {
-            (as_score - xs_score).abs() <= NFC_AS_XS_MAX_GAP
-        }
+        (Some(as_score), Some(xs_score)) => (as_score - xs_score).abs() < NFC_AS_XS_MAX_GAP,
         _ => false,
     }
 }
 
-/// Check if a read should be included based on the Python read-extraction shell
-/// predicates.
+/// Check if a read carries NFC evidence.
 fn should_include_read(record: &bam::Record, multi_aligned: bool) -> bool {
     if !multi_aligned {
         // Python FC extraction:
@@ -101,15 +96,20 @@ fn should_include_read(record: &bam::Record, multi_aligned: bool) -> bool {
         return true;
     }
 
-    // Python NFC extraction: `![SA] && ([XA] || mapq < 50)`, with the AS/XS
-    // near-tie arm OR'd in — a read whose best two alignments are within
-    // `NFC_AS_XS_MAX_GAP` points is a genuine SD multi-mapper that may carry
-    // the alt haplotype from a paralog, so recruit it even when BWA assigned
-    // it a confident MAPQ (the `mapq < 50` arm would otherwise drop it).
+    // NFC extraction recruits non-split reads with explicit alternate
+    // alignments (`XA`) or near-tied best/second-best alignment scores. MAPQ is
+    // deliberately not a recruitment arm here: it is a downstream confidence
+    // summary, while AS/XS is the direct evidence of SD alignment ambiguity.
     if record.aux(b"SA").is_ok() {
         return false;
     }
-    record.aux(b"XA").is_ok() || record.mapq() < 50 || near_tied_multimapper(record)
+    record.aux(b"XA").is_ok() || near_tied_multimapper(record)
+}
+
+/// Read-pair level extraction rule. If either mate carries NFC evidence, both
+/// mates are emitted to preserve the paired FASTQ unit for realignment.
+fn should_include_pair(r1: &bam::Record, r2: &bam::Record, multi_aligned: bool) -> bool {
+    should_include_read(r1, multi_aligned) || should_include_read(r2, multi_aligned)
 }
 
 /// Encode BAM Phred qualities as a Sanger-FASTQ quality line.
@@ -141,7 +141,7 @@ fn quality_to_string(qual: &[u8], qname: &str) -> anyhow::Result<String> {
 /// writing R1/R2 FASTQ files. Returns `(r1_path, r2_path)`.
 ///
 /// When `multi_aligned` is true, applies the multi-alignment filter:
-/// `!SA && (XA || MAPQ < 50)`. When false, every fetched read pair is eligible.
+/// `!SA && (XA || |AS - XS| < 10)`. When false, every fetched read pair is eligible.
 /// Singleton reads (only one mate found) are discarded; if either mate of a pair
 /// passes, both are written.
 pub fn bam_to_fastq(
@@ -230,9 +230,7 @@ pub fn bam_to_fastq(
         // Write pairs where at least one mate passes the filter.
         for (r1_opt, r2_opt) in read_pairs.into_values() {
             let passes = match (&r1_opt, &r2_opt) {
-                (Some(r1), Some(r2)) => {
-                    should_include_read(r1, multi_aligned) || should_include_read(r2, multi_aligned)
-                }
+                (Some(r1), Some(r2)) => should_include_pair(r1, r2, multi_aligned),
                 _ => false,
             };
             if passes {
@@ -394,12 +392,12 @@ mod tests {
     }
 
     #[test]
-    fn nfc_extraction_matches_python_shell_predicate() {
+    fn nfc_extraction_uses_xa_or_near_tied_scores_not_mapq() {
         assert!(should_include_read(
             &read_with_tags(60, true, false, None, None),
             true
         ));
-        assert!(should_include_read(
+        assert!(!should_include_read(
             &read_with_tags(49, false, false, None, None),
             true
         ));
@@ -415,8 +413,8 @@ mod tests {
 
     #[test]
     fn nfc_extraction_recruits_near_tied_multimappers() {
-        // High MAPQ, no XA — the `mapq < 50` and `[XA]` arms would drop this,
-        // but |AS - XS| = 5 <= 10 marks it as a genuine SD multi-mapper to keep.
+        // High MAPQ, no XA, but |AS - XS| = 5 < 10 marks it as a genuine SD
+        // multi-mapper to keep.
         assert!(should_include_read(
             &read_with_tags(60, false, false, Some(148), Some(143)),
             true
@@ -426,18 +424,18 @@ mod tests {
             &read_with_tags(60, false, false, Some(148), Some(148)),
             true
         ));
-        // |AS - XS| = 10 (exactly the cap) is kept (inclusive bound).
-        assert!(should_include_read(
+        // |AS - XS| = 10 (exactly the cap) is dropped; the bound is strict.
+        assert!(!should_include_read(
             &read_with_tags(60, false, false, Some(150), Some(140)),
             true
         ));
-        // |AS - XS| = 11 (just over the cap), high MAPQ, no XA → dropped.
+        // |AS - XS| = 11 (over the cap), high MAPQ, no XA -> dropped.
         assert!(!should_include_read(
             &read_with_tags(60, false, false, Some(150), Some(139)),
             true
         ));
         // Missing XS (e.g. a minimap2 BAM) → no AS/XS arm, falls back to the
-        // other arms; high MAPQ + no XA → dropped (no false recruit).
+        // XA arm; high MAPQ + no XA -> dropped (no false recruit).
         assert!(!should_include_read(
             &read_with_tags(60, false, false, Some(148), None),
             true
@@ -452,6 +450,16 @@ mod tests {
             &read_with_tags(60, false, true, Some(148), Some(148)),
             true
         ));
+    }
+
+    #[test]
+    fn nfc_extraction_is_pair_level() {
+        let plain_mate = read_with_tags(60, false, false, None, None);
+        let near_tied_mate = read_with_tags(60, false, false, Some(148), Some(143));
+        assert!(should_include_pair(&plain_mate, &near_tied_mate, true));
+
+        let low_mapq_only_mate = read_with_tags(1, false, false, None, None);
+        assert!(!should_include_pair(&plain_mate, &low_mapq_only_mate, true));
     }
 
     #[test]

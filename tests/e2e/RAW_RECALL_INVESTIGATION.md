@@ -58,12 +58,14 @@ over-recruiting reference-supporting reads relative to Python.
 
 One concrete first-half parity bug was confirmed and fixed in
 `rust_read_extraction`: Rust's extraction predicate did not match the Python
-shell fallback.
+shell fallback at that time. This historical predicate was later superseded:
+current NFC extraction should be pair-level and should use `![SA] && ([XA] ||
+|AS - XS| < 10)`, not a low-MAPQ arm.
 
 - Python FC/query extraction applies no MAPQ/tag filter after `samtools view -P
   -L`; Rust was dropping `MAPQ >= 60`.
-- Python NFC/counterpart extraction uses `![SA] && ([XA] || mapq < 50)`; Rust
-  required `XA && abs(AS - XS) <= 10` and also dropped `MAPQ >= 60`.
+- Historical Python NFC/counterpart extraction used `![SA] && ([XA] || mapq <
+  50)`; Rust required `XA && abs(AS - XS) <= 10` and also dropped `MAPQ >= 60`.
 
 On implicated hg38 RGs, this predicate difference is large enough to affect raw
 recall. Estimated qname additions with the Python-matching predicate:

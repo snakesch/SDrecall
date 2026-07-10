@@ -73,18 +73,21 @@ def bam_to_fastq_biobambam(input_bam,
     tmp_prefix = f"tmp_bb_{os.getpid()}"
 
     if multi_aligned:
-        # Filter expression for multi-aligned reads (converted to samtools syntax)
-        # Note: Rust implementation uses ![SA] && [XA] && abs(AS-XS) <= 5
-        filter_expr = "![SA] && ([XA] || mapq < 50)"
-        
-        # Samtools command with -P for fetching pairs
-        cmd = f"""samtools view -@ {threads} -h -P -L {region_bed} -u -e '{filter_expr}' {input_bam} | \
+        # Select qnames by NFC evidence in the counterpart BED, then fetch the
+        # full pairs for those qnames. `-e` is record-level, so doing this in
+        # one samtools command would drop mates that lack XA/AS/XS evidence.
+        filter_expr = "![SA] && ([XA] || ([AS] && [XS] && ([AS]-[XS] < 10) && ([XS]-[AS] < 10)))"
+        qnames_file = f"{tmp_dir}/{tmp_prefix}.nfc.qnames"
+
+        cmd = f"""samtools view -@ {threads} -L {region_bed} -e '{filter_expr}' {input_bam} | \
+                  cut -f1 | sort -u > {qnames_file} && \
+                  samtools view -@ {threads} -h -P -L {region_bed} -N {qnames_file} -u {input_bam} | \
                   bamtofastq \
                     F={output_freads} \
                     F2={output_rreads} \
                     collate=1 \
                     T={tmp_dir}/{tmp_prefix} && \
-                  rm -rf {tmp_dir}/{tmp_prefix}"""
+                  rm -rf {tmp_dir}/{tmp_prefix} {qnames_file}"""
     else:
         # For non-multi-aligned BAMs, use the original approach with regions
         cmd = f"""samtools view -h -P -@ {threads} -L {region_bed} -u {input_bam} | \
