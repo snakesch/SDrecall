@@ -35,6 +35,7 @@ pub mod hp_writer;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 pub use phasing::{phase, phase_sparse, qname_partition, PhasingInput, Round, SparsePhasingInput};
 
@@ -73,6 +74,25 @@ pub struct PhaserOutput {
     pub output_bam: PathBuf,
     pub n_reads: usize,
     pub n_haplotypes: usize,
+}
+
+/// Cheap per-BAM graph/phasing metrics for fp-control performance diagnostics.
+#[derive(Clone, Debug, Default)]
+pub struct GraphPhaseMetrics {
+    pub read_pairs: usize,
+    pub graph_vertices: usize,
+    pub graph_edges: usize,
+    pub sparse_weight_assignments: usize,
+    pub csr_nnz: usize,
+    pub lowqual_qnames: usize,
+    pub haplotype_clusters: usize,
+    pub read_pairing_time: Duration,
+    pub allele_depth_time: Duration,
+    pub intrinsic_allele_depth_time: Duration,
+    pub graph_build_time: Duration,
+    pub csr_build_time: Duration,
+    pub phase_time: Duration,
+    pub total_time: Duration,
 }
 
 /// Assemble the phasing-stage input from the graph result.
@@ -243,6 +263,8 @@ pub struct PhasedReads {
     /// Reads dropped as low quality during BAM reading. The pipeline threads
     /// these into haplotype inspection; the standalone phaser ignores them.
     pub lowqual_qnames: HashSet<String>,
+    /// Graph shape and stage timings captured while building this partition.
+    pub metrics: GraphPhaseMetrics,
 }
 
 /// BAM → phasing graph → GCE partition: the shared core of the standalone phaser
@@ -287,6 +309,8 @@ pub fn build_and_phase_with_intrinsic(
     intrinsic_bam: Option<&str>,
     params: &PhaserParams,
 ) -> Result<Option<PhasedReads>> {
+    let total_start = Instant::now();
+    let read_pairing_start = Instant::now();
     let (read_pair_map, header) = bam_reading::migrate_bam_to_sorted_intervals_grouped(
         bam,
         params.mapq_cutoff,
@@ -296,7 +320,16 @@ pub fn build_and_phase_with_intrinsic(
         params.threads,
     )
     .map_err(|e| SdError::Compute(format!("BAM read/pairing failed for {bam}: {e}")))?;
+    let read_pairing_time = read_pairing_start.elapsed();
+    let read_pairs = read_pair_map.readpair_dict.len();
+    log::warn!(
+        "[fp_control_read_pair_metrics] bam={} read_pairs={} t_read_pairing_s={:.3}",
+        bam,
+        read_pairs,
+        read_pairing_time.as_secs_f64()
+    );
 
+    let allele_depth_start = Instant::now();
     let allele_depth_map = bam_reading::build_allele_depth_map(
         bam,
         reference,
@@ -304,11 +337,13 @@ pub fn build_and_phase_with_intrinsic(
         params.basequal_median_cutoff,
     )
     .map_err(|e| SdError::Compute(format!("allele-depth map failed for {bam}: {e}")))?;
+    let allele_depth_time = allele_depth_start.elapsed();
 
     // Intrinsic-bam allele-depth map (Python `intrinsic_ad_dict`). Built with the
     // same mpileup filters as the main map (Python `stat_ad_to_dict` hardcodes
     // `-q 10 -Q 10`; PhaserParams default to 10/10). Absent intrinsic BAM (or one
     // with no ALT alleles) → empty map → no PSV deductions.
+    let intrinsic_ad_start = Instant::now();
     let intrinsic_ad_map = match intrinsic_bam {
         Some(ib) => bam_reading::build_allele_depth_map(
             ib,
@@ -321,8 +356,10 @@ pub fn build_and_phase_with_intrinsic(
         })?,
         None => structs::AlleleDepthMap::new(),
     };
+    let intrinsic_allele_depth_time = intrinsic_ad_start.elapsed();
 
     let config = structs::HaplotypeConfig::new(params.mean_read_length);
+    let graph_build_start = Instant::now();
     let mut graph = graph_builder::build_phasing_graph(
         &read_pair_map,
         &allele_depth_map,
@@ -331,22 +368,97 @@ pub fn build_and_phase_with_intrinsic(
         &config,
     )
     .map_err(|e| SdError::Compute(format!("graph build failed for {bam}: {e}")))?;
+    let graph_build_time = graph_build_start.elapsed();
 
+    let graph_vertices = graph.graph.node_count();
+    let graph_edges = graph.graph.edge_count();
+    let sparse_weight_assignments = graph.sparse_weight_entry_count();
+    let lowqual_qnames = graph.lowqual_qnames.len();
+    log::warn!(
+        concat!(
+            "[fp_control_graph_build_metrics] bam={} read_pairs={} nodes={} ",
+            "graph_edges={} sparse_assignments={} lowqual_qnames={} t_graph_s={:.3} ",
+            "t_pre_phase_total_s={:.3}"
+        ),
+        bam,
+        read_pairs,
+        graph_vertices,
+        graph_edges,
+        sparse_weight_assignments,
+        lowqual_qnames,
+        graph_build_time.as_secs_f64(),
+        total_start.elapsed().as_secs_f64()
+    );
+
+    let csr_build_start = Instant::now();
     let weight_csr = match graph.take_weight_csr() {
         Some(csr) => csr,
         None => return Ok(None),
     };
+    let csr_build_time = csr_build_start.elapsed();
+    let csr_nnz = weight_csr.data.len();
 
     let n = graph.graph.node_count();
     let vertex_qname = build_vertex_qname(&read_pair_map, n);
     let phasing_input =
         sparse_phasing_input_from_graph(&graph, weight_csr, params.edge_weight_cutoff);
+    log::warn!(
+        concat!(
+            "[fp_control_phase_start_metrics] bam={} nodes={} graph_edges={} ",
+            "csr_nnz={} csr_pair_entries={} t_csr_s={:.3} t_pre_phase_total_s={:.3}"
+        ),
+        bam,
+        graph_vertices,
+        graph_edges,
+        csr_nnz,
+        csr_nnz.saturating_sub(graph_vertices),
+        csr_build_time.as_secs_f64(),
+        total_start.elapsed().as_secs_f64()
+    );
+    let phase_start = Instant::now();
     let vertex_hap = phase_sparse(&phasing_input);
+    let phase_time = phase_start.elapsed();
+
+    let haplotype_clusters = {
+        let mut hap_ids: Vec<i32> = vertex_hap.values().copied().collect();
+        hap_ids.sort_unstable();
+        hap_ids.dedup();
+        hap_ids.len()
+    };
+    log::warn!(
+        concat!(
+            "[fp_control_phase_done_metrics] bam={} nodes={} graph_edges={} csr_nnz={} ",
+            "hap_clusters={} t_phase_s={:.3} t_total_s={:.3}"
+        ),
+        bam,
+        graph_vertices,
+        graph_edges,
+        csr_nnz,
+        haplotype_clusters,
+        phase_time.as_secs_f64(),
+        total_start.elapsed().as_secs_f64()
+    );
 
     Ok(Some(PhasedReads {
         vertex_hap,
         vertex_qname,
         lowqual_qnames: graph.lowqual_qnames,
+        metrics: GraphPhaseMetrics {
+            read_pairs,
+            graph_vertices,
+            graph_edges,
+            sparse_weight_assignments,
+            csr_nnz,
+            lowqual_qnames,
+            haplotype_clusters,
+            read_pairing_time,
+            allele_depth_time,
+            intrinsic_allele_depth_time,
+            graph_build_time,
+            csr_build_time,
+            phase_time,
+            total_time: total_start.elapsed(),
+        },
     }))
 }
 

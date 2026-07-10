@@ -41,8 +41,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use phasing::{build_and_phase_with_intrinsic, PhaserParams};
 use haplotype_inspection::identify_misaligned_haps::inspect_haplotypes;
+use phasing::{build_and_phase_with_intrinsic, GraphPhaseMetrics, PhaserParams};
 use sdrecall_utils::{Result, SdError};
 
 /// Parameters for one fused FP-control island run, mirroring the per-chunk
@@ -106,7 +106,12 @@ impl FpControlOutput {
         mismap_qnames.sort();
         lowqual_qnames.sort();
         let qname_hap = qname_hap_by_qname(partition);
-        Self { correct_qnames, mismap_qnames, lowqual_qnames, qname_hap }
+        Self {
+            correct_qnames,
+            mismap_qnames,
+            lowqual_qnames,
+            qname_hap,
+        }
     }
 }
 
@@ -158,6 +163,39 @@ fn qname_hap_by_qname(partition: &Partition) -> HashMap<String, i32> {
     out
 }
 
+fn seconds(duration: std::time::Duration) -> f64 {
+    duration.as_secs_f64()
+}
+
+fn log_graph_phase_metrics(bam: &str, metrics: &GraphPhaseMetrics) {
+    let csr_pair_entries = metrics.csr_nnz.saturating_sub(metrics.graph_vertices);
+    log::warn!(
+        concat!(
+            "[fp_control_graph_metrics] bam={} read_pairs={} nodes={} graph_edges={} ",
+            "sparse_assignments={} csr_nnz={} csr_pair_entries={} lowqual_qnames={} ",
+            "hap_clusters={} t_read_pairing_s={:.3} t_ad_s={:.3} ",
+            "t_intrinsic_ad_s={:.3} t_graph_s={:.3} t_csr_s={:.3} ",
+            "t_phase_s={:.3} t_total_s={:.3}"
+        ),
+        bam,
+        metrics.read_pairs,
+        metrics.graph_vertices,
+        metrics.graph_edges,
+        metrics.sparse_weight_assignments,
+        metrics.csr_nnz,
+        csr_pair_entries,
+        metrics.lowqual_qnames,
+        metrics.haplotype_clusters,
+        seconds(metrics.read_pairing_time),
+        seconds(metrics.allele_depth_time),
+        seconds(metrics.intrinsic_allele_depth_time),
+        seconds(metrics.graph_build_time),
+        seconds(metrics.csr_build_time),
+        seconds(metrics.phase_time),
+        seconds(metrics.total_time)
+    );
+}
+
 /// Run the fused Phase-2c FP-control core entirely in Rust.
 ///
 /// `(bam, intrinsic_bam, params) → (correct_qnames, mismap_qnames)`.
@@ -202,6 +240,7 @@ pub fn run_fp_control(
             return Ok(None);
         }
     };
+    log_graph_phase_metrics(bam, &phased.metrics);
 
     // Early-out #2: ≤ 2 vertices → skip island.
     if phased.vertex_qname.len() <= 2 {
@@ -268,9 +307,10 @@ pub fn run_fp_control(
         mismap.len()
     );
 
-    Ok(Some(FpControlOutput::from_sets(correct, mismap, lowqual, &partition)))
+    Ok(Some(FpControlOutput::from_sets(
+        correct, mismap, lowqual, &partition,
+    )))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -293,7 +333,10 @@ mod tests {
         assert_eq!(p.qname_to_node["qA"], 0);
         assert_eq!(p.qname_to_node["qB"], 1);
         assert_eq!(p.qname_to_node["qC"], 2);
-        assert_eq!(p.hap_qname_info[&5], vec!["qA".to_string(), "qB".to_string()]);
+        assert_eq!(
+            p.hap_qname_info[&5],
+            vec!["qA".to_string(), "qB".to_string()]
+        );
         assert_eq!(p.hap_qname_info[&9], vec!["qC".to_string()]);
     }
 
