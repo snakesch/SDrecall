@@ -188,7 +188,10 @@ mod tests {
         h.ups_rela_start = 100;
         h.ups_rela_end = 400;
         let (c, s, e, st) = h.fix_coord();
-        assert_eq!((c.as_str(), s, e, st), ("chr1", 1100, 1400, Strand::Forward));
+        assert_eq!(
+            (c.as_str(), s, e, st),
+            ("chr1", 1100, 1400, Strand::Forward)
+        );
     }
 
     #[test]

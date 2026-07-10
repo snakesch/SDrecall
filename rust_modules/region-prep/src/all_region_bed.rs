@@ -220,12 +220,24 @@ mod tests {
         assert_eq!(rows[0].col4, COL_SENTINEL);
         assert_eq!(rows[0].col5, COL_SENTINEL);
         assert_eq!(rows[0].strand, Strand::Forward);
-        assert_eq!(rows[0].tag, RgTag::Fc { label: "RG0".into(), sub: "0".into() });
+        assert_eq!(
+            rows[0].tag,
+            RgTag::Fc {
+                label: "RG0".into(),
+                sub: "0".into()
+            }
+        );
         // NFC row: col4/col5 parsed.
         assert_eq!(rows[1].col4, 0);
         assert_eq!(rows[1].col5, 100);
         assert_eq!(rows[1].strand, Strand::Reverse);
-        assert_eq!(rows[1].tag, RgTag::Nfc { label: "RG0".into(), sub: "0".into() });
+        assert_eq!(
+            rows[1].tag,
+            RgTag::Nfc {
+                label: "RG0".into(),
+                sub: "0".into()
+            }
+        );
     }
 
     #[test]
@@ -283,13 +295,19 @@ mod tests {
     fn too_few_columns_is_error() {
         let f = write("chr2\t100\t200\t.\t.\t+\n");
         let err = read_all_region_bed(f.path()).unwrap_err();
-        assert!(matches!(err, SdError::BedParse { line: 1, .. }), "got {err:?}");
+        assert!(
+            matches!(err, SdError::BedParse { line: 1, .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]
     fn malformed_nfc_col_is_error() {
         let f = write("chr2\t100\t200\tNaN\t100\t+\tNFC:RG0_0\n");
         let err = read_all_region_bed(f.path()).unwrap_err();
-        assert!(matches!(err, SdError::BedParse { line: 1, .. }), "got {err:?}");
+        assert!(
+            matches!(err, SdError::BedParse { line: 1, .. }),
+            "got {err:?}"
+        );
     }
 }

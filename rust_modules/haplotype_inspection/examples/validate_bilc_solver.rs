@@ -33,25 +33,27 @@ use rustc_hash::FxHashSet;
 
 /// Result from validating a single file.
 struct ValidationResult {
-    file_id: String,              // e.g. "HG002.pooled.raw.deduped.721"
+    file_id: String, // e.g. "HG002.pooled.raw.deduped.721"
     n_haps: usize,
     n_regions: usize,
     n_rows: usize,
-    rust_obj: f64,                // objective (sum of dropped coefficients)
-    python_obj: f64,              // reconstructed Python objective
+    rust_obj: f64,   // objective (sum of dropped coefficients)
+    python_obj: f64, // reconstructed Python objective
     rust_n_drop: usize,
     python_n_drop: usize,
     ilp_match: bool,
-    rust_only: BTreeSet<i32>,     // haps Rust drops but Python doesn't (ILP level)
-    python_only: BTreeSet<i32>,   // haps Python drops but Rust doesn't (ILP level)
-    full_match: bool,             // after post-ILP augmentation
-    n_post_ilp_adds: usize,       // haps added by post-ILP rules
+    rust_only: BTreeSet<i32>, // haps Rust drops but Python doesn't (ILP level)
+    python_only: BTreeSet<i32>, // haps Python drops but Rust doesn't (ILP level)
+    full_match: bool,         // after post-ILP augmentation
+    n_post_ilp_adds: usize,   // haps added by post-ILP rules
 }
 
 fn main() {
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
-        eprintln!("Usage: validate_bilc_solver [--report <report.tsv>] <file1.tsv> [file2.tsv ...]");
+        eprintln!(
+            "Usage: validate_bilc_solver [--report <report.tsv>] <file1.tsv> [file2.tsv ...]"
+        );
         process::exit(1);
     }
 
@@ -82,7 +84,12 @@ fn main() {
     let total = file_args.len();
 
     for (idx, tsv_path) in file_args.iter().enumerate() {
-        eprint!("\r[{}/{}] Processing: {} ...", idx + 1, total, short_name(tsv_path));
+        eprint!(
+            "\r[{}/{}] Processing: {} ...",
+            idx + 1,
+            total,
+            short_name(tsv_path)
+        );
         match validate_one(tsv_path) {
             Ok(r) => results.push(r),
             Err(e) => eprintln!("\nERROR on {tsv_path}: {e}"),
@@ -93,11 +100,20 @@ fn main() {
     // --- Summary ---
     let n_total = results.len();
     let n_ilp_exact = results.iter().filter(|r| r.ilp_match).count();
-    let n_alt_optima = results.iter().filter(|r| !r.ilp_match && r.rust_n_drop == r.python_n_drop).count();
-    let n_diff_count = results.iter().filter(|r| !r.ilp_match && r.rust_n_drop != r.python_n_drop).count();
+    let n_alt_optima = results
+        .iter()
+        .filter(|r| !r.ilp_match && r.rust_n_drop == r.python_n_drop)
+        .count();
+    let n_diff_count = results
+        .iter()
+        .filter(|r| !r.ilp_match && r.rust_n_drop != r.python_n_drop)
+        .count();
     let n_full_match = results.iter().filter(|r| r.full_match).count();
     let n_full_mismatch = n_total - n_full_match;
-    let n_same_obj = results.iter().filter(|r| !r.ilp_match && (r.rust_obj - r.python_obj).abs() < 1e-6).count();
+    let n_same_obj = results
+        .iter()
+        .filter(|r| !r.ilp_match && (r.rust_obj - r.python_obj).abs() < 1e-6)
+        .count();
 
     println!("\n=== BILC Solver Cross-Validation Report ===");
     println!("Files tested: {n_total}");
@@ -113,11 +129,24 @@ fn main() {
         println!("\n=== ILP-differing files (detailed) ===");
         println!(
             "{:<30} {:>6} {:>6} {:>7} {:>7} {:>10} {:>10} {:>5} {:<30} {:<30}",
-            "File", "#Haps", "#Rgns", "Py#Drp", "Rs#Drp", "Py_Obj", "Rs_Obj", "ObjEq", "Rust-only drops", "Python-only drops"
+            "File",
+            "#Haps",
+            "#Rgns",
+            "Py#Drp",
+            "Rs#Drp",
+            "Py_Obj",
+            "Rs_Obj",
+            "ObjEq",
+            "Rust-only drops",
+            "Python-only drops"
         );
         println!("{}", "-".repeat(160));
         for r in &diffs {
-            let obj_eq = if (r.rust_obj - r.python_obj).abs() < 1e-6 { "YES" } else { "NO" };
+            let obj_eq = if (r.rust_obj - r.python_obj).abs() < 1e-6 {
+                "YES"
+            } else {
+                "NO"
+            };
             println!(
                 "{:<30} {:>6} {:>6} {:>7} {:>7} {:>10.4} {:>10.4} {:>5} {:<30} {:<30}",
                 r.file_id,
@@ -135,7 +164,10 @@ fn main() {
         println!("{}", "-".repeat(160));
         println!(
             "Same objective value: {}/{} differing files → alternative optima confirmed",
-            diffs.iter().filter(|r| (r.rust_obj - r.python_obj).abs() < 1e-6).count(),
+            diffs
+                .iter()
+                .filter(|r| (r.rust_obj - r.python_obj).abs() < 1e-6)
+                .count(),
             diffs.len()
         );
     }
@@ -166,7 +198,8 @@ fn main() {
                 format!("{:?}", r.rust_only),
                 format!("{:?}", r.python_only),
                 r.n_post_ilp_adds,
-            ).unwrap();
+            )
+            .unwrap();
         }
         println!("\nTSV report written to: {path}");
     }
@@ -234,13 +267,19 @@ fn validate_one(tsv_path: &str) -> Result<ValidationResult, String> {
         let end: i32 = fields[i_end].parse().map_err(|_| "bad end")?;
         let var_count: i32 = fields[i_var_count].parse().map_err(|_| "bad var_count")?;
         let varc_rank: i32 = fields[i_varc_rank].parse().map_err(|_| "bad varc_rank")?;
-        let coefficient: f64 = fields[i_coefficient].parse().map_err(|_| "bad coefficient")?;
+        let coefficient: f64 = fields[i_coefficient]
+            .parse()
+            .map_err(|_| "bad coefficient")?;
         let chrom = fields[i_chrom].to_string();
 
         let extreme_vard = fields[i_extreme_vard] == "True";
-        let hap_max_sim: f64 = fields[i_hap_max_sim].parse().map_err(|_| "bad hap_max_sim")?;
+        let hap_max_sim: f64 = fields[i_hap_max_sim]
+            .parse()
+            .map_err(|_| "bad hap_max_sim")?;
         let scatter = fields[i_scatter] == "True";
-        let hap_var_count: i32 = fields[i_hap_var_count].parse().map_err(|_| "bad hap_var_count")?;
+        let hap_var_count: i32 = fields[i_hap_var_count]
+            .parse()
+            .map_err(|_| "bad hap_var_count")?;
 
         records.push(BilcRecord {
             chrom: chrom.clone(),

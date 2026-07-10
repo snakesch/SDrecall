@@ -138,11 +138,7 @@ mod tests {
             writeln!(f, "chr1\t0\t5000\t.\t.\t+\tFC:RG1_0").unwrap();
             writeln!(f, "chr1\t6000\t8000\t.\t.\t+\tFC:RG1_1").unwrap();
         }
-        let rgs = stat_all_rg_region_size(
-            &["RG0".into(), "RG1".into()],
-            &[&bed0, &bed1],
-        )
-        .unwrap();
+        let rgs = stat_all_rg_region_size(&["RG0".into(), "RG1".into()], &[&bed0, &bed1]).unwrap();
         assert_eq!(rgs[0].label, "RG1"); // larger first
         assert_eq!(rgs[1].label, "RG0");
     }

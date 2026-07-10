@@ -331,10 +331,7 @@ pub fn build_multiplex_graph(sd_pairs: &[SdPairRow], _threads: usize) -> SdGraph
         "Multiplex graph: {} nodes, {} edges ({} SD edges)",
         sd.node_count(),
         sd.edge_count(),
-        sd.g
-            .edge_weights()
-            .filter(|a| a.is_sd)
-            .count()
+        sd.g.edge_weights().filter(|a| a.is_sd).count()
     );
     sd
 }
@@ -395,7 +392,9 @@ fn compose_po_per_chr(
         // Query overlaps among already-inserted on-chrom intervals.
         for o in inserted.iter() {
             // Same chrom guaranteed (inserted are all on `chrom`); skip identical.
-            if o.chrom != iv.chrom || (o.start == iv.start && o.end == iv.end && o.strand == iv.strand) {
+            if o.chrom != iv.chrom
+                || (o.start == iv.start && o.end == iv.end && o.strand == iv.strand)
+            {
                 continue;
             }
             // Half-open overlap.
@@ -419,8 +418,7 @@ fn compose_po_per_chr(
                 if po_edge_seen.insert((large.clone(), small.clone())) {
                     let lu = sd.node(large);
                     let sv = sd.node(small);
-                    sd.g
-                        .add_edge(lu, sv, EdgeAttr::po(1.0 / weight, nonoverlap));
+                    sd.g.add_edge(lu, sv, EdgeAttr::po(1.0 / weight, nonoverlap));
                 }
             }
         }
@@ -516,13 +514,25 @@ mod tests {
         ];
         let g = build_multiplex_graph(&rows, 1);
         // Find the PO edge among the chr1 nodes.
-        let l = g.index.get(&nk("chr1", 100, 1100, Strand::Forward)).copied().unwrap();
-        let s = g.index.get(&nk("chr1", 600, 1000, Strand::Forward)).copied().unwrap();
+        let l = g
+            .index
+            .get(&nk("chr1", 100, 1100, Strand::Forward))
+            .copied()
+            .unwrap();
+        let s = g
+            .index
+            .get(&nk("chr1", 600, 1000, Strand::Forward))
+            .copied()
+            .unwrap();
         let e = g.g.find_edge(l, s).expect("PO edge L->S exists");
         let attr = g.g.edge_weight(e).unwrap();
         assert!(attr.is_overlap);
         assert!(!attr.is_sd, "pure PO edge is not (yet) an SD edge");
-        assert!((attr.po_weight - 1.0).abs() < 1e-9, "po_weight {}", attr.po_weight);
+        assert!(
+            (attr.po_weight - 1.0).abs() < 1e-9,
+            "po_weight {}",
+            attr.po_weight
+        );
         // ep["weight"] == PO weight for a pure PO edge.
         assert!((attr.weight() - 1.0).abs() < 1e-9);
         assert!(attr.sd_weight.is_nan(), "pure PO edge has no SD weight");
@@ -557,10 +567,19 @@ mod tests {
         // The required end state for an overlapping SD pair:
         assert!(attr.is_overlap, "overlap flag KEPT");
         assert!(attr.is_sd, "ALSO marked SD");
-        assert!((attr.po_weight - 1.0).abs() < 1e-9, "PO weight 1/overlap_frac preserved");
-        assert!((attr.sd_weight - 0.02).abs() < 1e-9, "SD mismatch_rate kept available");
+        assert!(
+            (attr.po_weight - 1.0).abs() < 1e-9,
+            "PO weight 1/overlap_frac preserved"
+        );
+        assert!(
+            (attr.sd_weight - 0.02).abs() < 1e-9,
+            "SD mismatch_rate kept available"
+        );
         // ep["weight"] = PO weight on a combined edge (Python keeps the PO weight).
-        assert!((attr.weight() - 1.0).abs() < 1e-9, "ep[weight] is the PO weight, not 0.02");
+        assert!(
+            (attr.weight() - 1.0).abs() < 1e-9,
+            "ep[weight] is the PO weight, not 0.02"
+        );
         // No reverse edge was created.
         assert!(g.g.find_edge(sv, lu).is_none());
     }
@@ -585,15 +604,23 @@ mod tests {
         let sv = g.index.get(&s).copied().unwrap();
 
         // TWO edges coexist: PO L->S and a reciprocal SD S->L.
-        assert_eq!(g.edge_count(), 2, "reciprocal SD edge coexists with the reverse PO edge");
+        assert_eq!(
+            g.edge_count(),
+            2,
+            "reciprocal SD edge coexists with the reverse PO edge"
+        );
 
         // PO edge L->S is intact (overlap, NOT SD, PO weight 1.0).
-        let po = g.g.edge_weight(g.g.find_edge(lu, sv).expect("PO L->S")).unwrap();
+        let po =
+            g.g.edge_weight(g.g.find_edge(lu, sv).expect("PO L->S"))
+                .unwrap();
         assert!(po.is_overlap && !po.is_sd, "reverse PO edge untouched");
         assert!((po.po_weight - 1.0).abs() < 1e-9);
 
         // Fresh SD edge S->L (SD, NOT overlap, weight() == mismatch_rate).
-        let sd_e = g.g.edge_weight(g.g.find_edge(sv, lu).expect("SD S->L")).unwrap();
+        let sd_e =
+            g.g.edge_weight(g.g.find_edge(sv, lu).expect("SD S->L"))
+                .unwrap();
         assert!(sd_e.is_sd && !sd_e.is_overlap, "fresh reciprocal SD edge");
         assert!((sd_e.weight() - 0.02).abs() < 1e-9);
     }

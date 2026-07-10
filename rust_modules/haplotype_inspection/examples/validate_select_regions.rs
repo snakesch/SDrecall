@@ -1,8 +1,8 @@
+use haplotype_inspection::identify_misaligned_haps::select_regions_with_min_haplotypes;
 /// Validation binary: runs select_regions_with_min_haplotypes on the same inputs
 /// as the BEDOPS pipeline in validate_select_regions.sh, printing BED-format output
 /// so the two can be compared line-by-line.
 use std::collections::HashMap;
-use haplotype_inspection::identify_misaligned_haps::select_regions_with_min_haplotypes;
 
 fn make_intervals(data: &[(i32, &[(&str, i64, i64)])]) -> HashMap<i32, Vec<(String, i64, i64)>> {
     let mut m = HashMap::new();
@@ -37,10 +37,7 @@ fn main() {
     // Test 1: Simple 2-haplotype overlap
     run_test(
         "Test1_simple_2hap",
-        &[
-            (1, &[("chr1", 100, 300)]),
-            (2, &[("chr1", 200, 400)]),
-        ],
+        &[(1, &[("chr1", 100, 300)]), (2, &[("chr1", 200, 400)])],
         2,
     );
 
@@ -69,10 +66,7 @@ fn main() {
     // Test 4: No overlap
     run_test(
         "Test4_no_overlap",
-        &[
-            (1, &[("chr1", 100, 200)]),
-            (2, &[("chr1", 300, 400)]),
-        ],
+        &[(1, &[("chr1", 100, 200)]), (2, &[("chr1", 300, 400)])],
         2,
     );
 
@@ -90,10 +84,7 @@ fn main() {
     // Test 6: Contained interval
     run_test(
         "Test6_contained",
-        &[
-            (1, &[("chr1", 100, 600)]),
-            (2, &[("chr1", 200, 400)]),
-        ],
+        &[(1, &[("chr1", 100, 600)]), (2, &[("chr1", 200, 400)])],
         2,
     );
 
@@ -119,9 +110,18 @@ fn main() {
 
     // Test 9: Complex — 5 haplotypes, 3 chromosomes, min=2
     let complex_data: &[(i32, &[(&str, i64, i64)])] = &[
-        (1, &[("chr1", 100, 500), ("chr2", 1000, 2000), ("chr3", 50, 200)]),
-        (2, &[("chr1", 200, 600), ("chr2", 1500, 2500), ("chr3", 100, 300)]),
-        (3, &[("chr1", 350, 700), ("chr2", 1800, 2200), ("chr3", 150, 250)]),
+        (
+            1,
+            &[("chr1", 100, 500), ("chr2", 1000, 2000), ("chr3", 50, 200)],
+        ),
+        (
+            2,
+            &[("chr1", 200, 600), ("chr2", 1500, 2500), ("chr3", 100, 300)],
+        ),
+        (
+            3,
+            &[("chr1", 350, 700), ("chr2", 1800, 2200), ("chr3", 150, 250)],
+        ),
         (4, &[("chr1", 400, 800), ("chr2", 100, 500)]),
         (5, &[("chr1", 550, 900), ("chr3", 180, 350)]),
     ];
@@ -132,20 +132,14 @@ fn main() {
     // Test 12: Adjacent boundary
     run_test(
         "Test12_adjacent",
-        &[
-            (1, &[("chr1", 100, 200)]),
-            (2, &[("chr1", 200, 300)]),
-        ],
+        &[(1, &[("chr1", 100, 200)]), (2, &[("chr1", 200, 300)])],
         2,
     );
 
     // Test 13: Single base overlap
     run_test(
         "Test13_single_base",
-        &[
-            (1, &[("chr1", 100, 201)]),
-            (2, &[("chr1", 200, 300)]),
-        ],
+        &[(1, &[("chr1", 100, 201)]), (2, &[("chr1", 200, 300)])],
         2,
     );
 
@@ -153,7 +147,10 @@ fn main() {
     run_test(
         "Test14_multi_interval",
         &[
-            (1, &[("chr1", 100, 200), ("chr1", 300, 400), ("chr1", 500, 600)]),
+            (
+                1,
+                &[("chr1", 100, 200), ("chr1", 300, 400), ("chr1", 500, 600)],
+            ),
             (2, &[("chr1", 150, 350)]),
         ],
         2,

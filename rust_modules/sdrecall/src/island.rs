@@ -127,14 +127,8 @@ fn extract_depth_blocks(depth_file: &Path, min_depth: u32) -> Result<Vec<Genomic
         })?;
         let mut cols = line.split('\t');
         let chrom = cols.next().unwrap_or("");
-        let pos: i64 = cols
-            .next()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
-        let depth: u32 = cols
-            .next()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
+        let pos: i64 = cols.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let depth: u32 = cols.next().and_then(|s| s.parse().ok()).unwrap_or(0);
 
         // samtools depth positions are 1-based; convert to 0-based for BED.
         let pos0 = pos - 1;
@@ -190,14 +184,17 @@ fn process_target_regions(
             let intersected: Vec<_> = cov_blocks
                 .iter()
                 .filter(|c| c.chrom == region.chrom && c.start < region.end && c.end > region.start)
-                .map(|c| GenomicInterval::new(
-                    &c.chrom,
-                    c.start.max(region.start),
-                    c.end.min(region.end),
-                ))
+                .map(|c| {
+                    GenomicInterval::new(&c.chrom, c.start.max(region.start), c.end.min(region.end))
+                })
                 .collect();
             if intersected.is_empty() {
-                log::warn!("[island] no coverage in large region {}:{}-{}", region.chrom, region.start, region.end);
+                log::warn!(
+                    "[island] no coverage in large region {}:{}-{}",
+                    region.chrom,
+                    region.start,
+                    region.end
+                );
             } else {
                 processed.extend(intersected);
             }
@@ -218,7 +215,12 @@ fn process_target_regions(
             .filter(|c| c.chrom == small.chrom && c.start < small.end && c.end > small.start)
             .collect();
         if covering.is_empty() {
-            log::warn!("[island] no coverage for small region {}:{}-{}", small.chrom, small.start, small.end);
+            log::warn!(
+                "[island] no coverage for small region {}:{}-{}",
+                small.chrom,
+                small.start,
+                small.end
+            );
             continue;
         }
         // Use the covering island if it's within the size bounds.

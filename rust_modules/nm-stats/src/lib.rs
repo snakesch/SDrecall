@@ -196,7 +196,13 @@ mod tests {
     const PASS_FLAGS: u16 = PAIRED | PROPER_PAIR;
 
     /// Build a synthetic record with the given flags / MAPQ / CIGAR / NM / XA.
-    fn make_read(flags: u16, mapq: u8, cigar: Vec<Cigar>, nm: Option<i32>, xa: bool) -> bam::Record {
+    fn make_read(
+        flags: u16,
+        mapq: u8,
+        cigar: Vec<Cigar>,
+        nm: Option<i32>,
+        xa: bool,
+    ) -> bam::Record {
         // query length = sum of query-consuming ops (M/=/X/I/S); D/N/H/P don't consume.
         let qlen: usize = cigar
             .iter()
@@ -223,7 +229,8 @@ mod tests {
             rec.push_aux(b"NM", Aux::I32(v)).unwrap();
         }
         if xa {
-            rec.push_aux(b"XA", Aux::String("chr1,+100,50M,0;")).unwrap();
+            rec.push_aux(b"XA", Aux::String("chr1,+100,50M,0;"))
+                .unwrap();
         }
         rec
     }
@@ -371,24 +378,30 @@ mod tests {
             make_read(PASS_FLAGS, 60, scatter1.clone(), Some(5), false), // pass → 1.0
             make_read(PASS_FLAGS, 30, vec![Cigar::Equal(10)], Some(2), false), // filtered (mapq)
         ];
-        let tmp = tempfile::Builder::new()
-            .suffix(".bam")
-            .tempfile()
-            .unwrap();
+        let tmp = tempfile::Builder::new().suffix(".bam").tempfile().unwrap();
         write_bam(tmp.path(), &records);
 
         let out = nm_distribution_poisson(tmp.path(), 0.01, 1_000_000, 1).unwrap();
         // 3 passing reads each with scatter 1.0 → mean 1.0 → cutoff 4
-        assert_eq!(out, NmCutoff { cutoff: 4, mean: 1.0 });
+        assert_eq!(
+            out,
+            NmCutoff {
+                cutoff: 4,
+                mean: 1.0
+            }
+        );
     }
 
     #[test]
     fn driver_errors_on_no_usable_reads() {
-        let records = vec![make_read(PAIRED, 60, vec![Cigar::Equal(10)], Some(2), false)];
-        let tmp = tempfile::Builder::new()
-            .suffix(".bam")
-            .tempfile()
-            .unwrap();
+        let records = vec![make_read(
+            PAIRED,
+            60,
+            vec![Cigar::Equal(10)],
+            Some(2),
+            false,
+        )];
+        let tmp = tempfile::Builder::new().suffix(".bam").tempfile().unwrap();
         write_bam(tmp.path(), &records);
         let err = nm_distribution_poisson(tmp.path(), 0.01, 1_000_000, 1).unwrap_err();
         assert!(matches!(err, SdError::InsufficientPairs(0)), "got {err:?}");

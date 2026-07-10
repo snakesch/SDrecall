@@ -235,10 +235,7 @@ impl Drop for CollateChild {
 /// (which reaps the child). HYG-6: the `ChildStdout` is dropped here once htslib
 /// has dup'd the fd — NOT `mem::forget`-ed.
 #[cfg(unix)]
-fn spawn_collate_pipe(
-    bam_path: &Path,
-    threads: u8,
-) -> Result<Option<(bam::Reader, CollateChild)>> {
+fn spawn_collate_pipe(bam_path: &Path, threads: u8) -> Result<Option<(bam::Reader, CollateChild)>> {
     if !samtools_available() {
         return Ok(None);
     }
@@ -337,32 +334,32 @@ pub fn build_bam_index(bam_path: &Path, f: &NoisyFilter, threads: u8) -> Result<
         Plain(bam::Reader),
     }
 
-    let source = if f.paired {
-        #[cfg(unix)]
-        let piped = spawn_collate_pipe(bam_path, threads)?;
-        #[cfg(not(unix))]
-        let piped: Option<(bam::Reader, CollateChild)> = None;
+    let source =
+        if f.paired {
+            #[cfg(unix)]
+            let piped = spawn_collate_pipe(bam_path, threads)?;
+            #[cfg(not(unix))]
+            let piped: Option<(bam::Reader, CollateChild)> = None;
 
-        match piped {
-            Some((reader, child)) => Source::Collated(reader, Some(child), None),
-            None => match collate_to_tempfile(bam_path, threads)? {
-                Some(tf) => {
-                    let reader = bam::Reader::from_path(tf.path())
-                        .map_err(|e| SdError::Htslib(format!("open collated temp: {e}")))?;
-                    Source::Collated(reader, None, Some(tf))
-                }
-                None => Source::Plain(
-                    bam::Reader::from_path(bam_path)
-                        .map_err(|e| SdError::Htslib(format!("open {}: {e}", bam_path.display())))?,
-                ),
-            },
-        }
-    } else {
-        Source::Plain(
-            bam::Reader::from_path(bam_path)
-                .map_err(|e| SdError::Htslib(format!("open {}: {e}", bam_path.display())))?,
-        )
-    };
+            match piped {
+                Some((reader, child)) => Source::Collated(reader, Some(child), None),
+                None => match collate_to_tempfile(bam_path, threads)? {
+                    Some(tf) => {
+                        let reader = bam::Reader::from_path(tf.path())
+                            .map_err(|e| SdError::Htslib(format!("open collated temp: {e}")))?;
+                        Source::Collated(reader, None, Some(tf))
+                    }
+                    None => Source::Plain(bam::Reader::from_path(bam_path).map_err(|e| {
+                        SdError::Htslib(format!("open {}: {e}", bam_path.display()))
+                    })?),
+                },
+            }
+        } else {
+            Source::Plain(
+                bam::Reader::from_path(bam_path)
+                    .map_err(|e| SdError::Htslib(format!("open {}: {e}", bam_path.display())))?,
+            )
+        };
 
     let collated = matches!(source, Source::Collated(..));
     let (mut reader, _child, _tf) = match source {
@@ -393,13 +390,13 @@ pub fn build_bam_index(bam_path: &Path, f: &NoisyFilter, threads: u8) -> Result<
     // in-memory paths so there is no duplicated grouping logic.
     let flush = |qn: &str,
                  group: &[Record],
-                     counter: &mut u32,
-                     reads: &mut FxHashMap<QnameIdx, Vec<Record>>,
-                     intervals: &mut AHashMap<String, Vec<(i64, i64, QnameIdx)>>,
-                     qname_idx: &mut AHashMap<String, QnameIdx>,
-                     qname: &mut FxHashMap<QnameIdx, String>,
-                     noisy: &mut AHashSet<String>,
-                     total_qnames: &mut AHashSet<String>| {
+                 counter: &mut u32,
+                 reads: &mut FxHashMap<QnameIdx, Vec<Record>>,
+                 intervals: &mut AHashMap<String, Vec<(i64, i64, QnameIdx)>>,
+                 qname_idx: &mut AHashMap<String, QnameIdx>,
+                 qname: &mut FxHashMap<QnameIdx, String>,
+                 noisy: &mut AHashSet<String>,
+                 total_qnames: &mut AHashSet<String>| {
         total_qnames.insert(qn.to_string());
         if group.iter().any(|r| is_read_noisy(r, &header, f)) {
             noisy.insert(qn.to_string());
@@ -450,8 +447,17 @@ pub fn build_bam_index(bam_path: &Path, f: &NoisyFilter, threads: u8) -> Result<
             } else {
                 if let Some(prev) = cur_qname.take() {
                     if !group.is_empty() {
-                        flush(&prev, &group, &mut counter, &mut reads, &mut intervals,
-                              &mut qname_idx, &mut qname, &mut noisy, &mut total_qnames);
+                        flush(
+                            &prev,
+                            &group,
+                            &mut counter,
+                            &mut reads,
+                            &mut intervals,
+                            &mut qname_idx,
+                            &mut qname,
+                            &mut noisy,
+                            &mut total_qnames,
+                        );
                     }
                 }
                 cur_qname = Some(qn);
@@ -461,8 +467,17 @@ pub fn build_bam_index(bam_path: &Path, f: &NoisyFilter, threads: u8) -> Result<
         }
         if let Some(prev) = cur_qname {
             if !group.is_empty() {
-                flush(&prev, &group, &mut counter, &mut reads, &mut intervals,
-                      &mut qname_idx, &mut qname, &mut noisy, &mut total_qnames);
+                flush(
+                    &prev,
+                    &group,
+                    &mut counter,
+                    &mut reads,
+                    &mut intervals,
+                    &mut qname_idx,
+                    &mut qname,
+                    &mut noisy,
+                    &mut total_qnames,
+                );
             }
         }
     } else {
@@ -481,8 +496,17 @@ pub fn build_bam_index(bam_path: &Path, f: &NoisyFilter, threads: u8) -> Result<
             by_qname.entry(qn).or_default().push(rec.clone());
         }
         for (qn, group) in &by_qname {
-            flush(qn, group, &mut counter, &mut reads, &mut intervals,
-                  &mut qname_idx, &mut qname, &mut noisy, &mut total_qnames);
+            flush(
+                qn,
+                group,
+                &mut counter,
+                &mut reads,
+                &mut intervals,
+                &mut qname_idx,
+                &mut qname,
+                &mut noisy,
+                &mut total_qnames,
+            );
         }
     }
 
@@ -508,7 +532,11 @@ pub fn build_bam_index(bam_path: &Path, f: &NoisyFilter, threads: u8) -> Result<
             let stop = u32::try_from(*e).map_err(|_| {
                 SdError::Compute(format!("interval end {e} on {chrom} exceeds u32 range"))
             })?;
-            lap_ivs.push(Interval { start, stop, val: *idx });
+            lap_ivs.push(Interval {
+                start,
+                stop,
+                val: *idx,
+            });
         }
         lap_ivs.sort_by_key(|iv| iv.start);
         lapper.insert(chrom.clone(), Lapper::new(lap_ivs));
@@ -1088,7 +1116,11 @@ mod tests {
 
         // Original-reference .fai: two genomic contigs (chr1 is index 0).
         let fai = dir.path().join("ref.fasta.fai");
-        std::fs::write(&fai, "chr1\t1000000\t6\t60\t61\nchr2\t900000\t1016667\t60\t61\n").unwrap();
+        std::fs::write(
+            &fai,
+            "chr1\t1000000\t6\t60\t61\nchr2\t900000\t1016667\t60\t61\n",
+        )
+        .unwrap();
 
         // Local-contig (masked-genome) BAM: contig `chr1:1000`, an @RG to preserve,
         // a primary paired read at local pos 5 (mate at 105), plus a secondary
@@ -1150,7 +1182,10 @@ mod tests {
         assert_eq!(names, vec!["chr1".to_string(), "chr2".to_string()]);
         // Non-@SQ/@PG header lines (here @RG) survive verbatim.
         let htext = String::from_utf8_lossy(hv.as_bytes()).to_string();
-        assert!(htext.contains("SM:sample1"), "@RG must be preserved:\n{htext}");
+        assert!(
+            htext.contains("SM:sample1"),
+            "@RG must be preserved:\n{htext}"
+        );
 
         let mut recs = Vec::new();
         let mut rec = Record::new();
@@ -1158,7 +1193,11 @@ mod tests {
             r.unwrap();
             recs.push(rec.clone());
         }
-        assert_eq!(recs.len(), 1, "secondary (FLAG ≥ 256) dropped, one primary kept");
+        assert_eq!(
+            recs.len(),
+            1,
+            "secondary (FLAG ≥ 256) dropped, one primary kept"
+        );
         let g = &recs[0];
         assert_eq!(
             String::from_utf8_lossy(hv.tid2name(g.tid() as u32)),

@@ -6,8 +6,8 @@
 //! Python `.pickable()` cross-process tuple), and bucket by contig `rid` for the
 //! per-contig two-pointer pass.
 
-use rustc_hash::FxHashMap;
 use rust_htslib::bcf::{self, Read};
+use rustc_hash::FxHashMap;
 use sdrecall_utils::{Result, SdError};
 use std::path::Path;
 

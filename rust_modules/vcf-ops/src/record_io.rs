@@ -170,16 +170,11 @@ mod tests {
         let tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
         let mut header = bcf::Header::new();
         header.push_record(b"##contig=<ID=chr1,length=1000000>");
-        header.push_record(
-            b"##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
-        );
-        header.push_record(
-            b"##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depths\">",
-        );
+        header.push_record(b"##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">");
+        header
+            .push_record(b"##FORMAT=<ID=AD,Number=R,Type=Integer,Description=\"Allelic depths\">");
         header.push_record(b"##FORMAT=<ID=GQ,Number=1,Type=Integer,Description=\"GQ\">");
-        header.push_record(
-            b"##FORMAT=<ID=HPSUP,Number=A,Type=String,Description=\"HP support\">",
-        );
+        header.push_record(b"##FORMAT=<ID=HPSUP,Number=A,Type=String,Description=\"HP support\">");
         header.push_sample(b"s1");
         let w = Writer::from_path(tmp.path(), &header, true, Format::Vcf).unwrap();
         (w, tmp.into_temp_path())
@@ -235,7 +230,8 @@ mod tests {
         let mut r = base_rec(&w);
         r.push_format_integer(b"AD", &[4, 6]).unwrap();
         r.push_format_integer(b"GQ", &[20]).unwrap();
-        r.push_format_string(b"HPSUP", &[b"a;b".as_slice()]).unwrap();
+        r.push_format_string(b"HPSUP", &[b"a;b".as_slice()])
+            .unwrap();
         let s = sample_stats_default1(&r, 0);
         assert_eq!((s.ref_dp, s.alt_dp, s.gq, s.num_hps), (4, 6, 20, 2));
         assert_eq!(s.alt_ratio(), 0.6);
@@ -248,6 +244,9 @@ mod tests {
         let out = reorder_filter_tag(&existing, "RAW");
         assert_eq!(out, vec![b"RG0".to_vec(), b"RAW".to_vec()]);
         let out2 = reorder_filter_tag(&existing, "CLEAN");
-        assert_eq!(out2, vec![b"RG0".to_vec(), b"RAW".to_vec(), b"CLEAN".to_vec()]);
+        assert_eq!(
+            out2,
+            vec![b"RG0".to_vec(), b"RAW".to_vec(), b"CLEAN".to_vec()]
+        );
     }
 }

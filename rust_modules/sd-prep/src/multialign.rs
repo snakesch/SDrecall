@@ -249,9 +249,9 @@ pub fn inferred_coverage(
             Some(tid) => tid as i32,
             None => continue, // contig absent from BAM header → no coverage
         };
-        reader
-            .fetch((tid, t.start, t.end))
-            .map_err(|e| SdError::Htslib(format!("fetch {}:{}-{}: {e}", t.chrom, t.start, t.end)))?;
+        reader.fetch((tid, t.start, t.end)).map_err(|e| {
+            SdError::Htslib(format!("fetch {}:{}-{}: {e}", t.chrom, t.start, t.end))
+        })?;
         while let Some(r) = reader.read(&mut rec) {
             r.map_err(|e| SdError::Htslib(format!("read record: {e}")))?;
             let has_xa = rec.aux(b"XA").is_ok();
@@ -272,10 +272,7 @@ pub fn inferred_coverage(
             if end <= start {
                 continue;
             }
-            reads
-                .entry(t.chrom.clone())
-                .or_default()
-                .push((start, end));
+            reads.entry(t.chrom.clone()).or_default().push((start, end));
         }
     }
     Ok(depth_sweep(&reads))
@@ -343,7 +340,12 @@ pub fn pick_multialigned_regions(
         .num_threads(n_workers)
         .build()
         .map_err(|e| SdError::Compute(format!("rayon pool build failed: {e}")))?;
-    let passes = [DepthPass::Raw, DepthPass::HighMq, DepthPass::Xa, DepthPass::Xs];
+    let passes = [
+        DepthPass::Raw,
+        DepthPass::HighMq,
+        DepthPass::Xa,
+        DepthPass::Xs,
+    ];
     let results: Vec<Result<Vec<(String, i64, i64)>>> = pool.install(|| {
         passes
             .par_iter()
@@ -439,15 +441,40 @@ mod tests {
         // min_depth=3, hq_depth=10, frac=0.5.
         let table = vec![
             // pass: raw 5, xa 3 (0.6>=0.5), xs 0, high_mq 2 (<=10) → keep
-            MergedDepth { raw: 5, xa: 3, xs: 0, high_mq: 2 },
+            MergedDepth {
+                raw: 5,
+                xa: 3,
+                xs: 0,
+                high_mq: 2,
+            },
             // fail min_depth: raw 2
-            MergedDepth { raw: 2, xa: 2, xs: 2, high_mq: 0 },
+            MergedDepth {
+                raw: 2,
+                xa: 2,
+                xs: 2,
+                high_mq: 0,
+            },
             // fail multi: xa 1/5=0.2, xs 1/5=0.2 both <0.5
-            MergedDepth { raw: 5, xa: 1, xs: 1, high_mq: 0 },
+            MergedDepth {
+                raw: 5,
+                xa: 1,
+                xs: 1,
+                high_mq: 0,
+            },
             // fail high_mq: high_mq 11 > 10
-            MergedDepth { raw: 5, xa: 5, xs: 0, high_mq: 11 },
+            MergedDepth {
+                raw: 5,
+                xa: 5,
+                xs: 0,
+                high_mq: 11,
+            },
             // keep via XS branch: xs 4/5=0.8>=0.5
-            MergedDepth { raw: 5, xa: 0, xs: 4, high_mq: 3 },
+            MergedDepth {
+                raw: 5,
+                xa: 0,
+                xs: 4,
+                high_mq: 3,
+            },
         ];
         let mask = multialign_filter_mask(&table, 3, 10, 0.5);
         assert_eq!(mask, vec![true, false, false, false, true]);
@@ -460,8 +487,24 @@ mod tests {
         // unmapped → fail.
         assert!(!read_passes(DepthPass::Raw, 0x4, 60, 0, false, None, None));
         // mapq below floor for HighMq.
-        assert!(!read_passes(DepthPass::HighMq, 0x2, 40, 41, false, None, None));
-        assert!(read_passes(DepthPass::HighMq, 0x2, 41, 41, false, None, None));
+        assert!(!read_passes(
+            DepthPass::HighMq,
+            0x2,
+            40,
+            41,
+            false,
+            None,
+            None
+        ));
+        assert!(read_passes(
+            DepthPass::HighMq,
+            0x2,
+            41,
+            41,
+            false,
+            None,
+            None
+        ));
     }
 
     #[test]
@@ -470,10 +513,42 @@ mod tests {
         assert!(read_passes(DepthPass::Xa, 0x2, 0, 0, true, None, None));
         assert!(!read_passes(DepthPass::Xa, 0x2, 0, 0, false, None, None));
         // Xs pass: AS-XS <= 5 keeps; > 5 rejects; missing tags reject.
-        assert!(read_passes(DepthPass::Xs, 0x2, 0, 0, false, Some(50), Some(48))); // 2<=5
-        assert!(!read_passes(DepthPass::Xs, 0x2, 0, 0, false, Some(50), Some(40))); // 10>5
-        assert!(!read_passes(DepthPass::Xs, 0x2, 0, 0, false, None, Some(48)));
-        assert!(!read_passes(DepthPass::Xs, 0x2, 0, 0, false, Some(50), None));
+        assert!(read_passes(
+            DepthPass::Xs,
+            0x2,
+            0,
+            0,
+            false,
+            Some(50),
+            Some(48)
+        )); // 2<=5
+        assert!(!read_passes(
+            DepthPass::Xs,
+            0x2,
+            0,
+            0,
+            false,
+            Some(50),
+            Some(40)
+        )); // 10>5
+        assert!(!read_passes(
+            DepthPass::Xs,
+            0x2,
+            0,
+            0,
+            false,
+            None,
+            Some(48)
+        ));
+        assert!(!read_passes(
+            DepthPass::Xs,
+            0x2,
+            0,
+            0,
+            false,
+            Some(50),
+            None
+        ));
     }
 
     #[test]

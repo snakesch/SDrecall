@@ -214,7 +214,7 @@ mod tests {
         let b = cq.node(1);
         cq.edge(a, b);
         cq.edge(b, a); // same undirected edge
-        // adjacency should list b once for a.
+                       // adjacency should list b once for a.
         let groups = cq.color_groups();
         assert_eq!(groups, vec![vec![0], vec![1]]);
     }

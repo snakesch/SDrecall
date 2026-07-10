@@ -111,14 +111,19 @@ mod tests {
             let mut s: u64 = 0xC0FFEE;
             (0..600)
                 .map(|_| {
-                    s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    s = s
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
                     b"ACGT"[((s >> 40) % 4) as usize]
                 })
                 .collect()
         };
         let query = vec![b'A'; 500];
         let sim = align_similarity(&query, &target, Preset::Asm10).unwrap();
-        assert!(sim < SIMILARITY_THRESHOLD, "unmappable similarity {sim} unexpectedly high");
+        assert!(
+            sim < SIMILARITY_THRESHOLD,
+            "unmappable similarity {sim} unexpectedly high"
+        );
     }
 
     #[test]
@@ -128,7 +133,9 @@ mod tests {
             let mut s: u64 = 0xBEEF;
             (0..600)
                 .map(|_| {
-                    s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    s = s
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1442695040888963407);
                     b"ACGT"[((s >> 40) % 4) as usize]
                 })
                 .collect()

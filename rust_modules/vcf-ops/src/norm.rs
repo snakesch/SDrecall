@@ -112,7 +112,10 @@ fn remove_vcf_indexes(vcf: &Path) -> Result<()> {
 }
 
 fn vcf_index_paths(vcf: &Path) -> [PathBuf; 2] {
-    [append_path_suffix(vcf, ".csi"), append_path_suffix(vcf, ".tbi")]
+    [
+        append_path_suffix(vcf, ".csi"),
+        append_path_suffix(vcf, ".tbi"),
+    ]
 }
 
 fn append_path_suffix(path: &Path, suffix: &str) -> PathBuf {

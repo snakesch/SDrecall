@@ -92,7 +92,10 @@ struct KeyedRecords {
 
 impl KeyedRecords {
     fn new() -> Self {
-        KeyedRecords { seen: HashSet::new(), recs: Vec::new() }
+        KeyedRecords {
+            seen: HashSet::new(),
+            recs: Vec::new(),
+        }
     }
     /// `set.add(rec)` — insert only if its key is new.
     fn add(&mut self, rec: bcf::Record) {
@@ -284,8 +287,16 @@ pub fn coiterate_sorted_vcfs(
                 r_next = r_stream.next();
             }
             Ordering::Equal => {
-                let (q_down, r_down) =
-                    deal_with_same_loc(q, r, &mut q_stream, &mut r_stream, &mut matched, &mut query_only, &mut ref_only, op)?;
+                let (q_down, r_down) = deal_with_same_loc(
+                    q,
+                    r,
+                    &mut q_stream,
+                    &mut r_stream,
+                    &mut matched,
+                    &mut query_only,
+                    &mut ref_only,
+                    op,
+                )?;
                 q_next = q_down.or_else(|| q_stream.next());
                 r_next = r_down.or_else(|| r_stream.next());
             }
@@ -359,7 +370,10 @@ mod tests {
         let (w, _t) = writer();
         let q = vec![rec(&w, 100, "A", "T"), rec(&w, 200, "C", "G")];
         let sets = coiterate_sorted_vcfs(q, vec![], &KeepQuery).unwrap();
-        assert_eq!(keys(&sets.query_only), vec![(100, "A".into(), "T".into()), (200, "C".into(), "G".into())]);
+        assert_eq!(
+            keys(&sets.query_only),
+            vec![(100, "A".into(), "T".into()), (200, "C".into(), "G".into())]
+        );
         assert!(sets.matched.is_empty() && sets.ref_only.is_empty());
     }
 
@@ -368,7 +382,10 @@ mod tests {
         let (w, _t) = writer();
         let r = vec![rec(&w, 100, "A", "T"), rec(&w, 200, "C", "G")];
         let sets = coiterate_sorted_vcfs(vec![], r, &KeepQuery).unwrap();
-        assert_eq!(keys(&sets.ref_only), vec![(100, "A".into(), "T".into()), (200, "C".into(), "G".into())]);
+        assert_eq!(
+            keys(&sets.ref_only),
+            vec![(100, "A".into(), "T".into()), (200, "C".into(), "G".into())]
+        );
         assert!(sets.matched.is_empty() && sets.query_only.is_empty());
     }
 
@@ -416,8 +433,14 @@ mod tests {
         let q = vec![rec(&w, 100, "A", "T"), rec(&w, 300, "A", "T")];
         let r = vec![rec(&w, 200, "C", "G"), rec(&w, 400, "C", "G")];
         let sets = coiterate_sorted_vcfs(q, r, &KeepQuery).unwrap();
-        assert_eq!(keys(&sets.query_only), vec![(100, "A".into(), "T".into()), (300, "A".into(), "T".into())]);
-        assert_eq!(keys(&sets.ref_only), vec![(200, "C".into(), "G".into()), (400, "C".into(), "G".into())]);
+        assert_eq!(
+            keys(&sets.query_only),
+            vec![(100, "A".into(), "T".into()), (300, "A".into(), "T".into())]
+        );
+        assert_eq!(
+            keys(&sets.ref_only),
+            vec![(200, "C".into(), "G".into()), (400, "C".into(), "G".into())]
+        );
         assert!(sets.matched.is_empty());
     }
 

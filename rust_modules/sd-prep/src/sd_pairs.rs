@@ -256,7 +256,15 @@ mod tests {
         // A fully covers B (identical intervals → frac 1.0 ≥ 0.95) and
         // A.overlap_len (50) <= B.overlap_len (1000) → A is the umbrella to remove.
         let a = pair(100, 1100, Strand::Forward, 5000, 6000, Strand::Forward, 50);
-        let b = pair(100, 1100, Strand::Forward, 5000, 6000, Strand::Forward, 1000);
+        let b = pair(
+            100,
+            1100,
+            Strand::Forward,
+            5000,
+            6000,
+            Strand::Forward,
+            1000,
+        );
         assert!(a.is_umbrella_pair(&b, 0.95));
         assert!(!b.is_umbrella_pair(&a, 0.95)); // b.overlap_len > a.overlap_len → not <=
         let rem = umbrella_to_remove(&[a, b], 0.95);
@@ -267,7 +275,15 @@ mod tests {
     fn strand_consistency_flip_blocks_umbrella() {
         // A: +/+ (consistent). B: +/- (inconsistent). (sA==sB) differs → not umbrella.
         let a = pair(100, 1100, Strand::Forward, 5000, 6000, Strand::Forward, 50);
-        let b = pair(100, 1100, Strand::Forward, 5000, 6000, Strand::Reverse, 1000);
+        let b = pair(
+            100,
+            1100,
+            Strand::Forward,
+            5000,
+            6000,
+            Strand::Reverse,
+            1000,
+        );
         assert!(!a.is_umbrella_pair(&b, 0.95));
         assert!(!b.is_umbrella_pair(&a, 0.95));
         let rem = umbrella_to_remove(&[a, b], 0.95);
@@ -278,7 +294,15 @@ mod tests {
     fn partial_coverage_below_threshold_not_umbrella() {
         // A covers only half of B's segB → frac_b ~ 0.5 < 0.95 → not umbrella.
         let a = pair(100, 1100, Strand::Forward, 5000, 6000, Strand::Forward, 50);
-        let b = pair(100, 1100, Strand::Forward, 5000, 7000, Strand::Forward, 1000);
+        let b = pair(
+            100,
+            1100,
+            Strand::Forward,
+            5000,
+            7000,
+            Strand::Forward,
+            1000,
+        );
         // frac over B: segA 1000/1000=1.0; segB 1000/2000=0.5 → fails.
         assert!(!a.is_umbrella_pair(&b, 0.95));
     }
@@ -286,7 +310,15 @@ mod tests {
     #[test]
     fn different_chrom_b_not_umbrella() {
         let a = pair(100, 1100, Strand::Forward, 5000, 6000, Strand::Forward, 50);
-        let mut b = pair(100, 1100, Strand::Forward, 5000, 6000, Strand::Forward, 1000);
+        let mut b = pair(
+            100,
+            1100,
+            Strand::Forward,
+            5000,
+            6000,
+            Strand::Forward,
+            1000,
+        );
         b.chr_b = "chr9".into();
         assert!(!a.is_umbrella_pair(&b, 0.95));
     }
@@ -314,7 +346,9 @@ mod tests {
     #[test]
     fn extract_subsegment_no_overlap_is_none() {
         let p = pair(100, 1100, Strand::Forward, 5000, 6000, Strand::Forward, 50);
-        assert!(p.extract_subsegment_for_target("chr1", 2000, 2200).is_none());
+        assert!(p
+            .extract_subsegment_for_target("chr1", 2000, 2200)
+            .is_none());
         assert!(p.extract_subsegment_for_target("chr9", 600, 800).is_none());
     }
 
@@ -322,8 +356,24 @@ mod tests {
     fn umbrella_sweep_break_semantics() {
         // 0 covers 1 (break after marking 0). 2 is independent.
         let p0 = pair(100, 1100, Strand::Forward, 5000, 6000, Strand::Forward, 10);
-        let p1 = pair(100, 1100, Strand::Forward, 5000, 6000, Strand::Forward, 1000);
-        let p2 = pair(20000, 21000, Strand::Forward, 25000, 26000, Strand::Forward, 500);
+        let p1 = pair(
+            100,
+            1100,
+            Strand::Forward,
+            5000,
+            6000,
+            Strand::Forward,
+            1000,
+        );
+        let p2 = pair(
+            20000,
+            21000,
+            Strand::Forward,
+            25000,
+            26000,
+            Strand::Forward,
+            500,
+        );
         let rem = umbrella_to_remove(&[p0, p1, p2], 0.95);
         assert_eq!(rem, [0usize].into_iter().collect());
     }
@@ -331,7 +381,15 @@ mod tests {
     #[test]
     fn filter_group_drops_umbrella_keeps_rest() {
         let p0 = pair(100, 1100, Strand::Forward, 5000, 6000, Strand::Forward, 10);
-        let p1 = pair(100, 1100, Strand::Forward, 5000, 6000, Strand::Forward, 1000);
+        let p1 = pair(
+            100,
+            1100,
+            Strand::Forward,
+            5000,
+            6000,
+            Strand::Forward,
+            1000,
+        );
         let pairs = vec![p0, p1];
         // Targets overlap segment A so granular pairs exist (1:1).
         let targets = vec![

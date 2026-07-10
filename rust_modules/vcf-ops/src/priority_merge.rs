@@ -25,7 +25,10 @@ pub fn is_main_contig(name: &str) -> bool {
     let stripped = name.strip_prefix("chr").unwrap_or(name);
     match stripped {
         "X" | "Y" | "M" | "MT" => true,
-        n => n.parse::<u8>().map(|v| (1..=22).contains(&v)).unwrap_or(false),
+        n => n
+            .parse::<u8>()
+            .map(|v| (1..=22).contains(&v))
+            .unwrap_or(false),
     }
 }
 
@@ -95,10 +98,9 @@ fn is_hom_alt(rec: &bcf::Record) -> bool {
             let gt = gts.get(0);
             let alleles: &[GenotypeAllele] = &gt;
             alleles.len() == 2
-                && alleles.iter().all(|a| matches!(
-                    a,
-                    GenotypeAllele::Unphased(1) | GenotypeAllele::Phased(1)
-                ))
+                && alleles
+                    .iter()
+                    .all(|a| matches!(a, GenotypeAllele::Unphased(1) | GenotypeAllele::Phased(1)))
         }
         Err(_) => false,
     }
@@ -147,7 +149,11 @@ pub fn merge_with_priority(p: MergeParams<'_>) -> Result<()> {
     rids.sort_unstable();
     rids.dedup();
 
-    let op = MergeOp { qv_tag: p.qv_tag, rv_tag: p.rv_tag, modify_gt: p.modify_gt };
+    let op = MergeOp {
+        qv_tag: p.qv_tag,
+        rv_tag: p.rv_tag,
+        modify_gt: p.modify_gt,
+    };
 
     // 5. Per-contig co-iteration + finalizers (sequential; see DESIGN note in
     //    lib.rs on why rayon-over-contigs is deferred for Rc<HeaderView> soundness).
@@ -177,7 +183,11 @@ pub fn merge_with_priority(p: MergeParams<'_>) -> Result<()> {
 
 /// Apply the three per-set finalizers and write each record (merge L536-657).
 fn write_merge_sets(writer: &mut bcf::Writer, sets: CoiterSets, p: &MergeParams<'_>) -> Result<()> {
-    let CoiterSets { matched, mut query_only, mut ref_only } = sets;
+    let CoiterSets {
+        matched,
+        mut query_only,
+        mut ref_only,
+    } = sets;
 
     // matched (L536-556): reorder rv_tag then qv_tag to the end; write as-is.
     for mut rec in matched {
@@ -247,11 +257,19 @@ mod tests {
 
     #[test]
     fn main_contig_set() {
-        for c in ["chr1", "chr22", "chrX", "chrY", "chrM", "1", "22", "X", "Y", "MT"] {
+        for c in [
+            "chr1", "chr22", "chrX", "chrY", "chrM", "1", "22", "X", "Y", "MT",
+        ] {
             assert!(is_main_contig(c), "{c} should be a main contig");
         }
-        for c in ["chr23", "chrUn_KI270302v1", "chr1_KI270706v1_random", "GL000220.1", "0", "chr0"]
-        {
+        for c in [
+            "chr23",
+            "chrUn_KI270302v1",
+            "chr1_KI270706v1_random",
+            "GL000220.1",
+            "0",
+            "chr0",
+        ] {
             assert!(!is_main_contig(c), "{c} should NOT be a main contig");
         }
     }

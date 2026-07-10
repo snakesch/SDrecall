@@ -40,11 +40,11 @@ pub struct EnrichedRecord {
     pub extreme_vard: bool,
     pub scatter_hap: bool,
     pub hap_var_count: i32,
-    pub hap_max_sim_scores: f64,  // rounded to 0.1
+    pub hap_max_sim_scores: f64, // rounded to 0.1
     pub hap_max_psvs: i32,
     // Computed during coefficient calculation
-    pub varc_rank: i32,         // sim-score rank (Python "varc_rank"); read by the BILC solver
-    pub rank: i32,              // coefficient rank (Python "rank" column); TSV/debug only
+    pub varc_rank: i32, // sim-score rank (Python "varc_rank"); read by the BILC solver
+    pub rank: i32,      // coefficient rank (Python "rank" column); TSV/debug only
     pub interval_coefficient: f64,
     pub coefficient: f64,
 }

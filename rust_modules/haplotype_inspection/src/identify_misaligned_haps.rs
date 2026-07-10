@@ -13,24 +13,22 @@
 //! - `identify_misalignment_per_region` → per-region orchestrator
 //! - `inspect_haplotypes` → main inspection loop
 
+use log::{debug, info, warn};
 use ndarray::{Array1, Array2};
 use rust_htslib::bam::Record;
 use rust_lapper::Lapper;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::collections::{HashMap, HashSet};
 use std::collections::hash_map::Entry;
-use log::{debug, info, warn};
+use std::collections::{HashMap, HashSet};
 
-use crate::bam_lappers::{BamLapperResult, build_lapper_from_bam, query_overlapping_reads};
+use crate::bam_lappers::{build_lapper_from_bam, query_overlapping_reads, BamLapperResult};
+use crate::bilc_solver::{lp_solve_remained_haplotypes, BilcStatus};
 use crate::pairwise_read_inspection::{
-    read_id, extract_hap_vector, extract_error_vector,
-    extract_read_qseqs, ReadQseqData,
-    count_var, count_continuous_indel_blocks, count_snv,
-    HAP_PAD, is_snv, is_indel, is_deletion, insertion_len, is_real,
+    count_continuous_indel_blocks, count_snv, count_var, extract_error_vector, extract_hap_vector,
+    extract_read_qseqs, insertion_len, is_deletion, is_indel, is_real, is_snv, read_id,
+    ReadQseqData, HAP_PAD,
 };
 use crate::structs::{BilcRecord, EnrichedRecord, RegionKey};
-use crate::bilc_solver::{lp_solve_remained_haplotypes, BilcStatus};
-
 
 // ─── Data structures for stat_refseq_similarity ─────────────────────────────
 
@@ -200,7 +198,9 @@ pub fn judge_misalignment_by_extreme_vardensity(seq: &Array1<i16>) -> (bool, f32
             })
             .reduce(f32::max);
         if dropped_non_finite {
-            debug!("[judge_misalignment_by_extreme_vardensity] ignored non-finite density value(s)");
+            debug!(
+                "[judge_misalignment_by_extreme_vardensity] ignored non-finite density value(s)"
+            );
         }
         if let Some(d) = local_max {
             if d > max_density {
@@ -544,7 +544,8 @@ fn parse_origin_region(qname: &str) -> Option<(String, i64, i64)> {
             }
             let end_str = &qname[digit_start2..j];
 
-            if let (Ok(start_val), Ok(end_val)) = (start_str.parse::<i64>(), end_str.parse::<i64>()) {
+            if let (Ok(start_val), Ok(end_val)) = (start_str.parse::<i64>(), end_str.parse::<i64>())
+            {
                 let chrom = &qname[chrom_start..i];
                 return Some((chrom.to_string(), start_val, end_val));
             }
@@ -637,7 +638,8 @@ pub fn stat_refseq_similarity(
             // Python: except IndexError: continue
             continue;
         }
-        let interval_genomic_hap = homo_refseq_hap_vector.slice(ndarray::s![hap_offset_start..hap_offset_end]);
+        let interval_genomic_hap =
+            homo_refseq_hap_vector.slice(ndarray::s![hap_offset_start..hap_offset_end]);
 
         // ── Slice the consensus sequence to the overlap region ──
         let con_offset_start = (overlap_start - span.0) as usize;
@@ -645,7 +647,8 @@ pub fn stat_refseq_similarity(
         if con_offset_end > consensus_sequence.len() || con_offset_start >= con_offset_end {
             continue;
         }
-        let interval_con_seq = consensus_sequence.slice(ndarray::s![con_offset_start..con_offset_end]);
+        let interval_con_seq =
+            consensus_sequence.slice(ndarray::s![con_offset_start..con_offset_end]);
 
         // ── Compute ref_genome_similarity ──
         let interval_con_seq_owned = interval_con_seq.to_owned();
@@ -655,7 +658,9 @@ pub fn stat_refseq_similarity(
 
         // ── If zero alt variants, check if this homologous seq is aligned to its origin ──
         if (alt_snv_count + alt_indel_count) == 0 {
-            if let Some((origin_chrom, origin_start, origin_end)) = parse_origin_region(&homo_refseq_qname) {
+            if let Some((origin_chrom, origin_start, origin_end)) =
+                parse_origin_region(&homo_refseq_qname)
+            {
                 if origin_chrom == chrom
                     && origin_start <= overlap_start
                     && origin_end >= overlap_end
@@ -739,7 +744,10 @@ pub fn stat_refseq_similarity(
                         "The homologous genomic sequence aligned at interval {}:{}-{} shared \
                          an insertion at position {}. The encoded event is {}, the alignment \
                          status on consensus sequence is {}",
-                        chrom, overlap_start, overlap_end, ins_pos,
+                        chrom,
+                        overlap_start,
+                        overlap_end,
+                        ins_pos,
                         ins_encode_event,
                         interval_con_seq_owned[idx]
                     );
@@ -749,7 +757,10 @@ pub fn stat_refseq_similarity(
                         "The homologous genomic sequence aligned at interval {}:{}-{} shared \
                          an insertion at position {}. The encoded event is {}, the alignment \
                          status on consensus sequence is {}",
-                        chrom, overlap_start, overlap_end, ins_pos,
+                        chrom,
+                        overlap_start,
+                        overlap_end,
+                        ins_pos,
                         ins_encode_event,
                         interval_con_seq_owned[idx]
                     );
@@ -758,10 +769,8 @@ pub fn stat_refseq_similarity(
         }
 
         let shared_psv = verified_shared_snv_pos_abs.len() as i32 + shared_psv_ins + shared_psv_del;
-        let verified_shared_indel_pos_abs = merge_unique_sorted(
-            &shared_ins_pos_abs,
-            &shared_del_pos_abs,
-        );
+        let verified_shared_indel_pos_abs =
+            merge_unique_sorted(&shared_ins_pos_abs, &shared_del_pos_abs);
 
         // ── Accumulate into varcounts_among_refseqs ──
         let stats = RegionVarStats {
@@ -881,11 +890,10 @@ pub fn cal_similarity_score(
             let non_psv_density_100bp = max_density * 100.0;
 
             // mixed_psv_metric (matches Python exactly)
-            let mixed_psv_metric = psv_var_ratio.sqrt()
-                * total_shared_psv_f
-                * psv_sharing_ratio.sqrt()
-                + non_psv_density_100bp.sqrt()
-                - (4.0 - psv_var_ratio);
+            let mixed_psv_metric =
+                psv_var_ratio.sqrt() * total_shared_psv_f * psv_sharing_ratio.sqrt()
+                    + non_psv_density_100bp.sqrt()
+                    - (4.0 - psv_var_ratio);
 
             debug!(
                 "[cal_similarity_score] hid={hid} homo_refseq={homo_refseq_qname} psv_var_ratio={psv_var_ratio:.4} \
@@ -917,7 +925,6 @@ pub fn cal_similarity_score(
 
     results
 }
-
 
 // ─── ILP Post-Processing Helpers ──────────────────────────────────────────────
 
@@ -982,7 +989,6 @@ pub fn calculate_coefficient(rows: &[&[f32; 10]]) -> Vec<f32> {
     }
     res
 }
-
 
 // ─── Batch vector collection per region ───────────────────────────────────────
 
@@ -1065,7 +1071,10 @@ pub fn record_hap_err_vectors_per_region(
 
         debug!(
             "[record_hap_err_vectors_per_region] read {} cache_hit={} hap_len={} err_len={}",
-            String::from_utf8_lossy(record.qname()), hap_hit, hap_len, err_len
+            String::from_utf8_lossy(record.qname()),
+            hap_hit,
+            hap_len,
+            err_len
         );
 
         max_len = max_len.max(hap_len);
@@ -1176,7 +1185,11 @@ pub fn assemble_consensus(
         let non_na_values: usize = seq_row.iter().filter(|&&v| is_real(v)).count();
 
         // ── Python lines 317-325: strip padding ─────────────────────────
-        let nona_seq: Vec<i32> = seq_row.iter().take(non_na_values).map(|&v| v as i32).collect();
+        let nona_seq: Vec<i32> = seq_row
+            .iter()
+            .take(non_na_values)
+            .map(|&v| v as i32)
+            .collect();
         let nona_qual: Vec<f32> = qual_row.iter().take(non_na_values).copied().collect();
 
         // ── Python lines 328-329 ────────────────────────────────────────
@@ -1185,11 +1198,10 @@ pub fn assemble_consensus(
         // ── Python lines 334-339 ────────────────────────────────────────
         for j in 0..non_na_values {
             let pos = rel_start + j;
-            if pos < length
-                && nona_qual[j] <= consensus_qual[pos] && nona_qual[j] <= 0.2 {
-                    consensus_seq[pos] = nona_seq[j] as i16;
-                    consensus_qual[pos] = nona_qual[j];
-                }
+            if pos < length && nona_qual[j] <= consensus_qual[pos] && nona_qual[j] <= 0.2 {
+                consensus_seq[pos] = nona_seq[j] as i16;
+                consensus_qual[pos] = nona_qual[j];
+            }
         }
     }
 
@@ -1252,7 +1264,9 @@ pub fn extract_continuous_regions_dict(reads: &[&Record]) -> Vec<((i64, i64), Ve
             // No overlap — close the current region and start a new one
             debug!(
                 "[extract_continuous_regions_dict] region ({}, {}) with {} reads",
-                current_start, current_end, current_indices.len()
+                current_start,
+                current_end,
+                current_indices.len()
             );
             regions.push(((current_start, current_end), current_indices));
             current_start = read_start;
@@ -1265,7 +1279,9 @@ pub fn extract_continuous_regions_dict(reads: &[&Record]) -> Vec<((i64, i64), Ve
     if !current_indices.is_empty() {
         debug!(
             "[extract_continuous_regions_dict] region ({}, {}) with {} reads",
-            current_start, current_end, current_indices.len()
+            current_start,
+            current_end,
+            current_indices.len()
         );
         regions.push(((current_start, current_end), current_indices));
     }
@@ -1430,9 +1446,7 @@ pub fn record_haplotype_rank(
     result.column_mut(6).assign(&indel_counts);
     result.column_mut(7).assign(&psv_counts);
 
-    debug!(
-        "[record_haplotype_rank] {n} haplotypes, total_depth={total_depth}"
-    );
+    debug!("[record_haplotype_rank] {n} haplotypes, total_depth={total_depth}");
 
     result
 }
@@ -1442,7 +1456,7 @@ pub fn record_haplotype_rank(
 /// Per-span haplotype info returned by [`summarize_enclosing_haps`].
 pub struct RegionHapInfo<'a> {
     pub reads: Vec<&'a Record>,
-    pub vert_inds: Vec<i32>,  // unique vertex indices from the reads
+    pub vert_inds: Vec<i32>, // unique vertex indices from the reads
     pub hap_id: i32,
     pub qnames: Vec<String>,
 }
@@ -1576,22 +1590,16 @@ pub fn summarize_enclosing_haps<'a>(
         .collect();
 
     // Shrink window: max of candidate starts, min of candidate ends
-    let recover_start = recover_results
-        .iter()
-        .map(|t| t.span.0)
-        .max()
-        .unwrap();
-    let recover_end = recover_results
-        .iter()
-        .map(|t| t.span.1)
-        .min()
-        .unwrap();
+    let recover_start = recover_results.iter().map(|t| t.span.0).max().unwrap();
+    let recover_end = recover_results.iter().map(|t| t.span.1).min().unwrap();
 
     let overlapping_span = (recover_start.max(start), recover_end.min(end));
 
     info!(
         "[summarize_enclosing_haps] Shrinked to ({}, {}), recovering {} haplotypes",
-        overlapping_span.0, overlapping_span.1, recover_results.len()
+        overlapping_span.0,
+        overlapping_span.1,
+        recover_results.len()
     );
 
     for cand in &recover_results {
@@ -1620,7 +1628,10 @@ pub fn summarize_enclosing_haps<'a>(
     if region_haplotype_info.len() <= 1 {
         info!(
             "[summarize_enclosing_haps] After recovery, still only {} haps at {}:{}-{}",
-            region_haplotype_info.len(), chrom, start, end
+            region_haplotype_info.len(),
+            chrom,
+            start,
+            end
         );
         return None;
     }
@@ -1692,13 +1703,8 @@ pub fn identify_misalignment_per_region(
     let region_str = format!("{chrom}:{start}-{end}");
 
     // ── Step 1: Query overlapping reads ─────────────────────────────────
-    let overlap_reads = query_overlapping_reads(
-        lapper_dict,
-        read_dict,
-        chrom,
-        start as u32,
-        end as u32,
-    );
+    let overlap_reads =
+        query_overlapping_reads(lapper_dict, read_dict, chrom, start as u32, end as u32);
 
     // ── Step 2: Filter + build vertices map ─────────────────────────────
     // vertices: (vertex_idx, qname) → Vec<&Record>
@@ -1711,10 +1717,7 @@ pub fn identify_misalignment_per_region(
             continue;
         }
         let vert_idx = qname_to_node[&qname];
-        vertices
-            .entry((vert_idx, qname))
-            .or_default()
-            .push(read);
+        vertices.entry((vert_idx, qname)).or_default().push(read);
         vert_inds.insert(vert_idx);
     }
 
@@ -1759,7 +1762,10 @@ pub fn identify_misalignment_per_region(
 
         // Verify all vertices belong to the same haplotype
         debug_assert!(
-            hap_info.vert_inds.iter().all(|vid| qname_hap_info.get(vid) == Some(&haplotype_idx)),
+            hap_info
+                .vert_inds
+                .iter()
+                .all(|vid| qname_hap_info.get(vid) == Some(&haplotype_idx)),
             "Vertices {:?} are not in the same connected component.",
             hap_info.vert_inds
         );
@@ -1784,7 +1790,9 @@ pub fn identify_misalignment_per_region(
         let slice_end = (overlapping_span.1 - span_start + 1) as usize;
         let slice_end = slice_end.min(consensus_sequence.len());
         let overlapping_con_seq = if slice_start < consensus_sequence.len() {
-            consensus_sequence.slice(ndarray::s![slice_start..slice_end]).to_owned()
+            consensus_sequence
+                .slice(ndarray::s![slice_start..slice_end])
+                .to_owned()
         } else {
             warn!(
                 "[identify_misalignment_per_region] Consensus too short for hap {} at span ({},{}), overlapping ({},{})",
@@ -1793,12 +1801,15 @@ pub fn identify_misalignment_per_region(
             continue;
         };
 
-        final_clusters.insert(haplotype_idx, HaplotypeClusterInfo {
-            consensus: overlapping_con_seq,
-            reads: reads.clone(),
-            span: overlapping_span,
-            qnames: hap_info.qnames.clone(),
-        });
+        final_clusters.insert(
+            haplotype_idx,
+            HaplotypeClusterInfo {
+                consensus: overlapping_con_seq,
+                reads: reads.clone(),
+                span: overlapping_span,
+                qnames: hap_info.qnames.clone(),
+            },
+        );
     }
 
     debug!(
@@ -1817,11 +1828,8 @@ pub fn identify_misalignment_per_region(
     }
 
     // ── Step 6: Rank haplotypes ─────────────────────────────────────────
-    let record_2d_arr = record_haplotype_rank(
-        &final_clusters,
-        mean_read_length as i32,
-        hap_max_psv_pos,
-    );
+    let record_2d_arr =
+        record_haplotype_rank(&final_clusters, mean_read_length as i32, hap_max_psv_pos);
 
     debug!(
         "[identify_misalignment_per_region] Haplotype rank array shape: {:?} for region {}",
@@ -1977,20 +1985,20 @@ pub fn inspect_haplotypes(
     bam_path: &str,
     intrinsic_bam_path: &str,
     hap_qname_info: &HashMap<i32, Vec<String>>,
-    qname_hap_info: &HashMap<i32, i32>,         // vertex_idx → hap_id
-    qname_to_node: &HashMap<String, i32>,        // qname → vertex_idx
+    qname_hap_info: &HashMap<i32, i32>,   // vertex_idx → hap_id
+    qname_to_node: &HashMap<String, i32>, // qname → vertex_idx
     total_lowqual_qnames: &HashSet<String>,
     compare_haplotype_meta_tab: &str,
     mean_read_length: f64,
     mapq_cutoff: u8,
     basequal_median_cutoff: u8,
 ) -> Result<(HashSet<String>, HashSet<String>), Box<dyn std::error::Error>> {
-
     // ══════════════════════════════════════════════════════════════════════
     // Phase 0: Build Lapper structures from BAM files
     // ══════════════════════════════════════════════════════════════════════
     info!("[inspect_haplotypes] Building Lapper from input BAM: {bam_path}");
-    let bam_lapper = build_lapper_from_bam(bam_path, mapq_cutoff, basequal_median_cutoff, true, true)?;
+    let bam_lapper =
+        build_lapper_from_bam(bam_path, mapq_cutoff, basequal_median_cutoff, true, true)?;
     info!("[inspect_haplotypes] Building Lapper from intrinsic BAM: {intrinsic_bam_path}");
     let intrin_lapper = build_lapper_from_bam(intrinsic_bam_path, 0, 0, false, false)?;
 
@@ -2002,7 +2010,10 @@ pub fn inspect_haplotypes(
             qname_to_records.insert(qname.as_str(), records);
         }
     }
-    info!("[inspect_haplotypes] Built qname→records index with {} entries", qname_to_records.len());
+    info!(
+        "[inspect_haplotypes] Built qname→records index with {} entries",
+        qname_to_records.len()
+    );
 
     // Build qname → chrom index from lapper_dict (each chrom's Lapper contains
     // intervals whose val is qname_idx; use qname_dict to resolve to qname string).
@@ -2010,7 +2021,9 @@ pub fn inspect_haplotypes(
     for (chrom, lapper) in &bam_lapper.lapper_dict {
         for iv in lapper.iter() {
             if let Some(qname) = bam_lapper.qname_dict.get(&iv.val) {
-                qname_to_chrom.entry(qname.as_str()).or_insert_with(|| chrom.clone());
+                qname_to_chrom
+                    .entry(qname.as_str())
+                    .or_insert_with(|| chrom.clone());
             }
         }
     }
@@ -2032,11 +2045,15 @@ pub fn inspect_haplotypes(
     let mut total_genomic_haps: HashMap<String, Array1<i16>> = HashMap::new();
     let mut qseq_cache: HashMap<String, ReadQseqData> = HashMap::new();
 
-    info!("[inspect_haplotypes] All the haplotype IDs are: {:?}", hap_qname_info.keys().collect::<Vec<_>>());
+    info!(
+        "[inspect_haplotypes] All the haplotype IDs are: {:?}",
+        hap_qname_info.keys().collect::<Vec<_>>()
+    );
 
     for (&hid, qnames_raw) in hap_qname_info {
         // Filter out low-quality qnames
-        let qnames: Vec<String> = qnames_raw.iter()
+        let qnames: Vec<String> = qnames_raw
+            .iter()
             .filter(|qn| !total_lowqual_qnames.contains(qn.as_str()))
             .cloned()
             .collect();
@@ -2047,12 +2064,18 @@ pub fn inspect_haplotypes(
             scatter_hid_dict.insert(hid, true);
         }
 
-        debug!("[inspect_haplotypes] haplotype {} contains {} read pairs", hid, qnames.len());
+        debug!(
+            "[inspect_haplotypes] haplotype {} contains {} read pairs",
+            hid,
+            qnames.len()
+        );
 
         // Collect all Records for this haplotype's qnames (Option A lookup)
-        let reads: Vec<&Record> = qnames.iter()
+        let reads: Vec<&Record> = qnames
+            .iter()
             .flat_map(|qn| {
-                qname_to_records.get(qn.as_str())
+                qname_to_records
+                    .get(qn.as_str())
                     .into_iter()
                     .flat_map(|recs| recs.iter())
             })
@@ -2068,7 +2091,8 @@ pub fn inspect_haplotypes(
 
         // Build hid_cov_beds for this haplotype
         // Determine chrom from the first qname that has a chrom mapping
-        let hap_chrom: Option<String> = qnames.iter()
+        let hap_chrom: Option<String> = qnames
+            .iter()
             .find_map(|qn| qname_to_chrom.get(qn.as_str()).cloned());
 
         let mut cov_intervals: Vec<(String, i64, i64)> = Vec::new();
@@ -2088,8 +2112,14 @@ pub fn inspect_haplotypes(
             }
             let span = (*span_start, *span_end);
 
-            debug!("[inspect_haplotypes] haplotype {} — region {}:{}-{} with {} reads",
-                   hid, chrom_str, span.0, span.1, region_reads.len());
+            debug!(
+                "[inspect_haplotypes] haplotype {} — region {}:{}-{} with {} reads",
+                hid,
+                chrom_str,
+                span.0,
+                span.1,
+                region_reads.len()
+            );
 
             // a) Record haplotype/error vectors
             let (read_spans, hap_vectors, err_vectors) =
@@ -2133,16 +2163,24 @@ pub fn inspect_haplotypes(
     // Post-loop logging
     info!("[inspect_haplotypes] extreme variant density haplotypes: {hid_extreme_vard:?}");
     info!("[inspect_haplotypes] scatter haplotypes: {scatter_hid_dict:?}");
-    let scatter_qnames: HashSet<String> = scatter_hid_dict.iter()
+    let scatter_qnames: HashSet<String> = scatter_hid_dict
+        .iter()
         .filter(|(_, &v)| v)
         .flat_map(|(&hid, _)| hap_qname_info.get(&hid).into_iter().flatten().cloned())
         .collect();
-    info!("[inspect_haplotypes] {} scatter qnames", scatter_qnames.len());
+    info!(
+        "[inspect_haplotypes] {} scatter qnames",
+        scatter_qnames.len()
+    );
 
     // ══════════════════════════════════════════════════════════════════════
     // Phase 2: Similarity scoring (Python lines 1266-1275)
     // ══════════════════════════════════════════════════════════════════════
-    let sim_scores = cal_similarity_score(&varcounts_among_refseqs, &hid_var_count, &hid_max_local_density);
+    let sim_scores = cal_similarity_score(
+        &varcounts_among_refseqs,
+        &hid_var_count,
+        &hid_max_local_density,
+    );
     let mut hap_max_sim_scores: HashMap<i32, f64> = HashMap::new();
     let mut hap_max_psvs: HashMap<i32, i32> = HashMap::new();
     let mut hap_max_psv_pos: HashMap<i32, Vec<i32>> = HashMap::new();
@@ -2168,19 +2206,27 @@ pub fn inspect_haplotypes(
     // Phase 4: Early return if no sweep regions (Python lines 1298-1305)
     // ══════════════════════════════════════════════════════════════════════
     if sweep_regions.is_none() {
-        let mismap_hids: HashSet<i32> = hid_extreme_vard.iter()
-            .filter(|(_, &v)| v).map(|(&k, _)| k).collect();
-        let mut mismap_qnames: HashSet<String> = mismap_hids.iter()
+        let mismap_hids: HashSet<i32> = hid_extreme_vard
+            .iter()
+            .filter(|(_, &v)| v)
+            .map(|(&k, _)| k)
+            .collect();
+        let mut mismap_qnames: HashSet<String> = mismap_hids
+            .iter()
             .flat_map(|hid| hap_qname_info.get(hid).into_iter().flatten().cloned())
             .collect();
         mismap_qnames.extend(scatter_qnames);
-        let correct_qnames: HashSet<String> = total_qnames.difference(&mismap_qnames).cloned().collect();
+        let correct_qnames: HashSet<String> =
+            total_qnames.difference(&mismap_qnames).cloned().collect();
         warn!("[inspect_haplotypes] No sweep regions found. Filtering {} mismap, {} correct by extreme_vard only.",
               mismap_qnames.len(), correct_qnames.len());
         return Ok((correct_qnames, mismap_qnames));
     }
     let sweep_regions = sweep_regions.unwrap();
-    info!("[inspect_haplotypes] Found {} sweep regions", sweep_regions.len());
+    info!(
+        "[inspect_haplotypes] Found {} sweep regions",
+        sweep_regions.len()
+    );
 
     // ══════════════════════════════════════════════════════════════════════
     // Phase 5: Per-region inspection loop (Python lines 1308-1329)
@@ -2249,21 +2295,34 @@ pub fn inspect_haplotypes(
         }
 
         // (b) Determine remove_hids: haps with scatter OR sim>10 OR psvs>=12 OR extreme_vard
-        let candidate_remove: HashSet<i32> = total_records.iter()
-            .filter(|r| r.scatter_hap || r.hap_max_sim_scores > 10.0
-                       || r.hap_max_psvs >= 12 || r.extreme_vard)
+        let candidate_remove: HashSet<i32> = total_records
+            .iter()
+            .filter(|r| {
+                r.scatter_hap
+                    || r.hap_max_sim_scores > 10.0
+                    || r.hap_max_psvs >= 12
+                    || r.extreme_vard
+            })
             .map(|r| r.hap_id)
             .collect();
 
         // Except kept_scatter_hids
-        let kept_scatter_hids: HashSet<i32> = total_records.iter()
-            .filter(|r| r.hap_var_count >= 1 && r.scatter_hap
-                       && r.hap_max_psvs < 12 && r.hap_max_sim_scores <= 10.0
-                       && !r.extreme_vard)
+        let kept_scatter_hids: HashSet<i32> = total_records
+            .iter()
+            .filter(|r| {
+                r.hap_var_count >= 1
+                    && r.scatter_hap
+                    && r.hap_max_psvs < 12
+                    && r.hap_max_sim_scores <= 10.0
+                    && !r.extreme_vard
+            })
             .map(|r| r.hap_id)
             .collect();
 
-        remove_hids = candidate_remove.difference(&kept_scatter_hids).copied().collect();
+        remove_hids = candidate_remove
+            .difference(&kept_scatter_hids)
+            .copied()
+            .collect();
         info!("[inspect_haplotypes] remove_hids (pre-ILP filter): {remove_hids:?}");
 
         // (c) Filter out remove_hids and low-depth rows
@@ -2286,13 +2345,18 @@ pub fn inspect_haplotypes(
         //     Group records by (chrom, start, end)
         let mut region_groups: HashMap<RegionKey, Vec<usize>> = HashMap::new();
         for (i, r) in total_records.iter().enumerate() {
-            let key = RegionKey { chrom: r.chrom.clone(), start: r.start, end: r.end };
+            let key = RegionKey {
+                chrom: r.chrom.clone(),
+                start: r.start,
+                end: r.end,
+            };
             region_groups.entry(key).or_default().push(i);
         }
 
         for indices in region_groups.values() {
             // rank_unique_values on rounded hap_max_sim_scores
-            let sim_arr: Vec<f32> = indices.iter()
+            let sim_arr: Vec<f32> = indices
+                .iter()
                 .map(|&i| (total_records[i].hap_max_sim_scores * 10.0).round() as f32 / 10.0)
                 .collect();
             let ranks = rank_unique_values(&sim_arr);
@@ -2301,15 +2365,24 @@ pub fn inspect_haplotypes(
             }
 
             // calculate_coefficient: build 10-col f32 rows
-            let rows_data: Vec<[f32; 10]> = indices.iter().map(|&i| {
-                let r = &total_records[i];
-                [
-                    r.start as f32, r.end as f32, r.total_depth as f32,
-                    r.hap_id as f32, r.hap_depth as f32, r.var_count as f32,
-                    r.indel_count as f32, r.psv_count as f32,
-                    r.varc_rank as f32, r.hap_max_sim_scores as f32,
-                ]
-            }).collect();
+            let rows_data: Vec<[f32; 10]> = indices
+                .iter()
+                .map(|&i| {
+                    let r = &total_records[i];
+                    [
+                        r.start as f32,
+                        r.end as f32,
+                        r.total_depth as f32,
+                        r.hap_id as f32,
+                        r.hap_depth as f32,
+                        r.var_count as f32,
+                        r.indel_count as f32,
+                        r.psv_count as f32,
+                        r.varc_rank as f32,
+                        r.hap_max_sim_scores as f32,
+                    ]
+                })
+                .collect();
             let rows_refs: Vec<&[f32; 10]> = rows_data.iter().collect();
             let coefficients = calculate_coefficient(&rows_refs);
             for (j, &i) in indices.iter().enumerate() {
@@ -2328,7 +2401,11 @@ pub fn inspect_haplotypes(
         for r in &mut total_records {
             let span_sum = *hap_span_sum.get(&r.hap_id).unwrap_or(&1.0);
             let coeff_sum = *hap_coeff_sum.get(&r.hap_id).unwrap_or(&0.0);
-            r.coefficient = if span_sum > 0.0 { coeff_sum / span_sum } else { 0.0 };
+            r.coefficient = if span_sum > 0.0 {
+                coeff_sum / span_sum
+            } else {
+                0.0
+            };
         }
 
         // (c) Add hap_max_sim_scores to coefficient (Python line 1398)
@@ -2338,7 +2415,8 @@ pub fn inspect_haplotypes(
 
         // (d) Rank coefficient per region group (Python lines 1401-1406)
         for indices in region_groups.values() {
-            let coeff_arr: Vec<f32> = indices.iter()
+            let coeff_arr: Vec<f32> = indices
+                .iter()
                 .map(|&i| ((total_records[i].coefficient * 100.0).round() / 100.0) as f32)
                 .collect();
             let ranks = rank_unique_values(&coeff_arr);
@@ -2352,7 +2430,8 @@ pub fn inspect_haplotypes(
 
         // (e) Deduplicate (Python line 1407: drop_duplicates)
         total_records.sort_by(|a, b| {
-            a.chrom.cmp(&b.chrom)
+            a.chrom
+                .cmp(&b.chrom)
                 .then(a.start.cmp(&b.start))
                 .then(a.end.cmp(&b.end))
                 .then(a.hap_id.cmp(&b.hap_id))
@@ -2369,20 +2448,28 @@ pub fn inspect_haplotypes(
     let mut drop_hids: FxHashSet<i32> = FxHashSet::default();
 
     if !failed_lp {
-        let bilc_records: Vec<BilcRecord> = total_records.iter().map(|r| BilcRecord {
-            chrom: r.chrom.clone(),
-            start: r.start,
-            end: r.end,
-            hap_id: r.hap_id,
-            coefficient: r.coefficient,
-            var_count: r.var_count,
-            varc_rank: r.varc_rank,
-        }).collect();
+        let bilc_records: Vec<BilcRecord> = total_records
+            .iter()
+            .map(|r| BilcRecord {
+                chrom: r.chrom.clone(),
+                start: r.start,
+                end: r.end,
+                hap_id: r.hap_id,
+                coefficient: r.coefficient,
+                var_count: r.var_count,
+                varc_rank: r.varc_rank,
+            })
+            .collect();
 
         let (s, d, status) = lp_solve_remained_haplotypes(&bilc_records);
         select_hids = s;
         drop_hids = d;
-        info!("[inspect_haplotypes] ILP status: {}, select={}, drop={}", status, select_hids.len(), drop_hids.len());
+        info!(
+            "[inspect_haplotypes] ILP status: {}, select={}, drop={}",
+            status,
+            select_hids.len(),
+            drop_hids.len()
+        );
         if matches!(status, BilcStatus::Infeasible) {
             warn!("[inspect_haplotypes] ILP infeasible. Setting failed_lp=true.");
             failed_lp = true;
@@ -2398,49 +2485,80 @@ pub fn inspect_haplotypes(
         // Augment with extreme_vard
         mismap_hids.extend(hid_extreme_vard.iter().filter(|(_, &v)| v).map(|(&k, _)| k));
         // Augment with sim_score > 15
-        mismap_hids.extend(hap_max_sim_scores.iter().filter(|(_, &v)| v > 15.0).map(|(&k, _)| k));
+        mismap_hids.extend(
+            hap_max_sim_scores
+                .iter()
+                .filter(|(_, &v)| v > 15.0)
+                .map(|(&k, _)| k),
+        );
         // Augment with scatter + low var_count
-        mismap_hids.extend(scatter_hid_dict.iter()
-            .filter(|(&hid, &v)| v && *hid_var_count.get(&hid).unwrap_or(&0) <= 3)
-            .map(|(&k, _)| k));
+        mismap_hids.extend(
+            scatter_hid_dict
+                .iter()
+                .filter(|(&hid, &v)| v && *hid_var_count.get(&hid).unwrap_or(&0) <= 3)
+                .map(|(&k, _)| k),
+        );
         // Augment with pre-ILP remove_hids
         mismap_hids.extend(&remove_hids);
 
-        let correct_map_hids: HashSet<i32> = select_hids.iter()
+        let correct_map_hids: HashSet<i32> = select_hids
+            .iter()
             .filter(|hid| !mismap_hids.contains(hid))
             .copied()
             .collect();
 
-        let mismap_qnames: HashSet<String> = mismap_hids.iter()
+        let mismap_qnames: HashSet<String> = mismap_hids
+            .iter()
             .flat_map(|hid| hap_qname_info.get(hid).into_iter().flatten().cloned())
             .collect();
-        let all_qnames: HashSet<String> = hap_qname_info.values()
+        let all_qnames: HashSet<String> = hap_qname_info
+            .values()
             .flat_map(|qns| qns.iter().cloned())
             .collect();
-        let correct_qnames: HashSet<String> = all_qnames.difference(&mismap_qnames).cloned().collect();
+        let correct_qnames: HashSet<String> =
+            all_qnames.difference(&mismap_qnames).cloned().collect();
 
         // Write TSV if path is non-empty
         if !compare_haplotype_meta_tab.is_empty() {
-            write_haplotype_meta_tsv(&total_records, &mismap_hids, &correct_map_hids, compare_haplotype_meta_tab);
+            write_haplotype_meta_tsv(
+                &total_records,
+                &mismap_hids,
+                &correct_map_hids,
+                compare_haplotype_meta_tab,
+            );
         }
 
-        info!("[inspect_haplotypes] ILP result: {} mismap hids, {} mismap qnames, {} correct qnames",
-              mismap_hids.len(), mismap_qnames.len(), correct_qnames.len());
+        info!(
+            "[inspect_haplotypes] ILP result: {} mismap hids, {} mismap qnames, {} correct qnames",
+            mismap_hids.len(),
+            mismap_qnames.len(),
+            correct_qnames.len()
+        );
         return Ok((correct_qnames, mismap_qnames));
     }
 
     // ══════════════════════════════════════════════════════════════════════
     // Phase 10: Failed LP fallback (Python lines 1434-1441)
     // ══════════════════════════════════════════════════════════════════════
-    let mut mismap_hids: HashSet<i32> = hid_extreme_vard.iter()
-        .filter(|(_, &v)| v).map(|(&k, _)| k).collect();
+    let mut mismap_hids: HashSet<i32> = hid_extreme_vard
+        .iter()
+        .filter(|(_, &v)| v)
+        .map(|(&k, _)| k)
+        .collect();
     mismap_hids.extend(scatter_hid_dict.iter().filter(|(_, &v)| v).map(|(&k, _)| k));
-    mismap_hids.extend(hap_max_sim_scores.iter().filter(|(_, &v)| v > 15.0).map(|(&k, _)| k));
+    mismap_hids.extend(
+        hap_max_sim_scores
+            .iter()
+            .filter(|(_, &v)| v > 15.0)
+            .map(|(&k, _)| k),
+    );
 
-    let mismap_qnames: HashSet<String> = mismap_hids.iter()
+    let mismap_qnames: HashSet<String> = mismap_hids
+        .iter()
         .flat_map(|hid| hap_qname_info.get(hid).into_iter().flatten().cloned())
         .collect();
-    let all_qnames: HashSet<String> = hap_qname_info.values()
+    let all_qnames: HashSet<String> = hap_qname_info
+        .values()
         .flat_map(|qns| qns.iter().cloned())
         .collect();
     let correct_qnames: HashSet<String> = all_qnames.difference(&mismap_qnames).cloned().collect();
@@ -2469,31 +2587,53 @@ fn write_haplotype_meta_tsv(
     let mut w = std::io::BufWriter::new(file);
 
     // Header
-    let _ = writeln!(w, "chrom\tstart\tend\ttotal_depth\thap_id\thap_depth\tvar_count\t\
+    let _ = writeln!(
+        w,
+        "chrom\tstart\tend\ttotal_depth\thap_id\thap_depth\tvar_count\t\
                          indel_count\tpsv_count\textreme_vard\tscatter_hap\thap_var_count\t\
                          hap_max_sim_scores\thap_max_psvs\tcoefficient\tvarc_rank\trank\t\
-                         interval_coefficient\tmismap\tcorrect_map");
+                         interval_coefficient\tmismap\tcorrect_map"
+    );
     for r in records {
-        let _ = writeln!(w, "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
-            r.chrom, r.start, r.end, r.total_depth, r.hap_id, r.hap_depth,
-            r.var_count, r.indel_count, r.psv_count,
-            r.extreme_vard, r.scatter_hap, r.hap_var_count,
-            r.hap_max_sim_scores, r.hap_max_psvs,
-            r.coefficient, r.varc_rank, r.rank, r.interval_coefficient,
+        let _ = writeln!(
+            w,
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            r.chrom,
+            r.start,
+            r.end,
+            r.total_depth,
+            r.hap_id,
+            r.hap_depth,
+            r.var_count,
+            r.indel_count,
+            r.psv_count,
+            r.extreme_vard,
+            r.scatter_hap,
+            r.hap_var_count,
+            r.hap_max_sim_scores,
+            r.hap_max_psvs,
+            r.coefficient,
+            r.varc_rank,
+            r.rank,
+            r.interval_coefficient,
             mismap_hids.contains(&r.hap_id),
-            correct_map_hids.contains(&r.hap_id));
+            correct_map_hids.contains(&r.hap_id)
+        );
     }
-    info!("[write_haplotype_meta_tsv] Saved {} rows to {}", records.len(), path);
+    info!(
+        "[write_haplotype_meta_tsv] Saved {} rows to {}",
+        records.len(),
+        path
+    );
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use log::debug;
-    use ndarray::{Array1, Array2, array};
+    use ndarray::{array, Array1, Array2};
 
     // ── Array2 helper functions for assemble_consensus tests ─────────
-
 
     // ── Helpers to build Array2 from test data ──────────────────────────────
 
@@ -2575,7 +2715,6 @@ mod tests {
     use rust_htslib::bam::record::{Cigar, CigarString};
     use rust_htslib::bam::Record as BamRecord;
 
-
     /// Helper: create a BAM record with given CIGAR, sequence, qualities, pos, and name.
     fn make_record(cigar: CigarString, seq: &[u8], qual: &[u8], pos: i64) -> BamRecord {
         make_named_record(b"testread", cigar, seq, qual, pos)
@@ -2636,14 +2775,8 @@ mod tests {
         //   pos 101: seq=-4, qual=0.05   <-- better quality, wins at pos 101
         //   pos 102: seq=-10, qual=0.15  <-- worse quality than Read 0
         //   pos 103: seq=1,  qual=0.05
-        let seq_arrays = make_seq_array(&[
-            &[1i16, -4, 1],
-            &[-4i16, -10, 1],
-        ]);
-        let qual_arrays = make_qual_array(&[
-            &[0.10f32, 0.10, 0.10],
-            &[0.05f32, 0.15, 0.05],
-        ]);
+        let seq_arrays = make_seq_array(&[&[1i16, -4, 1], &[-4i16, -10, 1]]);
+        let qual_arrays = make_qual_array(&[&[0.10f32, 0.10, 0.10], &[0.05f32, 0.15, 0.05]]);
         let read_spans = make_spans_array(&[[100i32, 103], [101i32, 104]]);
 
         let result = assemble_consensus(&seq_arrays, &qual_arrays, &read_spans);
@@ -2696,11 +2829,7 @@ mod tests {
         // Read 0: pos 10..13, seq=[1, -4, 1], qual=[0.05, 0.15, 0.05]
         // Read 1: pos 11..14, seq=[1,  1, -10], qual=[0.10, 0.01, 0.10]
         // Read 2: pos 12..15, seq=[-4, 1,  1], qual=[0.02, 0.02, 0.02]
-        let seq_arrays = make_seq_array(&[
-            &[1i16, -4, 1],
-            &[1i16, 1, -10],
-            &[-4i16, 1, 1],
-        ]);
+        let seq_arrays = make_seq_array(&[&[1i16, -4, 1], &[1i16, 1, -10], &[-4i16, 1, 1]]);
         let qual_arrays = make_qual_array(&[
             &[0.05f32, 0.15, 0.05],
             &[0.10f32, 0.01, 0.10],
@@ -2736,8 +2865,8 @@ mod tests {
         // A read with seq=1 and qual=0.1 should still "overwrite" (lowering the
         // consensus quality), so a later read with qual=0.15 cannot overwrite.
         let seq_arrays = make_seq_array(&[
-            &[1i16],   // same as default
-            &[-4i16],  // wants to overwrite
+            &[1i16],  // same as default
+            &[-4i16], // wants to overwrite
         ]);
         let qual_arrays = make_qual_array(&[
             &[0.1f32],  // better than default 0.2
@@ -2785,11 +2914,7 @@ mod tests {
         // Read 1: pos 100, CIGAR 5=, qual [10,10,10,10,10] → prob ~0.1
         // Read 2: pos 102, CIGAR 2=1X2=, qual [20,20,20,20,20] → prob ~0.01 (better)
         let cigar1 = CigarString(vec![Cigar::Equal(5)]);
-        let cigar2 = CigarString(vec![
-            Cigar::Equal(2),
-            Cigar::Diff(1),
-            Cigar::Equal(2),
-        ]);
+        let cigar2 = CigarString(vec![Cigar::Equal(2), Cigar::Diff(1), Cigar::Equal(2)]);
         let r1 = make_record(cigar1, b"ACGTG", &[10; 5], 100);
         let r2 = make_record(cigar2, b"GCACC", &[20; 5], 102);
 
@@ -2957,8 +3082,8 @@ mod tests {
         // Position 4: window [3:5] = [-4, 1] → 1 SNV → density = 1/3
 
         assert_eq!(density.len(), 5);
-        assert!((density[0] - 1.0/3.0).abs() < 0.01);
-        assert!((density[2] - 2.0/3.0).abs() < 0.01);
+        assert!((density[0] - 1.0 / 3.0).abs() < 0.01);
+        assert!((density[2] - 2.0 / 3.0).abs() < 0.01);
     }
 
     #[test]
@@ -3011,7 +3136,9 @@ mod tests {
         // and compound mismatch+ins (6/16 — counted as BOTH an SNV and an indel),
         // including adjacent mixed indel types so runs straddle window edges. Golden
         // optimized vs. reference must agree even on the double-counted compounds.
-        let values = [1i16, 1, 1, -4, -10, -10, 21, 1, -4, 11, -10, 1, 6, -4, -4, 16];
+        let values = [
+            1i16, 1, 1, -4, -10, -10, 21, 1, -4, 11, -10, 1, 6, -4, -4, 16,
+        ];
         let mut seed = 0x1234_5678u64;
         for &len in &[0usize, 1, 2, 5, 13, 50, 137, 300] {
             let arr: Array1<i16> = (0..len)
@@ -3026,7 +3153,8 @@ mod tests {
                     assert!(
                         (got[k] - want[k]).abs() < 1e-6,
                         "mismatch len={len} pad={pad} idx={k}: got={} want={}",
-                        got[k], want[k]
+                        got[k],
+                        want[k]
                     );
                 }
             }
@@ -3075,7 +3203,10 @@ mod tests {
             "  speedup: {:.1}x  (sink={sink})",
             old.as_secs_f64() / new.as_secs_f64().max(1e-9)
         );
-        assert!(new < old, "expected prefix-sum to be faster (old={old:?}, new={new:?})");
+        assert!(
+            new < old,
+            "expected prefix-sum to be faster (old={old:?}, new={new:?})"
+        );
     }
 
     #[test]
@@ -3218,15 +3349,35 @@ mod tests {
         //   hap 2:  1.0844353437
         //   hap 3: -6.3245558739
         //   hap 4:  0.0000000000  (depth == total_depth)
-        let r1: [f32; 10] = [1633000.0, 1635000.0, 45.0, 1.0, 12.0, 8.0, 2.0, 6.0, 3.0, 5.17];
-        let r2: [f32; 10] = [1633000.0, 1635000.0, 45.0, 2.0, 30.0, 15.0, 5.0, 3.0, 1.0, 0.42];
-        let r3: [f32; 10] = [1633000.0, 1635000.0, 45.0, 3.0, 5.0, 3.0, 1.0, 0.0, 2.0, -1.50];
-        let r4: [f32; 10] = [1633000.0, 1635000.0, 45.0, 4.0, 45.0, 0.0, 0.0, 0.0, 4.0, 7.00];
+        let r1: [f32; 10] = [
+            1633000.0, 1635000.0, 45.0, 1.0, 12.0, 8.0, 2.0, 6.0, 3.0, 5.17,
+        ];
+        let r2: [f32; 10] = [
+            1633000.0, 1635000.0, 45.0, 2.0, 30.0, 15.0, 5.0, 3.0, 1.0, 0.42,
+        ];
+        let r3: [f32; 10] = [
+            1633000.0, 1635000.0, 45.0, 3.0, 5.0, 3.0, 1.0, 0.0, 2.0, -1.50,
+        ];
+        let r4: [f32; 10] = [
+            1633000.0, 1635000.0, 45.0, 4.0, 45.0, 0.0, 0.0, 0.0, 4.0, 7.00,
+        ];
         let result = calculate_coefficient(&[&r1, &r2, &r3, &r4]);
 
-        assert!((result[0] - 19.799_593).abs() < 0.001, "hap1: got {}", result[0]);
-        assert!((result[1] - 1.084_435_3).abs() < 0.001, "hap2: got {}", result[1]);
-        assert!((result[2] - (-6.324_556)).abs() < 0.001, "hap3: got {}", result[2]);
+        assert!(
+            (result[0] - 19.799_593).abs() < 0.001,
+            "hap1: got {}",
+            result[0]
+        );
+        assert!(
+            (result[1] - 1.084_435_3).abs() < 0.001,
+            "hap2: got {}",
+            result[1]
+        );
+        assert!(
+            (result[2] - (-6.324_556)).abs() < 0.001,
+            "hap3: got {}",
+            result[2]
+        );
         assert!((result[3] - 0.0).abs() < 0.001, "hap4: got {}", result[3]);
     }
 
@@ -3245,10 +3396,26 @@ mod tests {
         let r4: [f32; 10] = [0.0, 10000.0, 20.0, 4.0, 5.0, 3.0, 1.0, 2.0, 1.0, 3.0];
         let result = calculate_coefficient(&[&r1, &r2, &r3, &r4]);
 
-        assert!((result[0] - 2.598_076).abs() < 0.001, "span100: got {}", result[0]);
-        assert!((result[1] - 5.809_475_4).abs() < 0.001, "span500: got {}", result[1]);
-        assert!((result[2] - 8.215_838).abs() < 0.001, "span1000: got {}", result[2]);
-        assert!((result[3] - 25.980_762).abs() < 0.001, "span10000: got {}", result[3]);
+        assert!(
+            (result[0] - 2.598_076).abs() < 0.001,
+            "span100: got {}",
+            result[0]
+        );
+        assert!(
+            (result[1] - 5.809_475_4).abs() < 0.001,
+            "span500: got {}",
+            result[1]
+        );
+        assert!(
+            (result[2] - 8.215_838).abs() < 0.001,
+            "span1000: got {}",
+            result[2]
+        );
+        assert!(
+            (result[3] - 25.980_762).abs() < 0.001,
+            "span10000: got {}",
+            result[3]
+        );
     }
 
     #[test]
@@ -3266,10 +3433,26 @@ mod tests {
         let r4: [f32; 10] = [100.0, 500.0, 100.0, 4.0, 90.0, 5.0, 1.0, 3.0, 1.0, 4.0];
         let result = calculate_coefficient(&[&r1, &r2, &r3, &r4]);
 
-        assert!((result[0] - 7.589_466).abs() < 0.001, "frac0.90: got {}", result[0]);
-        assert!((result[1] - 6.928_203).abs() < 0.001, "frac0.75: got {}", result[1]);
-        assert!((result[2] - 5.656_854).abs() < 0.001, "frac0.50: got {}", result[2]);
-        assert!((result[3] - 2.529_822_3).abs() < 0.001, "frac0.10: got {}", result[3]);
+        assert!(
+            (result[0] - 7.589_466).abs() < 0.001,
+            "frac0.90: got {}",
+            result[0]
+        );
+        assert!(
+            (result[1] - 6.928_203).abs() < 0.001,
+            "frac0.75: got {}",
+            result[1]
+        );
+        assert!(
+            (result[2] - 5.656_854).abs() < 0.001,
+            "frac0.50: got {}",
+            result[2]
+        );
+        assert!(
+            (result[3] - 2.529_822_3).abs() < 0.001,
+            "frac0.10: got {}",
+            result[3]
+        );
     }
 
     #[test]
@@ -3285,17 +3468,31 @@ mod tests {
         let result = calculate_coefficient(&[&r1, &r2, &r3]);
 
         assert!((result[0] - 0.0).abs() < 0.001, "zero: got {}", result[0]);
-        assert!((result[1] - (-6.945_122_2)).abs() < 0.001, "neg: got {}", result[1]);
-        assert!((result[2] - 27.386_13).abs() < 0.001, "pos: got {}", result[2]);
+        assert!(
+            (result[1] - (-6.945_122_2)).abs() < 0.001,
+            "neg: got {}",
+            result[1]
+        );
+        assert!(
+            (result[2] - 27.386_13).abs() < 0.001,
+            "pos: got {}",
+            result[2]
+        );
     }
 
     #[test]
     fn test_calculate_coefficient_tc5_single_row() {
         // TC5: Single row edge case
         // Python output: 16.1116104126
-        let r1: [f32; 10] = [500000.0, 502000.0, 88.0, 7.0, 22.0, 11.0, 3.0, 8.0, 1.0, 4.16];
+        let r1: [f32; 10] = [
+            500000.0, 502000.0, 88.0, 7.0, 22.0, 11.0, 3.0, 8.0, 1.0, 4.16,
+        ];
         let result = calculate_coefficient(&[&r1]);
-        assert!((result[0] - 16.111_61).abs() < 0.01, "single: got {}", result[0]);
+        assert!(
+            (result[0] - 16.111_61).abs() < 0.01,
+            "single: got {}",
+            result[0]
+        );
     }
 
     #[test]
@@ -3311,20 +3508,44 @@ mod tests {
         //   row 6 (region3 hap1): 33.2039146423
         //   row 7 (region3 hap5): -16.6495361328
         let rows: Vec<[f32; 10]> = vec![
-            [1633000.0, 1635000.0, 45.0, 1.0, 12.0,  8.0, 2.0, 6.0, 4.0,  5.17],
-            [1633000.0, 1635000.0, 45.0, 2.0, 18.0, 12.0, 4.0, 3.0, 2.0,  3.80],
-            [1633000.0, 1635000.0, 45.0, 3.0,  8.0,  3.0, 1.0, 1.0, 3.0, -1.00],
-            [1633000.0, 1635000.0, 45.0, 4.0,  7.0,  5.0, 2.0, 0.0, 1.0,  0.42],
-            [1700000.0, 1701500.0, 32.0, 1.0,  8.0,  5.0, 1.0, 4.0, 3.0,  4.16],
-            [1700000.0, 1701500.0, 32.0, 2.0, 14.0,  9.0, 3.0, 2.0, 1.0,  2.64],
-            [1800000.0, 1803000.0, 60.0, 1.0, 15.0,  7.0, 2.0, 5.0, 2.0,  7.00],
-            [1800000.0, 1803000.0, 60.0, 5.0, 25.0, 18.0, 6.0, 1.0, 1.0, -3.98],
+            [
+                1633000.0, 1635000.0, 45.0, 1.0, 12.0, 8.0, 2.0, 6.0, 4.0, 5.17,
+            ],
+            [
+                1633000.0, 1635000.0, 45.0, 2.0, 18.0, 12.0, 4.0, 3.0, 2.0, 3.80,
+            ],
+            [
+                1633000.0, 1635000.0, 45.0, 3.0, 8.0, 3.0, 1.0, 1.0, 3.0, -1.00,
+            ],
+            [
+                1633000.0, 1635000.0, 45.0, 4.0, 7.0, 5.0, 2.0, 0.0, 1.0, 0.42,
+            ],
+            [
+                1700000.0, 1701500.0, 32.0, 1.0, 8.0, 5.0, 1.0, 4.0, 3.0, 4.16,
+            ],
+            [
+                1700000.0, 1701500.0, 32.0, 2.0, 14.0, 9.0, 3.0, 2.0, 1.0, 2.64,
+            ],
+            [
+                1800000.0, 1803000.0, 60.0, 1.0, 15.0, 7.0, 2.0, 5.0, 2.0, 7.00,
+            ],
+            [
+                1800000.0, 1803000.0, 60.0, 5.0, 25.0, 18.0, 6.0, 1.0, 1.0, -3.98,
+            ],
         ];
         let row_refs: Vec<&[f32; 10]> = rows.iter().collect();
         let result = calculate_coefficient(&row_refs);
 
-        let expected = [19.7995929718, 13.1635856628, -4.0551748276, 1.7260359526,
-            13.9530639648, 7.6685075760, 33.2039146423, -16.6495361328];
+        let expected = [
+            19.7995929718,
+            13.1635856628,
+            -4.0551748276,
+            1.7260359526,
+            13.9530639648,
+            7.6685075760,
+            33.2039146423,
+            -16.6495361328,
+        ];
 
         for (i, (&got, &exp)) in result.iter().zip(expected.iter()).enumerate() {
             assert!(
@@ -3390,7 +3611,12 @@ mod tests {
         let query = array![1, -4, 1, -10, -10, 1];
         let genomic = array![1, 1, 1, 1, 1, 1];
         let result = ref_genome_similarity(&query, &genomic);
-        debug!("ref_genome_similarity(query={:?}, genomic={:?}) = {:?}", query.as_slice().unwrap(), genomic.as_slice().unwrap(), result);
+        debug!(
+            "ref_genome_similarity(query={:?}, genomic={:?}) = {:?}",
+            query.as_slice().unwrap(),
+            genomic.as_slice().unwrap(),
+            result
+        );
         assert_eq!(result, (0, 0, 0));
     }
 
@@ -3413,14 +3639,14 @@ mod tests {
     fn test_ref_genome_similarity_only_insertions() {
         init_log();
         // query has insertion markers; genomic has insertion markers (golden: base+10*L)
-        let query = array![1, 21, 1, 1];  // 1 insertion block (match + 2bp ins)
+        let query = array![1, 21, 1, 1]; // 1 insertion block (match + 2bp ins)
         let genomic = array![1, 1, 31, 1]; // 1 insertion block (match + 3bp ins)
         let (var_count, alt_snv, alt_indel) = ref_genome_similarity(&query, &genomic);
         debug!("ref_genome_similarity(query={:?}, genomic={:?}) = (var_count={}, alt_snv={}, alt_indel={})",
                query.as_slice().unwrap(), genomic.as_slice().unwrap(), var_count, alt_snv, alt_indel);
-        assert_eq!(var_count, 1);   // 1 indel block in query
+        assert_eq!(var_count, 1); // 1 indel block in query
         assert_eq!(alt_snv, 0);
-        assert_eq!(alt_indel, 1);   // 1 indel block in genomic
+        assert_eq!(alt_indel, 1); // 1 indel block in genomic
     }
 
     // --- numba_shared_variant_positions ---
@@ -3502,9 +3728,9 @@ mod tests {
         let (snvs, ins, dels) = numba_shared_variant_positions(&vec1, &vec2, 10);
         debug!("shared_variant_positions(vec1={:?}, vec2={:?}, overlap_start=10) = (snvs={:?}, ins={:?}, dels={:?})",
                vec1.as_slice().unwrap(), vec2.as_slice().unwrap(), snvs, ins, dels);
-        assert_eq!(snvs, vec![10]);      // abs 10+0
-        assert_eq!(ins, vec![12]);       // abs 10+2
-        assert_eq!(dels, vec![14, 15]);  // abs 10+4, 10+5
+        assert_eq!(snvs, vec![10]); // abs 10+0
+        assert_eq!(ins, vec![12]); // abs 10+2
+        assert_eq!(dels, vec![14, 15]); // abs 10+4, 10+5
     }
 
     #[test]
@@ -3567,7 +3793,13 @@ mod tests {
         let qseq_encoded: Vec<i8> = vec![0, 1, 2]; // A, T, C
         let mut tally = vec![[0i32; 5]; 3];
 
-        update_tally_for_read(&shared_pos, 100, &ref_qseq_positions, &qseq_encoded, &mut tally);
+        update_tally_for_read(
+            &shared_pos,
+            100,
+            &ref_qseq_positions,
+            &qseq_encoded,
+            &mut tally,
+        );
 
         debug!("update_tally(shared_pos={shared_pos:?}, read_start=100, ref_qseq={ref_qseq_positions:?}, qseq={qseq_encoded:?}) => tally={tally:?}");
         assert_eq!(tally[0][0], 1); // A at pos 0
@@ -3622,8 +3854,12 @@ mod tests {
         let mut tally = vec![[0i32; 5]; 1];
 
         update_tally_for_read(&shared_pos, 100, &ref_qseq_pos, &qseq_encoded, &mut tally);
-        debug!("update_tally out-of-range: shared_pos={:?}, read_start=100, ref_len={}, tally={:?}",
-               shared_pos, ref_qseq_pos.len(), tally);
+        debug!(
+            "update_tally out-of-range: shared_pos={:?}, read_start=100, ref_len={}, tally={:?}",
+            shared_pos,
+            ref_qseq_pos.len(),
+            tally
+        );
         assert_eq!(tally[0], [0, 0, 0, 0, 0]); // nothing updated
     }
 
@@ -3662,7 +3898,9 @@ mod tests {
         let h_base: Vec<i8> = vec![0];
         let shared_pos = vec![100];
         let result = verify_shared_snv_positions(&tally, &h_base, &shared_pos);
-        debug!("verify_shared_snv zero-coverage: tally={tally:?}, result={result:?} (expect empty)");
+        debug!(
+            "verify_shared_snv zero-coverage: tally={tally:?}, result={result:?} (expect empty)"
+        );
         assert!(result.is_empty());
     }
 
@@ -3683,9 +3921,9 @@ mod tests {
         init_log();
         // 3 positions: match, no-match, match
         let tally = vec![
-            [5, 1, 0, 0, 0],  // argmax=A(0)
-            [0, 0, 8, 2, 0],  // argmax=C(2)
-            [1, 0, 0, 7, 0],  // argmax=G(3)
+            [5, 1, 0, 0, 0], // argmax=A(0)
+            [0, 0, 8, 2, 0], // argmax=C(2)
+            [1, 0, 0, 7, 0], // argmax=G(3)
         ];
         let h_base: Vec<i8> = vec![0, 3, 3]; // A, G, G
         let shared_pos = vec![100, 101, 102];
@@ -3867,9 +4105,20 @@ mod tests {
         // hid=1, one refseq "refA", one region:
         //   shared_psv=10, alt_snv=10, alt_indel=0, total_varcount=10, density=0
         //   This gives ratio=1.0, sharing=1.0, metric=10-3=7.0
-        let stats = make_stats(10, 10, 0, 10, vec![100, 200, 300, 400, 500, 600, 700, 800, 900, 1000], vec![], 500);
+        let stats = make_stats(
+            10,
+            10,
+            0,
+            10,
+            vec![100, 200, 300, 400, 500, 600, 700, 800, 900, 1000],
+            vec![],
+            500,
+        );
         let mut varcounts: VarcountsAmongRefseqs = HashMap::new();
-        varcounts.entry(1).or_default().insert("refA".to_string(), vec![stats]);
+        varcounts
+            .entry(1)
+            .or_default()
+            .insert("refA".to_string(), vec![stats]);
 
         let mut hid_var_count: HashMap<i32, i32> = HashMap::new();
         hid_var_count.insert(1, 10);
@@ -3883,10 +4132,16 @@ mod tests {
         //   psv_sharing_ratio = 10/10 = 1.0
         //   metric = sqrt(1.0)*10*sqrt(1.0) + 0 - (4 - 1.0) = 10 - 3 = 7.0
         let expected = 7.0_f64;
-        debug!("single_hap_single_refseq: score={:.10} expected={:.10}", r.max_sim_score, expected);
+        debug!(
+            "single_hap_single_refseq: score={:.10} expected={:.10}",
+            r.max_sim_score, expected
+        );
         assert!((r.max_sim_score - expected).abs() < 1e-10);
         assert_eq!(r.max_psv_count, 10);
-        assert_eq!(r.max_psv_positions, vec![100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]);
+        assert_eq!(
+            r.max_psv_positions,
+            vec![100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
+        );
     }
 
     #[test]
@@ -3896,7 +4151,10 @@ mod tests {
         // Use high shared_psv so metric > -1
         let stats = make_stats(0, 8, 2, 8, vec![10, 20, 30, 40], vec![50, 60, 70, 80], 200);
         let mut varcounts: VarcountsAmongRefseqs = HashMap::new();
-        varcounts.entry(1).or_default().insert("refA".to_string(), vec![stats]);
+        varcounts
+            .entry(1)
+            .or_default()
+            .insert("refA".to_string(), vec![stats]);
 
         let mut hid_var_count: HashMap<i32, i32> = HashMap::new();
         hid_var_count.insert(1, 0);
@@ -3909,7 +4167,10 @@ mod tests {
         // psv_sharing_ratio = 8/(8+2) = 0.8
         // metric = sqrt(1.0)*8*sqrt(0.8) + 0 - (4 - 1.0) = 8*0.89443 - 3.0 = 7.1554 - 3 = 4.1554
         let expected = 1.0_f64.sqrt() * 8.0 * (0.8_f64).sqrt() - 3.0;
-        debug!("zero_varcount_positive_psv: score={:.10} expected={:.10}", r.max_sim_score, expected);
+        debug!(
+            "zero_varcount_positive_psv: score={:.10} expected={:.10}",
+            r.max_sim_score, expected
+        );
         assert!((r.max_sim_score - expected).abs() < 1e-10);
         assert_eq!(r.max_psv_count, 8);
     }
@@ -3921,7 +4182,10 @@ mod tests {
         // metric = -4.0 which is < -1, so the floor (-1) wins
         let stats = make_stats(0, 0, 0, 0, vec![], vec![], 100);
         let mut varcounts: VarcountsAmongRefseqs = HashMap::new();
-        varcounts.entry(1).or_default().insert("refA".to_string(), vec![stats]);
+        varcounts
+            .entry(1)
+            .or_default()
+            .insert("refA".to_string(), vec![stats]);
 
         let mut hid_var_count: HashMap<i32, i32> = HashMap::new();
         hid_var_count.insert(1, 0);
@@ -3932,7 +4196,10 @@ mod tests {
 
         // metric = sqrt(0)*0*sqrt(0) + 0 - 4 = -4, but -4 < -1 (initial), so floor wins
         debug!("zero_varcount_zero_psv: score={:.10}", r.max_sim_score);
-        assert!((r.max_sim_score - (-1.0)).abs() < 1e-10, "floor should be -1");
+        assert!(
+            (r.max_sim_score - (-1.0)).abs() < 1e-10,
+            "floor should be -1"
+        );
         assert_eq!(r.max_psv_count, 0);
         assert!(r.max_psv_positions.is_empty());
     }
@@ -3945,7 +4212,10 @@ mod tests {
         // This specifically tests the psv_sharing_ratio=0 branch
         let stats = make_stats(5, 0, 0, 2, vec![50], vec![60], 100);
         let mut varcounts: VarcountsAmongRefseqs = HashMap::new();
-        varcounts.entry(1).or_default().insert("refA".to_string(), vec![stats]);
+        varcounts
+            .entry(1)
+            .or_default()
+            .insert("refA".to_string(), vec![stats]);
 
         let mut hid_var_count: HashMap<i32, i32> = HashMap::new();
         hid_var_count.insert(1, 5);
@@ -3956,7 +4226,10 @@ mod tests {
 
         // metric = sqrt(0.4)*2*sqrt(0.0) + 0 - 3.6 = -3.6 < -1 → floor
         debug!("zero_total_psv_count: score={:.10}", r.max_sim_score);
-        assert!((r.max_sim_score - (-1.0)).abs() < 1e-10, "floor should be -1");
+        assert!(
+            (r.max_sim_score - (-1.0)).abs() < 1e-10,
+            "floor should be -1"
+        );
     }
 
     #[test]
@@ -4005,7 +4278,10 @@ mod tests {
         let s2 = make_stats(5, 5, 1, 5, vec![600, 700, 800, 900, 1000], vec![], 150);
 
         let mut varcounts: VarcountsAmongRefseqs = HashMap::new();
-        varcounts.entry(1).or_default().insert("refA".to_string(), vec![s1, s2]);
+        varcounts
+            .entry(1)
+            .or_default()
+            .insert("refA".to_string(), vec![s1, s2]);
 
         let mut hid_var_count: HashMap<i32, i32> = HashMap::new();
         hid_var_count.insert(1, 12);
@@ -4021,10 +4297,16 @@ mod tests {
         //        = (10/12)*10 - (4 - 10/12) = 100/12 - 38/12 = 62/12 ≈ 5.1667
         let ratio: f64 = 10.0 / 12.0;
         let expected = ratio.sqrt() * 10.0 * ratio.sqrt() - (4.0 - ratio);
-        debug!("multiple_regions: score={:.10} expected={:.10}", r.max_sim_score, expected);
+        debug!(
+            "multiple_regions: score={:.10} expected={:.10}",
+            r.max_sim_score, expected
+        );
         assert!((r.max_sim_score - expected).abs() < 1e-10);
         assert_eq!(r.max_psv_count, 10);
-        assert_eq!(r.max_psv_positions, vec![100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]);
+        assert_eq!(
+            r.max_psv_positions,
+            vec![100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
+        );
     }
 
     #[test]
@@ -4036,7 +4318,10 @@ mod tests {
         let s2 = make_stats(5, 5, 0, 5, vec![200, 400, 600, 700, 800], vec![300], 100);
 
         let mut varcounts: VarcountsAmongRefseqs = HashMap::new();
-        varcounts.entry(1).or_default().insert("refA".to_string(), vec![s1, s2]);
+        varcounts
+            .entry(1)
+            .or_default()
+            .insert("refA".to_string(), vec![s1, s2]);
 
         let mut hid_var_count: HashMap<i32, i32> = HashMap::new();
         hid_var_count.insert(1, 12);
@@ -4048,7 +4333,10 @@ mod tests {
         // SNV pos: [100,200,300,400,500] ∪ [200,400,600,700,800] = 8 unique
         // Indel pos: [] ∪ [300] = [300]
         // Combined unique sorted: [100, 200, 300, 400, 500, 600, 700, 800]
-        assert_eq!(r.max_psv_positions, vec![100, 200, 300, 400, 500, 600, 700, 800]);
+        assert_eq!(
+            r.max_psv_positions,
+            vec![100, 200, 300, 400, 500, 600, 700, 800]
+        );
         debug!("dedup positions: {:?}", r.max_psv_positions);
     }
 
@@ -4056,13 +4344,35 @@ mod tests {
     fn test_cal_similarity_score_multiple_haplotypes_independent() {
         init_log();
         // hid=1: high PSV → metric > -1
-        let stats1 = make_stats(10, 10, 0, 10, vec![100, 200, 300, 400, 500, 600, 700, 800, 900, 1000], vec![], 200);
+        let stats1 = make_stats(
+            10,
+            10,
+            0,
+            10,
+            vec![100, 200, 300, 400, 500, 600, 700, 800, 900, 1000],
+            vec![],
+            200,
+        );
         // hid=2: also high PSV → metric > -1
-        let stats2 = make_stats(20, 15, 5, 12, vec![1100, 1200, 1300, 1400, 1500, 1600], vec![1700, 1800, 1900, 2000, 2100, 2200], 300);
+        let stats2 = make_stats(
+            20,
+            15,
+            5,
+            12,
+            vec![1100, 1200, 1300, 1400, 1500, 1600],
+            vec![1700, 1800, 1900, 2000, 2100, 2200],
+            300,
+        );
 
         let mut varcounts: VarcountsAmongRefseqs = HashMap::new();
-        varcounts.entry(1).or_default().insert("refA".to_string(), vec![stats1]);
-        varcounts.entry(2).or_default().insert("refB".to_string(), vec![stats2]);
+        varcounts
+            .entry(1)
+            .or_default()
+            .insert("refA".to_string(), vec![stats1]);
+        varcounts
+            .entry(2)
+            .or_default()
+            .insert("refB".to_string(), vec![stats2]);
 
         let mut hid_var_count: HashMap<i32, i32> = HashMap::new();
         hid_var_count.insert(1, 10);
@@ -4094,7 +4404,10 @@ mod tests {
         init_log();
         let stats = make_stats(10, 6, 2, 4, vec![100, 200], vec![300], 200);
         let mut varcounts: VarcountsAmongRefseqs = HashMap::new();
-        varcounts.entry(1).or_default().insert("refA".to_string(), vec![stats]);
+        varcounts
+            .entry(1)
+            .or_default()
+            .insert("refA".to_string(), vec![stats]);
 
         let mut hid_var_count: HashMap<i32, i32> = HashMap::new();
         hid_var_count.insert(1, 10);
@@ -4106,10 +4419,11 @@ mod tests {
 
         // ratio=4/10=0.4, sharing=4/8=0.5, density_100bp=5.0
         // metric = sqrt(0.4)*4*sqrt(0.5) + sqrt(5.0) - (4 - 0.4)
-        let expected = (0.4_f64).sqrt() * 4.0 * (0.5_f64).sqrt()
-            + (5.0_f64).sqrt()
-            - (4.0 - 0.4);
-        debug!("with_density: score={:.10} expected={:.10}", r.max_sim_score, expected);
+        let expected = (0.4_f64).sqrt() * 4.0 * (0.5_f64).sqrt() + (5.0_f64).sqrt() - (4.0 - 0.4);
+        debug!(
+            "with_density: score={:.10} expected={:.10}",
+            r.max_sim_score, expected
+        );
         assert!((r.max_sim_score - expected).abs() < 1e-10);
 
         // Also verify the density term made a positive difference vs zero density
@@ -4123,7 +4437,10 @@ mod tests {
         // Very few shared PSVs with high total_varcount → metric = -3.98 < -1 → floor wins
         let stats = make_stats(100, 50, 50, 1, vec![42], vec![], 500);
         let mut varcounts: VarcountsAmongRefseqs = HashMap::new();
-        varcounts.entry(1).or_default().insert("refA".to_string(), vec![stats]);
+        varcounts
+            .entry(1)
+            .or_default()
+            .insert("refA".to_string(), vec![stats]);
 
         let mut hid_var_count: HashMap<i32, i32> = HashMap::new();
         hid_var_count.insert(1, 100);
@@ -4135,7 +4452,10 @@ mod tests {
         // metric = sqrt(0.01)*1*sqrt(0.01) - 3.99 = 0.01 - 3.99 = -3.98
         // -3.98 < -1 (initial max_psv), so floor of -1.0 wins
         debug!("negative_metric_floor: score={:.10}", r.max_sim_score);
-        assert!((r.max_sim_score - (-1.0)).abs() < 1e-10, "floor should be -1");
+        assert!(
+            (r.max_sim_score - (-1.0)).abs() < 1e-10,
+            "floor should be -1"
+        );
         // Since no update happened, psv_count remains 0 and positions empty
         assert_eq!(r.max_psv_count, 0);
         assert!(r.max_psv_positions.is_empty());
@@ -4208,8 +4528,8 @@ mod tests {
     #[test]
     fn test_continuous_regions_two_disjoint() {
         init_log();
-        let r1 = make_read(100, 50);  // [100, 150)
-        let r2 = make_read(200, 50);  // [200, 250)
+        let r1 = make_read(100, 50); // [100, 150)
+        let r2 = make_read(200, 50); // [200, 250)
         let reads: Vec<&Record> = vec![&r1, &r2];
         let result = extract_continuous_regions_dict(&reads);
         debug!("two disjoint [100,150)+[200,250) => {result:?}");
@@ -4225,8 +4545,8 @@ mod tests {
         init_log();
         // r1 ends at 150, r2 starts at 150 → read_start <= current_end (150 <= 150) is TRUE
         // so they MERGE into one region (matching Python behavior)
-        let r1 = make_read(100, 50);  // [100, 150)
-        let r2 = make_read(150, 50);  // [150, 200)
+        let r1 = make_read(100, 50); // [100, 150)
+        let r2 = make_read(150, 50); // [150, 200)
         let reads: Vec<&Record> = vec![&r1, &r2];
         let result = extract_continuous_regions_dict(&reads);
         debug!("touching [100,150)+[150,200) => {result:?}");
@@ -4240,8 +4560,8 @@ mod tests {
         init_log();
         // r1 ends at 150, r2 starts at 151 → read_start <= current_end (151 <= 150) is FALSE
         // so they are SEPARATE regions
-        let r1 = make_read(100, 50);  // [100, 150)
-        let r2 = make_read(151, 50);  // [151, 201)
+        let r1 = make_read(100, 50); // [100, 150)
+        let r2 = make_read(151, 50); // [151, 201)
         let reads: Vec<&Record> = vec![&r1, &r2];
         let result = extract_continuous_regions_dict(&reads);
         debug!("gap of 1 [100,150)+[151,201) => {result:?}");
@@ -4254,9 +4574,9 @@ mod tests {
     fn test_continuous_regions_unsorted_input() {
         init_log();
         // Reads given out of order — function should sort internally
-        let r1 = make_read(200, 50);  // [200, 250)
-        let r2 = make_read(100, 50);  // [100, 150)
-        let r3 = make_read(120, 50);  // [120, 170)
+        let r1 = make_read(200, 50); // [200, 250)
+        let r2 = make_read(100, 50); // [100, 150)
+        let r3 = make_read(120, 50); // [120, 170)
         let reads: Vec<&Record> = vec![&r1, &r2, &r3];
         let result = extract_continuous_regions_dict(&reads);
         debug!("unsorted input [200,250)+[100,150)+[120,170) => {result:?}");
@@ -4278,8 +4598,8 @@ mod tests {
     fn test_continuous_regions_contained_read() {
         init_log();
         // One read fully contains another
-        let r1 = make_read(100, 100);  // [100, 200)
-        let r2 = make_read(130, 20);   // [130, 150) — fully inside r1
+        let r1 = make_read(100, 100); // [100, 200)
+        let r2 = make_read(130, 20); // [130, 150) — fully inside r1
         let reads: Vec<&Record> = vec![&r1, &r2];
         let result = extract_continuous_regions_dict(&reads);
         debug!("contained [100,200)+[130,150) => {result:?}");
@@ -4292,9 +4612,9 @@ mod tests {
     fn test_continuous_regions_chain_merge() {
         init_log();
         // Three reads forming a chain: each overlaps the next
-        let r1 = make_read(100, 50);  // [100, 150)
-        let r2 = make_read(140, 50);  // [140, 190)
-        let r3 = make_read(180, 50);  // [180, 230)
+        let r1 = make_read(100, 50); // [100, 150)
+        let r2 = make_read(140, 50); // [140, 190)
+        let r3 = make_read(180, 50); // [180, 230)
         let reads: Vec<&Record> = vec![&r1, &r2, &r3];
         let result = extract_continuous_regions_dict(&reads);
         debug!("chain merge [100,150)+[140,190)+[180,230) => {result:?}");
@@ -4306,9 +4626,9 @@ mod tests {
     #[test]
     fn test_continuous_regions_three_separate() {
         init_log();
-        let r1 = make_read(100, 10);   // [100, 110)
-        let r2 = make_read(200, 10);   // [200, 210)
-        let r3 = make_read(300, 10);   // [300, 310)
+        let r1 = make_read(100, 10); // [100, 110)
+        let r2 = make_read(200, 10); // [200, 210)
+        let r3 = make_read(300, 10); // [300, 310)
         let reads: Vec<&Record> = vec![&r1, &r2, &r3];
         let result = extract_continuous_regions_dict(&reads);
         debug!("three separate regions => {result:?}");
@@ -4322,9 +4642,7 @@ mod tests {
     fn test_continuous_regions_many_reads_one_region() {
         init_log();
         // 10 reads all overlapping in one big pile
-        let records: Vec<BamRecord> = (0..10)
-            .map(|i| make_read(100 + i * 5, 50))
-            .collect();
+        let records: Vec<BamRecord> = (0..10).map(|i| make_read(100 + i * 5, 50)).collect();
         let reads: Vec<&Record> = records.iter().map(|r| r as &Record).collect();
         let result = extract_continuous_regions_dict(&reads);
         debug!("10 overlapping reads => {result:?}");
@@ -4338,10 +4656,10 @@ mod tests {
     fn test_continuous_regions_preserves_original_indices() {
         init_log();
         // Verify that returned indices point to the correct reads in the original slice
-        let r_a = make_named_read(b"readA", 300, 50);  // idx 0
-        let r_b = make_named_read(b"readB", 100, 50);  // idx 1
-        let r_c = make_named_read(b"readC", 110, 50);  // idx 2
-        let r_d = make_named_read(b"readD", 310, 50);  // idx 3
+        let r_a = make_named_read(b"readA", 300, 50); // idx 0
+        let r_b = make_named_read(b"readB", 100, 50); // idx 1
+        let r_c = make_named_read(b"readC", 110, 50); // idx 2
+        let r_d = make_named_read(b"readD", 310, 50); // idx 3
         let reads: Vec<&Record> = vec![&r_a, &r_b, &r_c, &r_d];
         let result = extract_continuous_regions_dict(&reads);
 
@@ -4423,7 +4741,10 @@ mod tests {
         let g = result.get(&1).unwrap();
         assert_eq!(g.vertex_indices.len(), 2);
         assert_eq!(g.qnames.len(), 2);
-        debug!("two_same_label: verts={:?} qnames={:?}", g.vertex_indices, g.qnames);
+        debug!(
+            "two_same_label: verts={:?} qnames={:?}",
+            g.vertex_indices, g.qnames
+        );
     }
 
     #[test]
@@ -4442,7 +4763,10 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert!(result.contains_key(&1));
         assert!(result.contains_key(&2));
-        debug!("two_different_labels: keys={:?}", result.keys().collect::<Vec<_>>());
+        debug!(
+            "two_different_labels: keys={:?}",
+            result.keys().collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -4458,7 +4782,10 @@ mod tests {
         let result = group_by_dict_optimized(&vprop, &vertices);
         let g = result.get(&5).unwrap();
         assert_eq!(g.read_pair_lists[0].len(), 2);
-        debug!("multiple_reads: {} reads in pair list", g.read_pair_lists[0].len());
+        debug!(
+            "multiple_reads: {} reads in pair list",
+            g.read_pair_lists[0].len()
+        );
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -4484,12 +4811,15 @@ mod tests {
         let consensus = Array1::from(vec![1_i16, 1, -4, 1]);
 
         let mut hap_dict: HashMap<i32, HaplotypeClusterInfo> = HashMap::new();
-        hap_dict.insert(1, HaplotypeClusterInfo {
-            consensus: consensus.clone(),
-            reads: vec![&r1, &r2],
-            span: (100, 104),
-            qnames: vec!["qA".to_string(), "qB".to_string()],
-        });
+        hap_dict.insert(
+            1,
+            HaplotypeClusterInfo {
+                consensus: consensus.clone(),
+                reads: vec![&r1, &r2],
+                span: (100, 104),
+                qnames: vec!["qA".to_string(), "qB".to_string()],
+            },
+        );
 
         // PSV positions: [101, 102] — 101 is in [100,104), 102 is in [100,104)
         let mut psv_pos: HashMap<i32, Vec<i32>> = HashMap::new();
@@ -4525,18 +4855,24 @@ mod tests {
         let con2 = Array1::from(vec![1_i16, -4, 1, 1, 1, 1, 1, -4, 1, 1]); // 2 SNVs
 
         let mut hap_dict: HashMap<i32, HaplotypeClusterInfo> = HashMap::new();
-        hap_dict.insert(1, HaplotypeClusterInfo {
-            consensus: con1,
-            reads: vec![&r1],
-            span: (100, 110),
-            qnames: vec!["q1".to_string()],
-        });
-        hap_dict.insert(2, HaplotypeClusterInfo {
-            consensus: con2,
-            reads: vec![&r2],
-            span: (200, 210),
-            qnames: vec!["q2".to_string()],
-        });
+        hap_dict.insert(
+            1,
+            HaplotypeClusterInfo {
+                consensus: con1,
+                reads: vec![&r1],
+                span: (100, 110),
+                qnames: vec!["q1".to_string()],
+            },
+        );
+        hap_dict.insert(
+            2,
+            HaplotypeClusterInfo {
+                consensus: con2,
+                reads: vec![&r2],
+                span: (200, 210),
+                qnames: vec!["q2".to_string()],
+            },
+        );
 
         let psv_pos: HashMap<i32, Vec<i32>> = HashMap::new(); // empty
 
@@ -4568,12 +4904,15 @@ mod tests {
         let con1 = Array1::from(vec![1_i16; 20]);
 
         let mut hap_dict: HashMap<i32, HaplotypeClusterInfo> = HashMap::new();
-        hap_dict.insert(1, HaplotypeClusterInfo {
-            consensus: con1,
-            reads: vec![&r1],
-            span: (100, 120),
-            qnames: vec!["qX".to_string()],
-        });
+        hap_dict.insert(
+            1,
+            HaplotypeClusterInfo {
+                consensus: con1,
+                reads: vec![&r1],
+                span: (100, 120),
+                qnames: vec!["qX".to_string()],
+            },
+        );
 
         // PSV positions: 90 (before), 100 (in), 110 (in), 119 (in), 120 (at end, exclusive, so out), 130 (after)
         let mut psv_pos: HashMap<i32, Vec<i32>> = HashMap::new();
@@ -4589,17 +4928,20 @@ mod tests {
     fn test_rank_depth_partial_overlap() {
         init_log();
         // Read only partially overlaps the span
-        let r1 = make_named_read(b"qP", 95, 20);  // [95, 115)
-        // Span is [100, 110), consensus length = 10
+        let r1 = make_named_read(b"qP", 95, 20); // [95, 115)
+                                                 // Span is [100, 110), consensus length = 10
         let con = Array1::from(vec![1_i16; 10]);
 
         let mut hap_dict: HashMap<i32, HaplotypeClusterInfo> = HashMap::new();
-        hap_dict.insert(1, HaplotypeClusterInfo {
-            consensus: con,
-            reads: vec![&r1],
-            span: (100, 110),
-            qnames: vec!["qP".to_string()],
-        });
+        hap_dict.insert(
+            1,
+            HaplotypeClusterInfo {
+                consensus: con,
+                reads: vec![&r1],
+                span: (100, 110),
+                qnames: vec!["qP".to_string()],
+            },
+        );
         let psv_pos: HashMap<i32, Vec<i32>> = HashMap::new();
 
         let result = record_haplotype_rank(&hap_dict, 150, &psv_pos);
@@ -4641,12 +4983,24 @@ mod tests {
         qname_to_node.insert("q3".to_string(), 30);
 
         let mut hap_subgraphs: HashMap<i32, HapGroup> = HashMap::new();
-        hap_subgraphs.insert(1, make_hap_group(vec![10], vec!["q1".to_string()], vec![vec![&r1]]));
-        hap_subgraphs.insert(2, make_hap_group(vec![20], vec!["q2".to_string()], vec![vec![&r2]]));
-        hap_subgraphs.insert(3, make_hap_group(vec![30], vec!["q3".to_string()], vec![vec![&r3]]));
+        hap_subgraphs.insert(
+            1,
+            make_hap_group(vec![10], vec!["q1".to_string()], vec![vec![&r1]]),
+        );
+        hap_subgraphs.insert(
+            2,
+            make_hap_group(vec![20], vec!["q2".to_string()], vec![vec![&r2]]),
+        );
+        hap_subgraphs.insert(
+            3,
+            make_hap_group(vec![30], vec!["q3".to_string()], vec![vec![&r3]]),
+        );
 
         let result = summarize_enclosing_haps(&hap_subgraphs, &qname_to_node, ("chr1", 200, 300));
-        debug!("three_enclosing: {:?}", result.as_ref().map(|(m, s)| (m.len(), s)));
+        debug!(
+            "three_enclosing: {:?}",
+            result.as_ref().map(|(m, s)| (m.len(), s))
+        );
         assert!(result.is_some());
         let (info, span) = result.unwrap();
         assert_eq!(span, (200, 300)); // original window
@@ -4663,7 +5017,10 @@ mod tests {
         qname_to_node.insert("q1".to_string(), 10);
 
         let mut hap_subgraphs: HashMap<i32, HapGroup> = HashMap::new();
-        hap_subgraphs.insert(1, make_hap_group(vec![10], vec!["q1".to_string()], vec![vec![&r1]]));
+        hap_subgraphs.insert(
+            1,
+            make_hap_group(vec![10], vec!["q1".to_string()], vec![vec![&r1]]),
+        );
 
         let result = summarize_enclosing_haps(&hap_subgraphs, &qname_to_node, ("chr1", 200, 300));
         debug!("none_enclosing: is_some={}", result.is_some());
@@ -4687,9 +5044,18 @@ mod tests {
         qname_to_node.insert("q3".to_string(), 30);
 
         let mut hap_subgraphs: HashMap<i32, HapGroup> = HashMap::new();
-        hap_subgraphs.insert(1, make_hap_group(vec![10], vec!["q1".to_string()], vec![vec![&r1]]));
-        hap_subgraphs.insert(2, make_hap_group(vec![20], vec!["q2".to_string()], vec![vec![&r2]]));
-        hap_subgraphs.insert(3, make_hap_group(vec![30], vec!["q3".to_string()], vec![vec![&r3]]));
+        hap_subgraphs.insert(
+            1,
+            make_hap_group(vec![10], vec!["q1".to_string()], vec![vec![&r1]]),
+        );
+        hap_subgraphs.insert(
+            2,
+            make_hap_group(vec![20], vec!["q2".to_string()], vec![vec![&r2]]),
+        );
+        hap_subgraphs.insert(
+            3,
+            make_hap_group(vec![30], vec!["q3".to_string()], vec![vec![&r3]]),
+        );
 
         let result = summarize_enclosing_haps(&hap_subgraphs, &qname_to_node, ("chr1", 200, 300));
         debug!("recovery: {:?}", result.as_ref().map(|(m, s)| (m.len(), s)));
@@ -4716,8 +5082,14 @@ mod tests {
         qname_to_node.insert("q2".to_string(), 20);
 
         let mut hap_subgraphs: HashMap<i32, HapGroup> = HashMap::new();
-        hap_subgraphs.insert(1, make_hap_group(vec![10], vec!["q1".to_string()], vec![vec![&r1]]));
-        hap_subgraphs.insert(2, make_hap_group(vec![20], vec!["q2".to_string()], vec![vec![&r2]]));
+        hap_subgraphs.insert(
+            1,
+            make_hap_group(vec![10], vec!["q1".to_string()], vec![vec![&r1]]),
+        );
+        hap_subgraphs.insert(
+            2,
+            make_hap_group(vec![20], vec!["q2".to_string()], vec![vec![&r2]]),
+        );
 
         let result = summarize_enclosing_haps(&hap_subgraphs, &qname_to_node, ("chr1", 200, 400));
         debug!("recovery_fails: is_some={}", result.is_some());
@@ -4735,7 +5107,10 @@ mod tests {
         qname_to_node.insert("q1".to_string(), 10);
 
         let mut hap_subgraphs: HashMap<i32, HapGroup> = HashMap::new();
-        hap_subgraphs.insert(1, make_hap_group(vec![10], vec!["q1".to_string()], vec![vec![&r1]]));
+        hap_subgraphs.insert(
+            1,
+            make_hap_group(vec![10], vec!["q1".to_string()], vec![vec![&r1]]),
+        );
 
         let result = summarize_enclosing_haps(&hap_subgraphs, &qname_to_node, ("chr1", 200, 300));
         debug!("single_after_recovery: is_some={}", result.is_some());
@@ -4748,7 +5123,9 @@ mod tests {
     fn make_hid_cov(data: &[(i32, &str, i64, i64)]) -> HashMap<i32, Vec<(String, i64, i64)>> {
         let mut m: HashMap<i32, Vec<(String, i64, i64)>> = HashMap::new();
         for &(hid, chrom, start, end) in data {
-            m.entry(hid).or_default().push((chrom.to_string(), start, end));
+            m.entry(hid)
+                .or_default()
+                .push((chrom.to_string(), start, end));
         }
         m
     }
@@ -4767,10 +5144,7 @@ mod tests {
     fn test_select_regions_no_overlap() {
         init_log();
         // Two haplotypes, non-overlapping → None
-        let hid_cov = make_hid_cov(&[
-            (1, "chr1", 100, 200),
-            (2, "chr1", 300, 400),
-        ]);
+        let hid_cov = make_hid_cov(&[(1, "chr1", 100, 200), (2, "chr1", 300, 400)]);
         let result = select_regions_with_min_haplotypes(&hid_cov, 2);
         debug!("no_overlap: {result:?}");
         assert!(result.is_none());
@@ -4780,10 +5154,7 @@ mod tests {
     fn test_select_regions_simple_overlap() {
         init_log();
         // Two haplotypes overlap in [200, 300)
-        let hid_cov = make_hid_cov(&[
-            (1, "chr1", 100, 300),
-            (2, "chr1", 200, 400),
-        ]);
+        let hid_cov = make_hid_cov(&[(1, "chr1", 100, 300), (2, "chr1", 200, 400)]);
         let result = select_regions_with_min_haplotypes(&hid_cov, 2);
         debug!("simple_overlap: {result:?}");
         let regions = result.unwrap();
@@ -4908,10 +5279,7 @@ mod tests {
         init_log();
         // hap1: [100, 600), hap2: [200, 400) (contained within hap1)
         // Overlap: [200, 400)
-        let hid_cov = make_hid_cov(&[
-            (1, "chr1", 100, 600),
-            (2, "chr1", 200, 400),
-        ]);
+        let hid_cov = make_hid_cov(&[(1, "chr1", 100, 600), (2, "chr1", 200, 400)]);
         let result = select_regions_with_min_haplotypes(&hid_cov, 2);
         debug!("contained_interval: {result:?}");
         let regions = result.unwrap();

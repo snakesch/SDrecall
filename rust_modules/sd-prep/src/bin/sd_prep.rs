@@ -95,10 +95,11 @@ fn read_sd_map(path: &PathBuf) -> sdrecall_utils::Result<Vec<SdPairRow>> {
             });
         }
         let parse_i64 = |s: &str, col: &str| -> sdrecall_utils::Result<i64> {
-            s.parse::<i64>().map_err(|_| sdrecall_utils::SdError::BedParse {
-                line: i + 1,
-                msg: format!("non-integer {col}: {s:?}"),
-            })
+            s.parse::<i64>()
+                .map_err(|_| sdrecall_utils::SdError::BedParse {
+                    line: i + 1,
+                    msg: format!("non-integer {col}: {s:?}"),
+                })
         };
         let a = NodeKey::new(
             f[0],
@@ -113,7 +114,11 @@ fn read_sd_map(path: &PathBuf) -> sdrecall_utils::Result<Vec<SdPairRow>> {
             parse_strand(f[7]),
         );
         let mismatch_rate = f[8].parse::<f64>().unwrap_or(0.0);
-        rows.push(SdPairRow { a, b, mismatch_rate });
+        rows.push(SdPairRow {
+            a,
+            b,
+            mismatch_rate,
+        });
     }
     Ok(rows)
 }
@@ -161,7 +166,11 @@ fn run_mask(
     std_frag: f64,
 ) -> sdrecall_utils::Result<()> {
     let query = sdrecall_io::read_bed(query_bed)?;
-    log::info!("Masking {} query intervals from {}", query.len(), query_bed.display());
+    log::info!(
+        "Masking {} query intervals from {}",
+        query.len(),
+        query_bed.display()
+    );
     sd_prep::mask_genome(&query, ref_fa, out, avg_frag, std_frag, 1000)?;
     // print md5 + contig count.
     use std::io::Read;

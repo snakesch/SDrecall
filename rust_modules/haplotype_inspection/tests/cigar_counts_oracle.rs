@@ -153,7 +153,12 @@ fn insertion_is_one_indel_block() {
 #[test]
 fn adjacent_ins_del_is_a_single_block() {
     // I then D are consecutive indel ops → one block (vector: marker then -6 run)
-    let ops = vec![Cigar::Equal(3), Cigar::Ins(2), Cigar::Del(2), Cigar::Equal(3)];
+    let ops = vec![
+        Cigar::Equal(3),
+        Cigar::Ins(2),
+        Cigar::Del(2),
+        Cigar::Equal(3),
+    ];
     let hap = extract_hap_vector(&make_record(&ops)).unwrap();
     assert_eq!(count_continuous_indel_blocks(&hap), 1);
     assert_eq!(true_indel_blocks(&ops), 1);
@@ -163,14 +168,23 @@ fn adjacent_ins_del_is_a_single_block() {
 fn compound_ins_then_snv_recovered() {
     // 5= 3I 1X 5=  → golden sums the X's -4 with the 3bp insertion: -4 + 30 = 26 (ends in 6).
     // TRUE: 1 SNV + 1 indel block = 2 variant events — both recovered under golden.
-    let ops = vec![Cigar::Equal(5), Cigar::Ins(3), Cigar::Diff(1), Cigar::Equal(5)];
+    let ops = vec![
+        Cigar::Equal(5),
+        Cigar::Ins(3),
+        Cigar::Diff(1),
+        Cigar::Equal(5),
+    ];
     let hap = extract_hap_vector(&make_record(&ops)).unwrap();
 
     assert_eq!(true_snv(&ops), 1);
     assert_eq!(compound_count(&ops), 1);
     // Golden: count_snv == true #SNV (the compound mismatch is recovered, not lost).
     assert_eq!(count_snv(&hap), true_snv(&ops));
-    assert_eq!(count_snv(&hap), 1, "the compound SNV is recovered under golden summation");
+    assert_eq!(
+        count_snv(&hap),
+        1,
+        "the compound SNV is recovered under golden summation"
+    );
     assert_eq!(count_continuous_indel_blocks(&hap), 1);
     // The true variant count is 2, and golden now reports 2 (the old encoding reported 1).
     assert_eq!(count_var(&hap), 2);
@@ -185,8 +199,16 @@ fn trailing_insertion_is_dropped() {
     // reads end aligned (or soft-clipped), so this never fires in the pipeline.
     let ops = vec![Cigar::Diff(5), Cigar::Ins(1)];
     let hap = extract_hap_vector(&make_record(&ops)).unwrap();
-    assert_eq!(count_continuous_indel_blocks(&hap), 0, "trailing insertion has no anchor → dropped");
-    assert_eq!(true_indel_blocks(&ops), 1, "op-level truth would be 1; the encoding cannot represent it");
+    assert_eq!(
+        count_continuous_indel_blocks(&hap),
+        0,
+        "trailing insertion has no anchor → dropped"
+    );
+    assert_eq!(
+        true_indel_blocks(&ops),
+        1,
+        "op-level truth would be 1; the encoding cannot represent it"
+    );
 }
 
 #[test]
@@ -204,16 +226,29 @@ fn insertion_on_isolated_match_merges_indel_blocks() {
         Cigar::Equal(3),
     ];
     let hap = extract_hap_vector(&make_record(&ops)).unwrap();
-    assert_eq!(count_continuous_indel_blocks(&hap), 1, "insertion marker consumes the separating match");
+    assert_eq!(
+        count_continuous_indel_blocks(&hap),
+        1,
+        "insertion marker consumes the separating match"
+    );
     assert_eq!(ref_position_indel_blocks(&ops), 1);
-    assert_eq!(true_indel_blocks(&ops), 2, "op-level (biological) count is 2 distinct indel events");
+    assert_eq!(
+        true_indel_blocks(&ops),
+        2,
+        "op-level (biological) count is 2 distinct indel events"
+    );
 }
 
 #[test]
 fn compound_ins_then_longer_snv_recovers_all() {
     // 5= 3I 2X 5= → golden sums only the first mismatch with the insertion (-4+30=26);
     // the second mismatch stays -4. Both are SNVs, so all are recovered.
-    let ops = vec![Cigar::Equal(5), Cigar::Ins(3), Cigar::Diff(2), Cigar::Equal(5)];
+    let ops = vec![
+        Cigar::Equal(5),
+        Cigar::Ins(3),
+        Cigar::Diff(2),
+        Cigar::Equal(5),
+    ];
     let hap = extract_hap_vector(&make_record(&ops)).unwrap();
     assert_eq!(true_snv(&ops), 2);
     assert_eq!(compound_count(&ops), 1);
@@ -300,7 +335,10 @@ fn property_counts_match_cigar_truth_over_random_cigars() {
         );
 
         // count_var is just the sum of its two parts.
-        assert_eq!(count_var(&hap), count_snv(&hap) + count_continuous_indel_blocks(&hap));
+        assert_eq!(
+            count_var(&hap),
+            count_snv(&hap) + count_continuous_indel_blocks(&hap)
+        );
 
         if compounds > 0 {
             cases_with_compound += 1;

@@ -7,14 +7,13 @@
 /// Usage:
 ///   test_consensus <bam_file> <chrom:start-end>
 ///   RUST_LOG=debug test_consensus input.bam chr1:1633000-1635000
-
 // Use the library crate for cross-module imports
 use haplotype_inspection::bam_lappers::{build_lapper_from_bam, query_overlapping_reads};
-use haplotype_inspection::pairwise_read_inspection::{
-    extract_error_vector, extract_hap_vector, read_id, HAP_PAD, is_snv, is_deletion,
-};
 use haplotype_inspection::identify_misaligned_haps::{
     assemble_consensus, record_hap_err_vectors_per_region,
+};
+use haplotype_inspection::pairwise_read_inspection::{
+    extract_error_vector, extract_hap_vector, is_deletion, is_snv, read_id, HAP_PAD,
 };
 use ndarray::Array1;
 use rust_htslib::bam::record::Cigar;
@@ -33,7 +32,10 @@ fn main() {
         eprintln!("Usage: {} <bam_file> <chrom:start-end>", args[0]);
         eprintln!("\nExample:");
         eprintln!("  {} input.bam chr1:1633000-1635000", args[0]);
-        eprintln!("  RUST_LOG=debug {} input.bam chr1:1633000-1635000", args[0]);
+        eprintln!(
+            "  RUST_LOG=debug {} input.bam chr1:1633000-1635000",
+            args[0]
+        );
         std::process::exit(1);
     }
 
@@ -66,14 +68,14 @@ fn main() {
     println!();
 
     // ── Step 2: Query overlapping reads ────────────────────────────────────
-    let reads = query_overlapping_reads(
-        &result.lapper_dict,
-        &result.read_dict,
-        &chrom,
+    let reads = query_overlapping_reads(&result.lapper_dict, &result.read_dict, &chrom, start, end);
+    println!(
+        "Queried {}:{}-{} → {} reads",
+        chrom,
         start,
         end,
+        reads.len()
     );
-    println!("Queried {}:{}-{} → {} reads", chrom, start, end, reads.len());
     println!();
 
     if reads.is_empty() {
@@ -108,7 +110,12 @@ fn main() {
         let status = if passed { "PASS" } else { "FAIL" };
         println!(
             "  [{}] {} flag={} HP={} ref={}..{}",
-            status, qname, read.flags(), hp_tag, read.pos(), read.cigar().end_pos()
+            status,
+            qname,
+            read.flags(),
+            hp_tag,
+            read.pos(),
+            read.cigar().end_pos()
         );
 
         // Print raw CIGAR string
@@ -158,8 +165,7 @@ fn main() {
 
     // Verify shapes
     let n_reads = reads.len();
-    let span_shape_ok =
-        spans.nrows() == n_reads && spans.ncols() == 2;
+    let span_shape_ok = spans.nrows() == n_reads && spans.ncols() == 2;
     let hap_shape_ok = hap_arrays.nrows() == n_reads;
     let err_shape_ok = err_arrays.nrows() == n_reads;
     let max_len = hap_arrays.ncols();
@@ -210,7 +216,11 @@ fn main() {
     println!(
         "  row_length_mismatches: {} {}",
         row_len_mismatches,
-        if row_len_mismatches == 0 { "OK" } else { "FAIL" }
+        if row_len_mismatches == 0 {
+            "OK"
+        } else {
+            "FAIL"
+        }
     );
     println!(
         "  hap_cache_size: {} (expected {}) {}",
@@ -315,9 +325,7 @@ fn main() {
 
     println!("=== Summary ===");
     println!("Reads processed: {n_reads}");
-    println!(
-        "Per-read CIGAR validation: {total_passed} passed, {total_failed} failed"
-    );
+    println!("Per-read CIGAR validation: {total_passed} passed, {total_failed} failed");
     println!(
         "Batch shape checks: {}",
         if span_shape_ok && hap_shape_ok && err_shape_ok {
@@ -328,7 +336,11 @@ fn main() {
     );
     println!(
         "Row length checks: {}",
-        if row_len_mismatches == 0 { "OK" } else { "FAIL" }
+        if row_len_mismatches == 0 {
+            "OK"
+        } else {
+            "FAIL"
+        }
     );
     println!(
         "Cache checks: {}",
@@ -438,7 +450,10 @@ fn validate_hap_against_cigar(record: &Record, hap: &Array1<i16>) -> (bool, Stri
     for c in cigar.iter() {
         match c {
             Cigar::Match(_) => {
-                return (false, "CIGAR contains M (op 0); requires =/X mode".to_string());
+                return (
+                    false,
+                    "CIGAR contains M (op 0); requires =/X mode".to_string(),
+                );
             }
             Cigar::Equal(len) | Cigar::Diff(len) | Cigar::Del(len) | Cigar::RefSkip(len) => {
                 expected_ref_len += *len as usize;
@@ -476,9 +491,7 @@ fn validate_hap_against_cigar(record: &Record, hap: &Array1<i16>) -> (bool, Stri
                     let val = hap[pos];
                     if i == 0 && pending_insertion {
                         if val <= 1 && val != 1 {
-                            errors.push(format!(
-                                "pos {pos} expected ins_marker or 1, got {val}"
-                            ));
+                            errors.push(format!("pos {pos} expected ins_marker or 1, got {val}"));
                         }
                         pending_insertion = false;
                     } else if val != 1 {
@@ -497,9 +510,7 @@ fn validate_hap_against_cigar(record: &Record, hap: &Array1<i16>) -> (bool, Stri
                     let val = hap[pos];
                     if i == 0 && pending_insertion {
                         if val <= 1 {
-                            errors.push(format!(
-                                "pos {pos} expected ins_marker (>1), got {val}"
-                            ));
+                            errors.push(format!("pos {pos} expected ins_marker (>1), got {val}"));
                         }
                         pending_insertion = false;
                     } else if val != -4 {
@@ -518,9 +529,7 @@ fn validate_hap_against_cigar(record: &Record, hap: &Array1<i16>) -> (bool, Stri
                     let val = hap[pos];
                     if i == 0 && pending_insertion {
                         if val <= 1 {
-                            errors.push(format!(
-                                "pos {pos} expected ins_marker (>1), got {val}"
-                            ));
+                            errors.push(format!("pos {pos} expected ins_marker (>1), got {val}"));
                         }
                         pending_insertion = false;
                     } else if val != -10 {
@@ -546,11 +555,7 @@ fn validate_hap_against_cigar(record: &Record, hap: &Array1<i16>) -> (bool, Stri
         let detail = if errors.len() <= 5 {
             errors.join("; ")
         } else {
-            format!(
-                "{} (and {} more)",
-                errors[..5].join("; "),
-                errors.len() - 5
-            )
+            format!("{} (and {} more)", errors[..5].join("; "), errors.len() - 5)
         };
         (false, detail)
     }
@@ -571,7 +576,10 @@ fn validate_err_against_cigar(record: &Record, err: &Array1<f32>) -> (bool, Stri
     for c in cigar.iter() {
         match c {
             Cigar::Match(_) => {
-                return (false, "CIGAR contains M (op 0); requires =/X mode".to_string());
+                return (
+                    false,
+                    "CIGAR contains M (op 0); requires =/X mode".to_string(),
+                );
             }
             Cigar::Equal(len) | Cigar::Diff(len) | Cigar::Del(len) | Cigar::RefSkip(len) => {
                 expected_ref_len += *len as usize;
@@ -629,14 +637,11 @@ fn validate_err_against_cigar(record: &Record, err: &Array1<f32>) -> (bool, Stri
                     let val = err[pos];
                     if insertion_overwrite_positions.contains(&pos) {
                         if val != 0.0 {
-                            errors.push(format!(
-                                "pos {pos} expected 0.0 (ins overwrite), got {val}"
-                            ));
+                            errors
+                                .push(format!("pos {pos} expected 0.0 (ins overwrite), got {val}"));
                         }
                     } else if val <= 0.0 || val > 1.0 {
-                        errors.push(format!(
-                            "pos {pos} expected (0.0, 1.0] (=/X), got {val}"
-                        ));
+                        errors.push(format!("pos {pos} expected (0.0, 1.0] (=/X), got {val}"));
                     }
                 }
                 ref_pos += n;
@@ -649,10 +654,7 @@ fn validate_err_against_cigar(record: &Record, err: &Array1<f32>) -> (bool, Stri
                         break;
                     }
                     if err[pos] != 0.0 {
-                        errors.push(format!(
-                            "pos {} expected 0.0 (D/N), got {}",
-                            pos, err[pos]
-                        ));
+                        errors.push(format!("pos {} expected 0.0 (D/N), got {}", pos, err[pos]));
                     }
                 }
                 ref_pos += n;
@@ -667,11 +669,7 @@ fn validate_err_against_cigar(record: &Record, err: &Array1<f32>) -> (bool, Stri
         let detail = if errors.len() <= 5 {
             errors.join("; ")
         } else {
-            format!(
-                "{} (and {} more)",
-                errors[..5].join("; "),
-                errors.len() - 5
-            )
+            format!("{} (and {} more)", errors[..5].join("; "), errors.len() - 5)
         };
         (false, detail)
     }

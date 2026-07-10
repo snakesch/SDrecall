@@ -4,7 +4,6 @@
 /// Usage:
 ///   cargo run --example test_bam_lapper -- <bam_file> [chrom:start-end,...]
 ///   cargo run --example test_bam_lapper -- input.bam chr1:10000-20000
-
 use haplotype_inspection::bam_lappers::{
     build_lapper_from_bam, query_overlapping_qname_indices, query_overlapping_reads,
 };
@@ -66,10 +65,19 @@ fn main() {
 
     // Print statistics
     println!("=== Processing Statistics ===");
-    println!("Total reads processed: {}", result.stats.total_reads_processed);
-    println!("Skipped alignments (secondary/supplementary/duplicate): {}", result.stats.skipped_alignments);
+    println!(
+        "Total reads processed: {}",
+        result.stats.total_reads_processed
+    );
+    println!(
+        "Skipped alignments (secondary/supplementary/duplicate): {}",
+        result.stats.skipped_alignments
+    );
     println!("Qnames retained: {}", result.stats.qnames_retained);
-    println!("Noisy qnames filtered: {}", result.stats.noisy_qnames_filtered);
+    println!(
+        "Noisy qnames filtered: {}",
+        result.stats.noisy_qnames_filtered
+    );
     println!();
 
     // Print chromosome coverage
@@ -125,7 +133,10 @@ fn main() {
         // Test 1: Query qname indices from Lapper intervals
         if let Some(lapper) = result.lapper_dict.get(chrom) {
             let qname_indices = query_overlapping_qname_indices(lapper, *start, *end);
-            println!("  Lapper interval hits: {} qname indices", qname_indices.len());
+            println!(
+                "  Lapper interval hits: {} qname indices",
+                qname_indices.len()
+            );
 
             // Deduplicate (Lapper may return duplicates)
             let mut unique_indices: Vec<u32> = qname_indices.clone();
@@ -150,13 +161,8 @@ fn main() {
         }
 
         // Test 2: Query overlapping reads (with actual overlap verification)
-        let reads = query_overlapping_reads(
-            &result.lapper_dict,
-            &result.read_dict,
-            chrom,
-            *start,
-            *end,
-        );
+        let reads =
+            query_overlapping_reads(&result.lapper_dict, &result.read_dict, chrom, *start, *end);
         println!("  Overlapping reads (overlap-verified): {}", reads.len());
 
         // Count unique qnames from the actual overlapping reads
@@ -166,7 +172,10 @@ fn main() {
             .collect();
         read_qnames.sort();
         read_qnames.dedup();
-        println!("  Unique qnames from overlapping reads: {}", read_qnames.len());
+        println!(
+            "  Unique qnames from overlapping reads: {}",
+            read_qnames.len()
+        );
 
         // Print read details for cross-checking
         println!("  --- BEGIN READ DETAILS ---");

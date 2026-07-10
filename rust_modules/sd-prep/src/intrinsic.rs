@@ -44,10 +44,11 @@ fn get_raw_seqs(
     all_homo_regions: &[GenomicInterval],
     ref_fa: &Path,
 ) -> Result<Vec<IntrinsicQuery>> {
-    let mut reader = bio::io::fasta::IndexedReader::from_file(&ref_fa).map_err(|e| SdError::Io {
-        path: ref_fa.display().to_string(),
-        source: std::io::Error::other(e.to_string()),
-    })?;
+    let mut reader =
+        bio::io::fasta::IndexedReader::from_file(&ref_fa).map_err(|e| SdError::Io {
+            path: ref_fa.display().to_string(),
+            source: std::io::Error::other(e.to_string()),
+        })?;
     let mut out = Vec::with_capacity(all_homo_regions.len());
     let mut buf = Vec::new();
     for iv in all_homo_regions {
@@ -108,10 +109,18 @@ pub fn intrinsic_bam(
     // Header SQ dictionary from the masked-genome `.fai`, in `.fai` order.
     let sq = read_masked_sq(masked_genome)?;
     let mut header = bam::Header::new();
-    header.push_record(HeaderRecord::new(b"HD").push_tag(b"VN", "1.6").push_tag(b"SO", "coordinate"));
+    header.push_record(
+        HeaderRecord::new(b"HD")
+            .push_tag(b"VN", "1.6")
+            .push_tag(b"SO", "coordinate"),
+    );
     let mut tid_of: ahash::AHashMap<String, i32> = ahash::AHashMap::new();
     for (i, (name, len)) in sq.iter().enumerate() {
-        header.push_record(HeaderRecord::new(b"SQ").push_tag(b"SN", name).push_tag(b"LN", len));
+        header.push_record(
+            HeaderRecord::new(b"SQ")
+                .push_tag(b"SN", name)
+                .push_tag(b"LN", len),
+        );
         tid_of.insert(name.clone(), i as i32);
     }
 
@@ -163,12 +172,7 @@ pub fn intrinsic_bam(
     // FLAG ≥ 256, append the `:rg_tag` QNAME suffix, then coordinate-sort + index
     // (Python's `independent_minimap2_masked`). This must precede the filter so its
     // self-location check runs in genomic coordinates (matching `getIntrinsicBam`).
-    sdrecall_io::remap_masked_bam_to_genomic(
-        Path::new(&unsorted),
-        ref_fa,
-        rg_tag,
-        intrinsic_bam,
-    )?;
+    sdrecall_io::remap_masked_bam_to_genomic(Path::new(&unsorted), ref_fa, rg_tag, intrinsic_bam)?;
     let _ = std::fs::remove_file(&unsorted);
 
     // Filter self-location + enclosed/duplicate intervals (genomic, primary-only).
@@ -354,8 +358,8 @@ pub fn filter_intrinsic_alignments(bam: &Path) -> Result<()> {
     // ---- pass 1: collect intervals for enclosure status ----
     let mut intervals: Vec<(String, i64, i64)> = Vec::new();
     {
-        let mut reader =
-            bam::Reader::from_path(bam).map_err(|e| SdError::Htslib(format!("open {}: {e}", bam.display())))?;
+        let mut reader = bam::Reader::from_path(bam)
+            .map_err(|e| SdError::Htslib(format!("open {}: {e}", bam.display())))?;
         let mut rec = bam::Record::new();
         while let Some(r) = reader.read(&mut rec) {
             r.map_err(|e| SdError::Htslib(format!("read: {e}")))?;
@@ -374,13 +378,13 @@ pub fn filter_intrinsic_alignments(bam: &Path) -> Result<()> {
     // ---- pass 2: filter + secondary→primary promotion ----
     let tmp = format!("{}.filtered.bam", bam.display());
     {
-        let reader =
-            bam::Reader::from_path(bam).map_err(|e| SdError::Htslib(format!("open {}: {e}", bam.display())))?;
+        let reader = bam::Reader::from_path(bam)
+            .map_err(|e| SdError::Htslib(format!("open {}: {e}", bam.display())))?;
         let header = bam::Header::from_template(reader.header());
         let mut writer = bam::Writer::from_path(&tmp, &header, bam::Format::Bam)
             .map_err(|e| SdError::Htslib(format!("open {tmp}: {e}")))?;
-        let mut reader =
-            bam::Reader::from_path(bam).map_err(|e| SdError::Htslib(format!("open {}: {e}", bam.display())))?;
+        let mut reader = bam::Reader::from_path(bam)
+            .map_err(|e| SdError::Htslib(format!("open {}: {e}", bam.display())))?;
 
         let mut seen_intervals: ahash::AHashSet<(String, i64, i64)> = ahash::AHashSet::new();
         let mut primary_origin: ahash::AHashSet<String> = ahash::AHashSet::new();
@@ -605,10 +609,7 @@ mod tests {
     #[test]
     fn enclosure_identical_intervals_keep_first_only() {
         // Two identical intervals: first allowed, the second (same end) enclosed.
-        let recs = vec![
-            ("chrX".to_string(), 10, 50),
-            ("chrX".to_string(), 10, 50),
-        ];
+        let recs = vec![("chrX".to_string(), 10, 50), ("chrX".to_string(), 10, 50)];
         let allowed = compute_interval_status(&recs);
         // The set dedups identical intervals → only one entry, allowed.
         assert_eq!(allowed.get(&("chrX".to_string(), 10, 50)), Some(&true));

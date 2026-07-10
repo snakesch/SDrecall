@@ -29,14 +29,13 @@
 //! - **Caches store owned values** — `HashMap<String, Array1<…>>` needs owned keys.
 //! - **Batch returns are owned** — caller takes full ownership.
 
-use rust_htslib::bam::Record;
-use rust_htslib::bam::record::Cigar;
-use ndarray::Array1;
-use std::collections::HashMap;
-use std::sync::LazyLock;
-use std::fmt;
 use log::debug;
-
+use ndarray::Array1;
+use rust_htslib::bam::record::Cigar;
+use rust_htslib::bam::Record;
+use std::collections::HashMap;
+use std::fmt;
+use std::sync::LazyLock;
 
 // ─── Golden encoding constants & decoders ─────────────────────────────────────
 //
@@ -145,7 +144,6 @@ impl fmt::Display for CigarError {
 
 impl std::error::Error for CigarError {}
 
-
 // ─── Helper functions ─────────────────────────────────────────────────────────
 
 /// Generate a unique identifier for a BAM read, matching Python's `get_read_id`.
@@ -216,7 +214,11 @@ pub fn extract_hap_vector(record: &Record) -> Result<Array1<i16>, CigarError> {
     if ref_len == 0 {
         return Err(CigarError::EmptyRefConsumption);
     }
-    debug!("[extract_hap_vector] ref_len={} cigar_ops={}", ref_len, cigar.len());
+    debug!(
+        "[extract_hap_vector] ref_len={} cigar_ops={}",
+        ref_len,
+        cigar.len()
+    );
 
     let mut hapvector: Vec<i16> = Vec::with_capacity(ref_len);
     let mut query_pos: usize = 0;
@@ -278,7 +280,12 @@ pub fn extract_hap_vector(record: &Record) -> Result<Array1<i16>, CigarError> {
                 // Python: if index > 0 (an insertion at vector start has nothing to attach to)
                 if !hapvector.is_empty() {
                     pending_ins = (n as i16) * INDEL_UNIT;
-                    debug!("[extract_hap_vector] insertion len={} increment={} at ref_pos={}", n, pending_ins, hapvector.len());
+                    debug!(
+                        "[extract_hap_vector] insertion len={} increment={} at ref_pos={}",
+                        n,
+                        pending_ins,
+                        hapvector.len()
+                    );
                 }
             }
             // ── Del (D, op 2) ──────────────────────────────────────
@@ -356,7 +363,11 @@ pub fn extract_error_vector(record: &Record) -> Result<Array1<f32>, CigarError> 
         }
     }
 
-    debug!("[extract_error_vector] ref_span={} qual_len={}", ref_span, qual.len());
+    debug!(
+        "[extract_error_vector] ref_span={} qual_len={}",
+        ref_span,
+        qual.len()
+    );
 
     let mut err_vector: Vec<f32> = Vec::with_capacity(ref_span);
     let mut query_pos: usize = 0;
@@ -397,7 +408,10 @@ pub fn extract_error_vector(record: &Record) -> Result<Array1<f32>, CigarError> 
             // Python: errorvector[ref_consume - 1] = 99; later 99 → 0
             Cigar::Ins(len) => {
                 if ref_pos > 0 {
-                    debug!("[extract_error_vector] insertion overwrite at ref_pos={}", ref_pos - 1);
+                    debug!(
+                        "[extract_error_vector] insertion overwrite at ref_pos={}",
+                        ref_pos - 1
+                    );
                     err_vector[ref_pos - 1] = 0.0;
                 }
                 query_pos += *len as usize;
@@ -441,7 +455,10 @@ pub fn extract_hap_err_vectors(
     let ref_end = record.cigar().end_pos();
     debug!(
         "[extract_hap_err_vectors] hap_len={} err_len={} ref_start={} ref_end={}",
-        hap_vector.len(), err_vector.len(), ref_start, ref_end
+        hap_vector.len(),
+        err_vector.len(),
+        ref_start,
+        ref_end
     );
     Ok((hap_vector, err_vector, ref_start, ref_end))
 }
@@ -492,7 +509,9 @@ pub fn count_continuous_blocks(arr: &Array1<bool>) -> i32 {
 
     // Pad one False to the beginning and end of arr
     let mut extended_arr = Array1::<bool>::from_elem(arr.len() + 2, false);
-    extended_arr.slice_mut(ndarray::s![1..arr.len() + 1]).assign(arr);
+    extended_arr
+        .slice_mut(ndarray::s![1..arr.len() + 1])
+        .assign(arr);
 
     // Count block starts: where extended_arr[i] is True and extended_arr[i+1] is False
     let mut block_count = 0;
@@ -504,7 +523,6 @@ pub fn count_continuous_blocks(arr: &Array1<bool>) -> i32 {
 
     block_count
 }
-
 
 // ─── Read query sequence extraction ───────────────────────────────────────────
 
@@ -597,12 +615,15 @@ pub fn extract_read_qseqs(record: &Record) -> Result<ReadQseqData, CigarError> {
 
     debug!(
         "[extract_read_qseqs] ref_start={} ref_span={} query_len={} cigar_ops={}",
-        ref_start, ref_span, query_len, cigar.len()
+        ref_start,
+        ref_span,
+        query_len,
+        cigar.len()
     );
 
     // Initialize output arrays
-    let mut ref_to_query: Vec<i32> = vec![-1i32; ref_span];     // ref offset → query index
-    let mut query_to_ref: Vec<i32> = vec![-1i32; query_len];    // query index → abs ref position
+    let mut ref_to_query: Vec<i32> = vec![-1i32; ref_span]; // ref offset → query index
+    let mut query_to_ref: Vec<i32> = vec![-1i32; query_len]; // query index → abs ref position
     let mut qseq_encoded: Vec<i8> = Vec::with_capacity(query_len);
     let mut qseq_qualities: Vec<i8> = Vec::with_capacity(query_len);
 
@@ -617,8 +638,8 @@ pub fn extract_read_qseqs(record: &Record) -> Result<ReadQseqData, CigarError> {
     }
 
     // Walk CIGAR to build both maps simultaneously
-    let mut ref_offset: usize = 0;  // offset from reference_start
-    let mut query_pos: usize = 0;   // position in query sequence
+    let mut ref_offset: usize = 0; // offset from reference_start
+    let mut query_pos: usize = 0; // position in query sequence
 
     for c in cigar.iter() {
         match c {
@@ -658,7 +679,10 @@ pub fn extract_read_qseqs(record: &Record) -> Result<ReadQseqData, CigarError> {
 
     debug!(
         "[extract_read_qseqs] built ref_to_query[{}] query_to_ref[{}] qseq[{}] qual[{}]",
-        ref_to_query.len(), query_to_ref.len(), qseq_encoded.len(), qseq_qualities.len()
+        ref_to_query.len(),
+        query_to_ref.len(),
+        qseq_encoded.len(),
+        qseq_qualities.len()
     );
 
     Ok(ReadQseqData {
@@ -754,11 +778,7 @@ mod tests {
     #[test]
     fn test_hap_vector_with_snv() {
         // CIGAR: 3=1X2= → 6 ref bases
-        let cigar = CigarString(vec![
-            Cigar::Equal(3),
-            Cigar::Diff(1),
-            Cigar::Equal(2),
-        ]);
+        let cigar = CigarString(vec![Cigar::Equal(3), Cigar::Diff(1), Cigar::Equal(2)]);
         let seq = b"ACGAAC";
         let qual = &[30; 6];
         let record = make_record(cigar, seq, qual, 100);
@@ -770,11 +790,7 @@ mod tests {
     #[test]
     fn test_hap_vector_with_deletion() {
         // CIGAR: 3=2D3= → 8 ref positions
-        let cigar = CigarString(vec![
-            Cigar::Equal(3),
-            Cigar::Del(2),
-            Cigar::Equal(3),
-        ]);
+        let cigar = CigarString(vec![Cigar::Equal(3), Cigar::Del(2), Cigar::Equal(3)]);
         let seq = b"ACGACG"; // 6 query bases (3 + 3)
         let qual = &[30; 6];
         let record = make_record(cigar, seq, qual, 100);
@@ -788,11 +804,7 @@ mod tests {
     fn test_hap_vector_with_insertion() {
         // CIGAR: 3=2I3= → 6 ref positions, 8 query bases
         // Golden: 2bp insertion summed onto the match base → 1 + 2*10 = 21, at position 3
-        let cigar = CigarString(vec![
-            Cigar::Equal(3),
-            Cigar::Ins(2),
-            Cigar::Equal(3),
-        ]);
+        let cigar = CigarString(vec![Cigar::Equal(3), Cigar::Ins(2), Cigar::Equal(3)]);
         let seq = b"ACGTTACG"; // 3 + 2ins + 3
         let qual = &[30; 8];
         let record = make_record(cigar, seq, qual, 100);
@@ -845,10 +857,7 @@ mod tests {
     #[test]
     fn test_hap_vector_softclip_prefix() {
         // CIGAR: 2S3= → 3 ref positions, 5 query bases
-        let cigar = CigarString(vec![
-            Cigar::SoftClip(2),
-            Cigar::Equal(3),
-        ]);
+        let cigar = CigarString(vec![Cigar::SoftClip(2), Cigar::Equal(3)]);
         let seq = b"TTACG";
         let qual = &[30; 5];
         let record = make_record(cigar, seq, qual, 100);
@@ -860,10 +869,7 @@ mod tests {
     #[test]
     fn test_hap_vector_insertion_at_start_ignored() {
         // CIGAR: 2I3= → insertion at very start is ignored (Python: if index > 0)
-        let cigar = CigarString(vec![
-            Cigar::Ins(2),
-            Cigar::Equal(3),
-        ]);
+        let cigar = CigarString(vec![Cigar::Ins(2), Cigar::Equal(3)]);
         let seq = b"TTACG"; // 2ins + 3
         let qual = &[30; 5];
         let record = make_record(cigar, seq, qual, 100);
@@ -915,11 +921,7 @@ mod tests {
     #[test]
     fn test_error_vector_with_deletion() {
         // CIGAR: 2=2D2= → 6 ref positions, 4 query bases
-        let cigar = CigarString(vec![
-            Cigar::Equal(2),
-            Cigar::Del(2),
-            Cigar::Equal(2),
-        ]);
+        let cigar = CigarString(vec![Cigar::Equal(2), Cigar::Del(2), Cigar::Equal(2)]);
         let seq = b"ACGT";
         let qual = &[30, 20, 25, 35];
         let record = make_record(cigar, seq, qual, 100);
@@ -938,11 +940,7 @@ mod tests {
     fn test_error_vector_with_insertion() {
         // CIGAR: 3=2I3= → 6 ref positions, 8 query bases
         // Insertion sets err_vector[ref_pos-1] = 0.0 (position 2)
-        let cigar = CigarString(vec![
-            Cigar::Equal(3),
-            Cigar::Ins(2),
-            Cigar::Equal(3),
-        ]);
+        let cigar = CigarString(vec![Cigar::Equal(3), Cigar::Ins(2), Cigar::Equal(3)]);
         let seq = b"ACGTTACG"; // 3 + 2ins + 3
         let qual = &[30, 20, 25, 10, 10, 35, 40, 30]; // 8 quality values
         let record = make_record(cigar, seq, qual, 100);
@@ -951,8 +949,8 @@ mod tests {
         assert_eq!(err.len(), 6);
         assert!((err[0] - phred_to_prob(30)).abs() < 1e-7); // pos 0
         assert!((err[1] - phred_to_prob(20)).abs() < 1e-7); // pos 1
-        assert_eq!(err[2], 0.0);                             // pos 2: overwritten by insertion
-        // After insertion: query_pos = 5, so next = bases use qual[5], qual[6], qual[7]
+        assert_eq!(err[2], 0.0); // pos 2: overwritten by insertion
+                                 // After insertion: query_pos = 5, so next = bases use qual[5], qual[6], qual[7]
         assert!((err[3] - phred_to_prob(35)).abs() < 1e-7); // pos 3
         assert!((err[4] - phred_to_prob(40)).abs() < 1e-7); // pos 4
         assert!((err[5] - phred_to_prob(30)).abs() < 1e-7); // pos 5
@@ -962,11 +960,7 @@ mod tests {
     fn test_error_vector_with_mismatch() {
         // CIGAR: 2=1X2= → 5 ref positions
         // Mismatch gets same treatment as match in error vector
-        let cigar = CigarString(vec![
-            Cigar::Equal(2),
-            Cigar::Diff(1),
-            Cigar::Equal(2),
-        ]);
+        let cigar = CigarString(vec![Cigar::Equal(2), Cigar::Diff(1), Cigar::Equal(2)]);
         let seq = b"ACAAC";
         let qual = &[30, 20, 15, 25, 35];
         let record = make_record(cigar, seq, qual, 100);
@@ -1033,10 +1027,16 @@ mod tests {
     #[test]
     fn test_encode_base() {
         init_log();
-        debug!("encode_base: A={} T={} C={} G={} N={} a={} n={}",
-            encode_base(b'A'), encode_base(b'T'), encode_base(b'C'),
-            encode_base(b'G'), encode_base(b'N'), encode_base(b'a'),
-            encode_base(b'n'));
+        debug!(
+            "encode_base: A={} T={} C={} G={} N={} a={} n={}",
+            encode_base(b'A'),
+            encode_base(b'T'),
+            encode_base(b'C'),
+            encode_base(b'G'),
+            encode_base(b'N'),
+            encode_base(b'a'),
+            encode_base(b'n')
+        );
         assert_eq!(encode_base(b'A'), 0);
         assert_eq!(encode_base(b'T'), 1);
         assert_eq!(encode_base(b'C'), 2);
@@ -1061,8 +1061,10 @@ mod tests {
 
         let data = extract_read_qseqs(&record).unwrap();
 
-        debug!("all_matches: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}, qual={:?}",
-            data.ref_to_query, data.query_to_ref, data.qseq_encoded, data.qseq_qualities);
+        debug!(
+            "all_matches: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}, qual={:?}",
+            data.ref_to_query, data.query_to_ref, data.qseq_encoded, data.qseq_qualities
+        );
 
         // ref_to_query: offset 0→qi0, 1→qi1, 2→qi2, 3→qi3, 4→qi4
         assert_eq!(data.ref_to_query, vec![0, 1, 2, 3, 4]);
@@ -1080,17 +1082,15 @@ mod tests {
         // CIGAR: 3= 2D 3= at pos 10 → ref span 8 (3+2+3), query len 6
         // query: A C G T A C
         // ref:   A C G - - T A C
-        let cigar = CigarString(vec![
-            Cigar::Equal(3),
-            Cigar::Del(2),
-            Cigar::Equal(3),
-        ]);
+        let cigar = CigarString(vec![Cigar::Equal(3), Cigar::Del(2), Cigar::Equal(3)]);
         let record = make_record(cigar, b"ACGTAC", &[30; 6], 10);
 
         let data = extract_read_qseqs(&record).unwrap();
 
-        debug!("deletion: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}",
-            data.ref_to_query, data.query_to_ref, data.qseq_encoded);
+        debug!(
+            "deletion: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}",
+            data.ref_to_query, data.query_to_ref, data.qseq_encoded
+        );
 
         // ref_to_query length = 8 (ref span)
         // offsets 0,1,2 → qi 0,1,2; offsets 3,4 → -1 (deletion); offsets 5,6,7 → qi 3,4,5
@@ -1111,17 +1111,15 @@ mod tests {
         // query: A C T G G A T
         //         matched  ins  matched
         // ref:   A C _ _ G A T
-        let cigar = CigarString(vec![
-            Cigar::Equal(2),
-            Cigar::Ins(2),
-            Cigar::Equal(3),
-        ]);
+        let cigar = CigarString(vec![Cigar::Equal(2), Cigar::Ins(2), Cigar::Equal(3)]);
         let record = make_record(cigar, b"ACTGGAT", &[30; 7], 50);
 
         let data = extract_read_qseqs(&record).unwrap();
 
-        debug!("insertion: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}",
-            data.ref_to_query, data.query_to_ref, data.qseq_encoded);
+        debug!(
+            "insertion: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}",
+            data.ref_to_query, data.query_to_ref, data.qseq_encoded
+        );
 
         // ref_to_query length = 5 (ref span)
         // offset 0→qi0, 1→qi1, 2→qi4, 3→qi5, 4→qi6
@@ -1146,8 +1144,10 @@ mod tests {
 
         let data = extract_read_qseqs(&record).unwrap();
 
-        debug!("softclip: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}",
-            data.ref_to_query, data.query_to_ref, data.qseq_encoded);
+        debug!(
+            "softclip: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}",
+            data.ref_to_query, data.query_to_ref, data.qseq_encoded
+        );
 
         // ref_to_query length = 3
         // offset 0→qi2, 1→qi3, 2→qi4
@@ -1165,17 +1165,15 @@ mod tests {
     fn test_extract_qseqs_with_snv() {
         init_log();
         // CIGAR: 2= 1X 2= at pos 200 → ref span 5, query len 5
-        let cigar = CigarString(vec![
-            Cigar::Equal(2),
-            Cigar::Diff(1),
-            Cigar::Equal(2),
-        ]);
+        let cigar = CigarString(vec![Cigar::Equal(2), Cigar::Diff(1), Cigar::Equal(2)]);
         let record = make_record(cigar, b"ACTAG", &[30, 30, 25, 30, 30], 200);
 
         let data = extract_read_qseqs(&record).unwrap();
 
-        debug!("snv: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}",
-            data.ref_to_query, data.query_to_ref, data.qseq_encoded);
+        debug!(
+            "snv: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}",
+            data.ref_to_query, data.query_to_ref, data.qseq_encoded
+        );
 
         // Both maps are 1:1 (SNV doesn't affect positional mapping)
         assert_eq!(data.ref_to_query, vec![0, 1, 2, 3, 4]);
@@ -1205,8 +1203,10 @@ mod tests {
 
         let data = extract_read_qseqs(&record).unwrap();
 
-        debug!("complex: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}, qual={:?}",
-            data.ref_to_query, data.query_to_ref, data.qseq_encoded, data.qseq_qualities);
+        debug!(
+            "complex: ref_to_query={:?}, query_to_ref={:?}, qseq={:?}, qual={:?}",
+            data.ref_to_query, data.query_to_ref, data.qseq_encoded, data.qseq_qualities
+        );
 
         // ref span = 2(=) + 2(=) + 1(D) + 1(=) = 6
         assert_eq!(data.ref_to_query.len(), 6);
@@ -1238,7 +1238,10 @@ mod tests {
         let data2 = extract_read_qseqs_cached(&record, &mut cache).unwrap();
         assert_eq!(cache.len(), 1); // no new entry
 
-        debug!("caching: data1.qseq={:?}, data2.qseq={:?}", data1.qseq_encoded, data2.qseq_encoded);
+        debug!(
+            "caching: data1.qseq={:?}, data2.qseq={:?}",
+            data1.qseq_encoded, data2.qseq_encoded
+        );
         assert_eq!(data1.qseq_encoded, data2.qseq_encoded);
         assert_eq!(data1.ref_to_query, data2.ref_to_query);
         assert_eq!(data1.query_to_ref, data2.query_to_ref);
@@ -1253,17 +1256,15 @@ mod tests {
         // ref_positions output: {10:0, 11:1, 12:2, (13:-1, 14:-1), 15:3, 16:4, 17:5, 18:6, 19:7}
         //
         // CIGAR: 3= 2D 5= at pos 10
-        let cigar = CigarString(vec![
-            Cigar::Equal(3),
-            Cigar::Del(2),
-            Cigar::Equal(5),
-        ]);
+        let cigar = CigarString(vec![Cigar::Equal(3), Cigar::Del(2), Cigar::Equal(5)]);
         let record = make_record(cigar, b"ACGTACGT", &[30; 8], 10);
 
         let data = extract_read_qseqs(&record).unwrap();
 
-        debug!("python_del_example: ref_to_query={:?}, query_to_ref={:?}",
-            data.ref_to_query, data.query_to_ref);
+        debug!(
+            "python_del_example: ref_to_query={:?}, query_to_ref={:?}",
+            data.ref_to_query, data.query_to_ref
+        );
 
         // ref span = 3 + 2 + 5 = 10 (ref offsets 0..9, abs positions 10..19)
         assert_eq!(data.ref_to_query.len(), 10);
@@ -1283,17 +1284,15 @@ mod tests {
         // ref_positions output: [0, 1, 4, 5, 6, 7]
         //
         // CIGAR: 2= 2I 4= at pos 10
-        let cigar = CigarString(vec![
-            Cigar::Equal(2),
-            Cigar::Ins(2),
-            Cigar::Equal(4),
-        ]);
+        let cigar = CigarString(vec![Cigar::Equal(2), Cigar::Ins(2), Cigar::Equal(4)]);
         let record = make_record(cigar, b"ACGTACGT", &[30; 8], 10);
 
         let data = extract_read_qseqs(&record).unwrap();
 
-        debug!("python_ins_example: ref_to_query={:?}, query_to_ref={:?}",
-            data.ref_to_query, data.query_to_ref);
+        debug!(
+            "python_ins_example: ref_to_query={:?}, query_to_ref={:?}",
+            data.ref_to_query, data.query_to_ref
+        );
 
         // ref span = 2 + 4 = 6 (ref offsets 0..5, abs positions 10..15)
         assert_eq!(data.ref_to_query.len(), 6);
@@ -1472,5 +1471,4 @@ mod tests {
         let bool_arr = array![true, true, true, true];
         assert_eq!(count_continuous_blocks(&bool_arr), 1);
     }
-
 }

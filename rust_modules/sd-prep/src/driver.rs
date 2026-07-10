@@ -185,9 +185,12 @@ fn load_and_filter_sd_map(
             continue; // not a paired-SD row
         }
         let parse_i64 = |s: &str| s.parse::<i64>().ok();
-        let (Some(s1), Some(e1), Some(s2), Some(e2)) =
-            (parse_i64(f[1]), parse_i64(f[2]), parse_i64(f[4]), parse_i64(f[5]))
-        else {
+        let (Some(s1), Some(e1), Some(s2), Some(e2)) = (
+            parse_i64(f[1]),
+            parse_i64(f[2]),
+            parse_i64(f[4]),
+            parse_i64(f[5]),
+        ) else {
             continue;
         };
         let chr1 = f[0];
@@ -268,8 +271,7 @@ fn umbrella_filter_and_dedup(rows: &[BinSdRow]) -> UmbrellaResult {
         idxs.sort_by(|&a, &b| {
             let ra = &rows[a];
             let rb = &rows[b];
-            (&ra.a.chrom, ra.a.start, ra.a.end)
-                .cmp(&(&rb.a.chrom, rb.a.start, rb.a.end))
+            (&ra.a.chrom, ra.a.start, ra.a.end).cmp(&(&rb.a.chrom, rb.a.start, rb.a.end))
         });
         let pairs: Vec<Pair> = idxs
             .iter()
@@ -309,8 +311,12 @@ fn umbrella_filter_and_dedup(rows: &[BinSdRow]) -> UmbrellaResult {
         let rj = &rows[j];
         ri.bam_region
             .cmp(&rj.bam_region)
-            .then_with(|| (&ri.a.chrom, ri.a.start, ri.a.end).cmp(&(&rj.a.chrom, rj.a.start, rj.a.end)))
-            .then_with(|| (&ri.b.chrom, ri.b.start, ri.b.end).cmp(&(&rj.b.chrom, rj.b.start, rj.b.end)))
+            .then_with(|| {
+                (&ri.a.chrom, ri.a.start, ri.a.end).cmp(&(&rj.a.chrom, rj.a.start, rj.a.end))
+            })
+            .then_with(|| {
+                (&ri.b.chrom, ri.b.start, ri.b.end).cmp(&(&rj.b.chrom, rj.b.start, rj.b.end))
+            })
     });
 
     // query_nodes = distinct chr_1 segments over the umbrella-kept rows, BEFORE
@@ -330,9 +336,25 @@ fn umbrella_filter_and_dedup(rows: &[BinSdRow]) -> UmbrellaResult {
     let mut bin_rows: Vec<BinSdRow> = Vec::new();
     for &i in &kept_global {
         let r = &rows[i];
-        let ka = format!("{}:{}-{}:{}", r.a.chrom, r.a.start, r.a.end, strand_str(r.a.strand));
-        let kb = format!("{}:{}-{}:{}", r.b.chrom, r.b.start, r.b.end, strand_str(r.b.strand));
-        let key = if ka <= kb { (ka.clone(), kb.clone()) } else { (kb.clone(), ka.clone()) };
+        let ka = format!(
+            "{}:{}-{}:{}",
+            r.a.chrom,
+            r.a.start,
+            r.a.end,
+            strand_str(r.a.strand)
+        );
+        let kb = format!(
+            "{}:{}-{}:{}",
+            r.b.chrom,
+            r.b.start,
+            r.b.end,
+            strand_str(r.b.strand)
+        );
+        let key = if ka <= kb {
+            (ka.clone(), kb.clone())
+        } else {
+            (kb.clone(), ka.clone())
+        };
         if !seen.insert(key) {
             continue;
         }
@@ -367,7 +389,11 @@ fn write_filtered_sd_map(path: &Path, rows: &[BinSdRow]) -> Result<()> {
         path: path.display().to_string(),
         source: e,
     };
-    writeln!(w, "chr_1\tstart_1\tend_1\tstrand1\tchr_2\tstart_2\tend_2\tstrand2\tmismatch_rate").map_err(io)?;
+    writeln!(
+        w,
+        "chr_1\tstart_1\tend_1\tstrand1\tchr_2\tstart_2\tend_2\tstrand2\tmismatch_rate"
+    )
+    .map_err(io)?;
     for r in rows {
         writeln!(
             w,
@@ -437,7 +463,11 @@ fn build_rg_groups(
     groups.sort_by(|a, b| {
         let key = |g: &RgGroup| -> i64 {
             let qsz: i64 = g.subclusters.iter().map(|s| s.fc.size()).sum();
-            let ccnt: i64 = g.subclusters.iter().map(|s| s.counterparts.len() as i64).sum();
+            let ccnt: i64 = g
+                .subclusters
+                .iter()
+                .map(|s| s.counterparts.len() as i64)
+                .sum();
             qsz * ccnt
         };
         key(b).cmp(&key(a))
@@ -479,7 +509,10 @@ fn write_bed6(path: &Path, ivs: &[GenomicInterval]) -> Result<()> {
         writeln!(
             w,
             "{}\t{}\t{}\t.\t.\t{}",
-            iv.chrom, iv.start, iv.end, strand_str(iv.strand)
+            iv.chrom,
+            iv.start,
+            iv.end,
+            strand_str(iv.strand)
         )
         .map_err(io)?;
     }
@@ -736,7 +769,10 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
 
     // ── Step 1: multi-align depth pick ───────────────────────────────────────
     let target = sdrecall_io::read_bed(&paths.target_bed)?;
-    log::info!("Phase-1: picking multi-align regions over {} target intervals", target.len());
+    log::info!(
+        "Phase-1: picking multi-align regions over {} target intervals",
+        target.len()
+    );
     let multi_align = crate::multialign::pick_multialigned_regions(
         &paths.input_bam,
         &target,
@@ -754,13 +790,19 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
         })?;
     }
     sdrecall_io::write_bed(&paths.multi_align_bed, &multi_align)?;
-    log::info!("Wrote multi-align BED to {}", paths.multi_align_bed.display());
+    log::info!(
+        "Wrote multi-align BED to {}",
+        paths.multi_align_bed.display()
+    );
 
     // ── Steps 2-3: SD-map load + umbrella filter + dedup ─────────────────────
     let bin_rows = load_and_filter_sd_map(&paths.reference_sd_map, &multi_align, params.avg_frag)?;
     log::info!("{} SD rows after target overlap", bin_rows.len());
     let umbrella = umbrella_filter_and_dedup(&bin_rows);
-    log::info!("{} SD pairs after umbrella filter + dedup", umbrella.sd_rows.len());
+    log::info!(
+        "{} SD pairs after umbrella filter + dedup",
+        umbrella.sd_rows.len()
+    );
     let filtered_sd_map = paths.filtered_sd_map();
     write_filtered_sd_map(&filtered_sd_map, &umbrella.deduped)?;
 
@@ -831,8 +873,8 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
 fn mean_read_length(bam: &Path) -> Result<Option<f64>> {
     use rust_htslib::bam::{self, Read as _};
     const SAMPLE: usize = 100_000;
-    let mut reader =
-        bam::Reader::from_path(bam).map_err(|e| SdError::Htslib(format!("open {}: {e}", bam.display())))?;
+    let mut reader = bam::Reader::from_path(bam)
+        .map_err(|e| SdError::Htslib(format!("open {}: {e}", bam.display())))?;
     let mut total: u64 = 0;
     let mut count: usize = 0;
     let mut rec = bam::Record::new();
@@ -938,10 +980,18 @@ mod tests {
             },
         ];
         let res = umbrella_filter_and_dedup(&rows);
-        assert_eq!(res.sd_rows.len(), 1, "reversed duplicate collapses to one SD pair");
+        assert_eq!(
+            res.sd_rows.len(),
+            1,
+            "reversed duplicate collapses to one SD pair"
+        );
         assert_eq!(res.deduped.len(), 1);
         // Both chr_1 segments appear as query nodes (pre-frozenset-dedup): the two
         // rows have chr_1 = a and chr_1 = b respectively.
-        assert_eq!(res.query_nodes.len(), 2, "query nodes taken before frozenset dedup");
+        assert_eq!(
+            res.query_nodes.len(),
+            2,
+            "query nodes taken before frozenset dedup"
+        );
     }
 }

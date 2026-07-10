@@ -52,7 +52,8 @@ impl FragParams {
     /// The minimum-region floor `max(mean_read_length, avg_frag - 2*std_frag)`
     /// (graph_traversal.py l.53, l.67).
     fn floor(&self) -> f64 {
-        self.mean_read_length.max(self.avg_frag - 2.0 * self.std_frag)
+        self.mean_read_length
+            .max(self.avg_frag - 2.0 * self.std_frag)
     }
 }
 
@@ -163,7 +164,12 @@ pub fn prune_graph(g: &SdGraph, frag: &FragParams) -> SdGraph {
     // (1) carry over nodes that are NOT small SDs.
     for v in g.g.node_indices() {
         let key = &g.g[v];
-        if !is_small_sd(key.size(), frag.mean_read_length, frag.avg_frag, frag.std_frag) {
+        if !is_small_sd(
+            key.size(),
+            frag.mean_read_length,
+            frag.avg_frag,
+            frag.std_frag,
+        ) {
             pruned.node(key.clone());
         }
     }
@@ -217,7 +223,11 @@ pub fn prune_graph(g: &SdGraph, frag: &FragParams) -> SdGraph {
 /// is structurally impossible — it would require either a petgraph soundness bug
 /// or memory corruption. We abort on violation rather than propagating a
 /// recoverable error that would be silently swallowed upstream.
-fn route_vertices(g: &SdGraph, src: NodeIndex, edges: &[petgraph::graph::EdgeIndex]) -> Vec<NodeIndex> {
+fn route_vertices(
+    g: &SdGraph,
+    src: NodeIndex,
+    edges: &[petgraph::graph::EdgeIndex],
+) -> Vec<NodeIndex> {
     let mut verts = Vec::with_capacity(edges.len() + 1);
     verts.push(src);
     let mut cur = src;
@@ -280,7 +290,9 @@ fn inspect_cnode_along_route(
                 // Python sys.exit(1) here; we treat as a dropped route.
                 log::error!(
                     "SD route step produced empty window for {:?} (rela {}..{})",
-                    c.key, c.rela_start, c.rela_end
+                    c.key,
+                    c.rela_start,
+                    c.rela_end
                 );
                 return None;
             }
@@ -543,15 +555,18 @@ fn overlap_neighbor_qnodes(
     if !qnode_vertices.contains(&v) {
         return out;
     }
-    for e in g
-        .g
-        .edges(v)
-        .chain(g.g.edges_directed(v, petgraph::Direction::Incoming))
+    for e in
+        g.g.edges(v)
+            .chain(g.g.edges_directed(v, petgraph::Direction::Incoming))
     {
         if !e.weight().is_overlap {
             continue;
         }
-        let other = if e.source() == v { e.target() } else { e.source() };
+        let other = if e.source() == v {
+            e.target()
+        } else {
+            e.source()
+        };
         if qnode_vertices.contains(&other) {
             out.push(g.g[other].clone());
         }
@@ -894,7 +909,13 @@ mod tests {
         let mut g = SdGraph::new();
         let q = nk_full("chr1", 10000, 12000, Strand::Forward);
         let c = nk_full("chr2", 20000, 22000, Strand::Forward);
-        add_edge_keys(&mut g, q.clone(), c.clone(), EdgeKind::SegmentalDuplication, 0.02);
+        add_edge_keys(
+            &mut g,
+            q.clone(),
+            c.clone(),
+            EdgeKind::SegmentalDuplication,
+            0.02,
+        );
         let qv = g.index.get(&q).copied().unwrap();
         let cv = g.index.get(&c).copied().unwrap();
         let (_, edges) = dijkstra_route(&g, qv, cv).unwrap();
@@ -919,7 +940,13 @@ mod tests {
         let mut g = SdGraph::new();
         let q = nk_full("chr1", 10000, 12000, Strand::Forward);
         let c = nk_full("chr2", 20000, 22000, Strand::Reverse);
-        add_edge_keys(&mut g, q.clone(), c.clone(), EdgeKind::SegmentalDuplication, 0.02);
+        add_edge_keys(
+            &mut g,
+            q.clone(),
+            c.clone(),
+            EdgeKind::SegmentalDuplication,
+            0.02,
+        );
         let qv = g.index.get(&q).copied().unwrap();
         let cv = g.index.get(&c).copied().unwrap();
         let (_, edges) = dijkstra_route(&g, qv, cv).unwrap();
@@ -966,7 +993,10 @@ mod tests {
         let combined = combined_edge(1.25, 0.03);
 
         // ep["weight"] is the PO weight on a combined edge (Python keeps it).
-        assert!((combined.weight() - 1.25).abs() < 1e-9, "ep[weight] = PO weight, not 0.03");
+        assert!(
+            (combined.weight() - 1.25).abs() < 1e-9,
+            "ep[weight] = PO weight, not 0.03"
+        );
 
         // (a) "last edge is PO" + (b) "adjacent PO edges" use the INDEPENDENT overlap
         // flag (Python `ep["overlap"]=="True"`), which is TRUE for a combined edge.
@@ -984,8 +1014,14 @@ mod tests {
             .filter(|a| a.is_sd)
             .map(|a| 1.0 - a.weight())
             .product();
-        assert!(sd_product < 0.0, "combined edge (1 - po_weight < 0) poisons the SD-product");
-        assert!(sd_product <= 0.8, "→ route is rejected by check (c), as in Python");
+        assert!(
+            sd_product < 0.0,
+            "combined edge (1 - po_weight < 0) poisons the SD-product"
+        );
+        assert!(
+            sd_product <= 0.8,
+            "→ route is rejected by check (c), as in Python"
+        );
 
         // (d) the PO-prune uses the overlap flag + ep["weight"] (= po_weight). With
         // smaller_node_size 40 and cutoff 350: overlap_size = 40*(1/1.25)=32 < 350 but
@@ -1041,7 +1077,7 @@ mod tests {
         // counter_qnodes=[q2]; q2: nothing.
         let c0 = HomoseqRegion::new(q2.clone(), NodeIndex::new(2));
         let results = vec![
-            (vec![c0], vec![q2.clone()]), // q0 → wires q0-q2
+            (vec![c0], vec![q2.clone()]),   // q0 → wires q0-q2
             (Vec::new(), vec![q2.clone()]), // q1 (zero counterparts) → NO edge
             (Vec::new(), Vec::new()),       // q2
         ];
@@ -1050,7 +1086,10 @@ mod tests {
 
         // Only q0 lands in the paralog pairs (q1's empty counterpart set is skipped).
         assert!(pairs.contains_key(&q0));
-        assert!(!pairs.contains_key(&q1), "q1 has zero counterparts → not a paralog pair");
+        assert!(
+            !pairs.contains_key(&q1),
+            "q1 has zero counterparts → not a paralog pair"
+        );
         // All three qnodes are vertices (added up front), but exactly ONE grouping
         // edge is wired (q0-q2). The pre-fix bug would also wire q1-q2 → 2 edges.
         assert_eq!(connected.len(), 3, "all qnodes are vertices");

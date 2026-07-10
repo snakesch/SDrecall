@@ -84,7 +84,12 @@ pub fn lp_solve_remained_haplotypes_with_obj(
 
     let hap_no = hap_coefficients.len();
     if hap_no == 0 {
-        return (FxHashSet::default(), FxHashSet::default(), BilcStatus::Optimal, 0.0);
+        return (
+            FxHashSet::default(),
+            FxHashSet::default(),
+            BilcStatus::Optimal,
+            0.0,
+        );
     }
 
     // Build bidirectional index <-> hap_id mappings.
@@ -123,9 +128,7 @@ pub fn lp_solve_remained_haplotypes_with_obj(
     }
     let inspect_region_no = region_groups.len();
 
-    debug!(
-        "BILC: constraint matrix shape ({inspect_region_no}, {hap_no})"
-    );
+    debug!("BILC: constraint matrix shape ({inspect_region_no}, {hap_no})");
 
     // --- Step 3: Build the HiGHS model ---
     let mut pb = RowProblem::default();
@@ -140,10 +143,7 @@ pub fn lp_solve_remained_haplotypes_with_obj(
             let cost = -coeff; // minimize negative = maximize
             let col = pb.add_integer_column(cost, 0.0..=1.0);
             if i < 10 {
-                debug!(
-                    "BILC: var {} hap_id={} cost={}",
-                    i, index_to_hapid[i], cost
-                );
+                debug!("BILC: var {} hap_id={} cost={}", i, index_to_hapid[i], cost);
             }
             col
         })
@@ -254,7 +254,15 @@ mod tests {
     use super::*;
 
     /// Helper: build a BilcRecord with defaults for fields not under test.
-    fn rec(chrom: &str, start: i32, end: i32, hap_id: i32, coeff: f64, var_count: i32, varc_rank: i32) -> BilcRecord {
+    fn rec(
+        chrom: &str,
+        start: i32,
+        end: i32,
+        hap_id: i32,
+        coeff: f64,
+        var_count: i32,
+        varc_rank: i32,
+    ) -> BilcRecord {
         BilcRecord {
             chrom: chrom.to_string(),
             start,
@@ -411,10 +419,7 @@ mod tests {
     fn test_bilc_status_display() {
         assert_eq!(format!("{}", BilcStatus::Optimal), "Optimal");
         assert_eq!(format!("{}", BilcStatus::Infeasible), "Infeasible");
-        assert_eq!(
-            format!("{}", BilcStatus::Other("Foo".into())),
-            "Foo"
-        );
+        assert_eq!(format!("{}", BilcStatus::Other("Foo".into())), "Foo");
     }
 
     #[test]

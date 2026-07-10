@@ -88,7 +88,7 @@ pub fn component_labels(g: &SdGraph, edge_filter: impl Fn(&EdgeAttr) -> bool) ->
 pub fn greedy_vertex_coloring(adj: &[Vec<u32>]) -> Vec<u32> {
     let n = adj.len();
     let mut colors = vec![u32::MAX; n]; // MAX = uncolored
-    // Scratch set of forbidden colors, reused per vertex.
+                                        // Scratch set of forbidden colors, reused per vertex.
     let mut forbidden: Vec<bool> = Vec::new();
     for v in 0..n {
         // Mark colors used by already-colored neighbors.
@@ -153,12 +153,19 @@ pub fn dijkstra_route(
         }
         let nidx = NodeIndex::new(node);
         // Undirected: iterate both outgoing and incoming edges.
-        for e in g.g.edges(nidx).chain(g.g.edges_directed(nidx, petgraph::Direction::Incoming)) {
+        for e in
+            g.g.edges(nidx)
+                .chain(g.g.edges_directed(nidx, petgraph::Direction::Incoming))
+        {
             // `e.weight()` is petgraph's edge payload (&EdgeAttr); `.weight()` is
             // Python's `graph.ep["weight"]` (PO weight wins on a combined edge).
             let w = e.weight().weight();
             // The neighbor is the endpoint that is not `node`.
-            let other = if e.source() == nidx { e.target() } else { e.source() };
+            let other = if e.source() == nidx {
+                e.target()
+            } else {
+                e.source()
+            };
             let oi = other.index();
             if visited[oi] {
                 continue;
@@ -321,7 +328,13 @@ mod tests {
         add_edge(&mut g, 1, 2, EdgeKind::SegmentalDuplication, 0.1);
         add_edge(&mut g, 2, 3, EdgeKind::SegmentalDuplication, 0.1);
         let labels = component_labels(&g, |_| true);
-        assert_eq!(labels.iter().collect::<std::collections::BTreeSet<_>>().len(), 1);
+        assert_eq!(
+            labels
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            1
+        );
     }
 
     #[test]
@@ -406,9 +419,12 @@ mod tests {
         let part = color_partition(&colors);
         assert_eq!(
             part,
-            [[0usize, 2].into_iter().collect(), [1usize, 3].into_iter().collect()]
-                .into_iter()
-                .collect()
+            [
+                [0usize, 2].into_iter().collect(),
+                [1usize, 3].into_iter().collect()
+            ]
+            .into_iter()
+            .collect()
         );
     }
 
@@ -446,7 +462,9 @@ mod tests {
         // Property: the coloring is always proper. Deterministic LCG, several graphs.
         let mut seed: u64 = 0x1234_5678;
         let mut rng = || {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (seed >> 33) as u32
         };
         for _ in 0..50 {
@@ -461,7 +479,10 @@ mod tests {
                 }
             }
             let colors = greedy_vertex_coloring(&adj);
-            assert!(is_proper(&adj, &colors), "improper coloring on random graph");
+            assert!(
+                is_proper(&adj, &colors),
+                "improper coloring on random graph"
+            );
         }
     }
 

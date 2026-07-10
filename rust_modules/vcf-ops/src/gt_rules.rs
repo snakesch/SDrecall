@@ -125,40 +125,97 @@ pub fn should_force_hom(stats: &SampleStats, rules: &[GtRule]) -> bool {
 /// (strict), encoded as `min_dp: 6` (`>5` ⇔ `>=6` on integers).
 pub static MATCHED_PAIR_LADDER: &[GtRule] = &[
     // ralt/rdp >= 0.9
-    GtRule { min_num_hps: 0, min_ratio: 0.9, min_dp: 0, max_gq: None, alt_ge_ref: false },
+    GtRule {
+        min_num_hps: 0,
+        min_ratio: 0.9,
+        min_dp: 0,
+        max_gq: None,
+        alt_ge_ref: false,
+    },
     // num_hps >= 2 and ralt/rdp >= 0.33
-    GtRule { min_num_hps: 2, min_ratio: 0.33, min_dp: 0, max_gq: None, alt_ge_ref: false },
+    GtRule {
+        min_num_hps: 2,
+        min_ratio: 0.33,
+        min_dp: 0,
+        max_gq: None,
+        alt_ge_ref: false,
+    },
     // num_hps >= 3 and ralt/rdp >= 0.30
-    GtRule { min_num_hps: 3, min_ratio: 0.30, min_dp: 0, max_gq: None, alt_ge_ref: false },
+    GtRule {
+        min_num_hps: 3,
+        min_ratio: 0.30,
+        min_dp: 0,
+        max_gq: None,
+        alt_ge_ref: false,
+    },
     // num_hps >= 4 and ralt/rdp >= 0.25
-    GtRule { min_num_hps: 4, min_ratio: 0.25, min_dp: 0, max_gq: None, alt_ge_ref: false },
+    GtRule {
+        min_num_hps: 4,
+        min_ratio: 0.25,
+        min_dp: 0,
+        max_gq: None,
+        alt_ge_ref: false,
+    },
     // rgq < 5 and ralt/rdp >= 0.5 and rdp > 5  (rdp>5 ⇔ total_dp>=6)
-    GtRule { min_num_hps: 0, min_ratio: 0.5, min_dp: 6, max_gq: Some(5), alt_ge_ref: false },
+    GtRule {
+        min_num_hps: 0,
+        min_ratio: 0.5,
+        min_dp: 6,
+        max_gq: Some(5),
+        alt_ge_ref: false,
+    },
 ];
 
 /// `merge_with_priority` query-only finalizer (L598-606). All three clauses AND
 /// `(alt_dp + ref_dp) >= 5`.
 pub static QUERY_ONLY_LADDER: &[GtRule] = &[
     // num_hps >= 2 and ratio >= 0.55 and dp >= 5
-    GtRule { min_num_hps: 2, min_ratio: 0.55, min_dp: 5, max_gq: None, alt_ge_ref: false },
+    GtRule {
+        min_num_hps: 2,
+        min_ratio: 0.55,
+        min_dp: 5,
+        max_gq: None,
+        alt_ge_ref: false,
+    },
     // num_hps >= 4 and alt_dp >= ref_dp and dp >= 5
-    GtRule { min_num_hps: 4, min_ratio: 0.0, min_dp: 5, max_gq: None, alt_ge_ref: true },
+    GtRule {
+        min_num_hps: 4,
+        min_ratio: 0.0,
+        min_dp: 5,
+        max_gq: None,
+        alt_ge_ref: true,
+    },
     // ratio >= 0.9 and dp >= 5
-    GtRule { min_num_hps: 0, min_ratio: 0.9, min_dp: 5, max_gq: None, alt_ge_ref: false },
+    GtRule {
+        min_num_hps: 0,
+        min_ratio: 0.9,
+        min_dp: 5,
+        max_gq: None,
+        alt_ge_ref: false,
+    },
 ];
 
 /// `merge_with_priority` ref-only finalizer (L650): `gq < 5 and alt/total >= 0.7`.
 /// `total_dp = max(1, …)` is captured by [`SampleStats::alt_ratio`].
-pub static REF_ONLY_LADDER: &[GtRule] = &[
-    GtRule { min_num_hps: 0, min_ratio: 0.7, min_dp: 0, max_gq: Some(5), alt_ge_ref: false },
-];
+pub static REF_ONLY_LADDER: &[GtRule] = &[GtRule {
+    min_num_hps: 0,
+    min_ratio: 0.7,
+    min_dp: 0,
+    max_gq: Some(5),
+    alt_ge_ref: false,
+}];
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn stats(ref_dp: i32, alt_dp: i32, gq: i32, num_hps: usize) -> SampleStats {
-        SampleStats { ref_dp, alt_dp, gq, num_hps }
+        SampleStats {
+            ref_dp,
+            alt_dp,
+            gq,
+            num_hps,
+        }
     }
 
     #[test]
@@ -176,28 +233,43 @@ mod tests {
     #[test]
     fn matched_ratio_090_boundary() {
         // ralt/rdp = 0.89 (89/100) → no rule fires; 0.90 (90/100) → first rule.
-        assert!(!should_force_hom(&stats(11, 89, 30, 1), MATCHED_PAIR_LADDER));
+        assert!(!should_force_hom(
+            &stats(11, 89, 30, 1),
+            MATCHED_PAIR_LADDER
+        ));
         assert!(should_force_hom(&stats(10, 90, 30, 1), MATCHED_PAIR_LADDER));
     }
 
     #[test]
     fn matched_numhps2_033_boundary() {
         // num_hps=2: ratio 0.32 → no; 0.33 → yes.
-        assert!(!should_force_hom(&stats(68, 32, 30, 2), MATCHED_PAIR_LADDER));
+        assert!(!should_force_hom(
+            &stats(68, 32, 30, 2),
+            MATCHED_PAIR_LADDER
+        ));
         assert!(should_force_hom(&stats(67, 33, 30, 2), MATCHED_PAIR_LADDER));
         // num_hps=1 at ratio 0.33 → no (needs >=2, and 0.33 < 0.9).
-        assert!(!should_force_hom(&stats(67, 33, 30, 1), MATCHED_PAIR_LADDER));
+        assert!(!should_force_hom(
+            &stats(67, 33, 30, 1),
+            MATCHED_PAIR_LADDER
+        ));
     }
 
     #[test]
     fn matched_numhps3_030_boundary() {
-        assert!(!should_force_hom(&stats(71, 29, 30, 3), MATCHED_PAIR_LADDER));
+        assert!(!should_force_hom(
+            &stats(71, 29, 30, 3),
+            MATCHED_PAIR_LADDER
+        ));
         assert!(should_force_hom(&stats(70, 30, 30, 3), MATCHED_PAIR_LADDER));
     }
 
     #[test]
     fn matched_numhps4_025_boundary() {
-        assert!(!should_force_hom(&stats(76, 24, 30, 4), MATCHED_PAIR_LADDER));
+        assert!(!should_force_hom(
+            &stats(76, 24, 30, 4),
+            MATCHED_PAIR_LADDER
+        ));
         assert!(should_force_hom(&stats(75, 25, 30, 4), MATCHED_PAIR_LADDER));
     }
 
@@ -207,7 +279,7 @@ mod tests {
         // (ratio 0.5 < 0.9). gq=4 fires, gq=5 does not.
         assert!(should_force_hom(&stats(3, 3, 4, 1), MATCHED_PAIR_LADDER)); // 3/6=0.5, dp6, gq4
         assert!(!should_force_hom(&stats(3, 3, 5, 1), MATCHED_PAIR_LADDER)); // gq=5 not <5
-        // dp must be >5: 2/4=0.5 but dp=4 → no.
+                                                                             // dp must be >5: 2/4=0.5 but dp=4 → no.
         assert!(!should_force_hom(&stats(2, 2, 4, 1), MATCHED_PAIR_LADDER));
         // ratio 0.5 at dp exactly 6 (alt 3 ref 3) already covered; dp 6 with ratio
         // 0.49 (alt slightly less) cannot occur on ints — use 5/12≈0.416 → no.
@@ -233,7 +305,7 @@ mod tests {
         // num_hps=4, alt<ref → no; alt>=ref & dp>=5 → yes.
         assert!(!should_force_hom(&stats(4, 3, 30, 4), QUERY_ONLY_LADDER)); // alt<ref, ratio 3/7<0.55
         assert!(should_force_hom(&stats(3, 4, 30, 4), QUERY_ONLY_LADDER)); // alt>=ref, dp7
-        // alt>=ref but dp 4 (<5) → no.
+                                                                           // alt>=ref but dp 4 (<5) → no.
         assert!(!should_force_hom(&stats(2, 2, 30, 4), QUERY_ONLY_LADDER));
     }
 
@@ -242,7 +314,7 @@ mod tests {
         // num_hps low so only the ratio>=0.9 rule applies.
         assert!(!should_force_hom(&stats(2, 7, 30, 1), QUERY_ONLY_LADDER)); // 7/9≈0.78 <0.9
         assert!(should_force_hom(&stats(1, 9, 30, 1), QUERY_ONLY_LADDER)); // 9/10=0.9, dp10
-        // ratio 1.0 but dp 4 → no.
+                                                                           // ratio 1.0 but dp 4 → no.
         assert!(!should_force_hom(&stats(0, 4, 30, 1), QUERY_ONLY_LADDER));
     }
 

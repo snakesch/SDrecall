@@ -319,7 +319,11 @@ impl Paths {
 
     /// Build `sd_prep::PrepParams` from CLI args. sd-prep auto-derives frag
     /// stats from the BAM, so placeholders are acceptable.
-    pub fn to_prep_params(&self, common: &crate::cli::CommonArgs, prep: &crate::cli::PreparationArgs) -> sd_prep::PrepParams {
+    pub fn to_prep_params(
+        &self,
+        common: &crate::cli::CommonArgs,
+        prep: &crate::cli::PreparationArgs,
+    ) -> sd_prep::PrepParams {
         sd_prep::PrepParams {
             mq_threshold: common.mq_cutoff as u8,
             high_quality_depth: prep.high_quality_depth as i64,

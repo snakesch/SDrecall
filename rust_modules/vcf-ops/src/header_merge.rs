@@ -40,8 +40,7 @@ fn copy_filter_defs(header: &mut bcf::Header, src_reader: &bcf::Reader) {
 /// Append `##FILTER=<ID=tag,Description="…">` for each tag. Duplicate IDs ignored.
 fn push_filter_defs(header: &mut bcf::Header, tags: &[&str]) {
     for tag in tags {
-        let line =
-            format!("##FILTER=<ID={tag},Description=\"Variant is likely to be {tag}\">");
+        let line = format!("##FILTER=<ID={tag},Description=\"Variant is likely to be {tag}\">");
         header.push_record(line.as_bytes());
     }
 }

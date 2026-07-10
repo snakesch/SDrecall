@@ -123,8 +123,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let rec_by_sub: std::collections::HashMap<&str, &region_prep::RgSubgroupRecord> =
-        records.iter().map(|r| (r.subgroup_id.as_str(), r)).collect();
+    let rec_by_sub: std::collections::HashMap<&str, &region_prep::RgSubgroupRecord> = records
+        .iter()
+        .map(|r| (r.subgroup_id.as_str(), r))
+        .collect();
 
     // --- FC target comparison (computed once, shared) ---------------------------
     let py_fc = canonical(py_fc_target.as_ref().unwrap());

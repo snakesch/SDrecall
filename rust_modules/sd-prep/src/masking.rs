@@ -169,12 +169,11 @@ pub fn mask_genome(
     let padded = sdrecall_io::sort_merge_bed(&slopped, false);
 
     // ---- 2-3. fetch each interval, end-mask, build contigs ----
-    let mut reader = bio::io::fasta::IndexedReader::from_file(&ref_fa).map_err(|e| {
-        SdError::Io {
+    let mut reader =
+        bio::io::fasta::IndexedReader::from_file(&ref_fa).map_err(|e| SdError::Io {
             path: ref_fa.display().to_string(),
             source: std::io::Error::other(e.to_string()),
-        }
-    })?;
+        })?;
     let mut contigs: Vec<MaskedContig> = Vec::with_capacity(padded.len());
     let mut buf: Vec<u8> = Vec::new();
     for iv in &padded {
@@ -274,10 +273,7 @@ fn write_wrapped_fasta(
 /// onto `out` when their md5 differs (or `out` is absent). Avoids touching the
 /// file mtime when content is unchanged (the freshness check downstream relies on
 /// this). The tmp is removed either way.
-fn md5_gated_replace(
-    tmp: &std::path::Path,
-    out: &std::path::Path,
-) -> sdrecall_utils::Result<()> {
+fn md5_gated_replace(tmp: &std::path::Path, out: &std::path::Path) -> sdrecall_utils::Result<()> {
     use sdrecall_utils::SdError;
     let new_md5 = file_md5(tmp)?;
     let same = out
@@ -452,19 +448,34 @@ mod tests {
         // merge_gap of 0 and pad-free check by querying the produced FASTA structure
         // instead: just assert the contig is fully N-masked where expected.
         // Use avg=0,std=0 → pad = 1000; interval [1000,3000) → slop [0,4000) clamped.
-        let q = vec![GenomicInterval::with_strand("chrZ", 1000, 3000, sdrecall_utils::Strand::Forward)];
+        let q = vec![GenomicInterval::with_strand(
+            "chrZ",
+            1000,
+            3000,
+            sdrecall_utils::Strand::Forward,
+        )];
         let out = dir.path().join("masked.fasta");
         mask_genome(&q, &ref_fa, &out, 0.0, 0.0, 1000).unwrap();
 
         let content = std::fs::read_to_string(&out).unwrap();
         // One contig, header is >chrZ:{slop_start}. slop start = max(1000-1000,0)=0.
-        assert!(content.starts_with(">chrZ:0\n"), "header was: {}", &content[..20]);
+        assert!(
+            content.starts_with(">chrZ:0\n"),
+            "header was: {}",
+            &content[..20]
+        );
         // Lines after header are 60-wide. The first 1000 bases are N (end mask).
         let body: String = content.lines().skip(1).collect();
-        assert!(body.as_bytes()[..1000].iter().all(|&b| b == b'N'), "first 1000 should be N");
+        assert!(
+            body.as_bytes()[..1000].iter().all(|&b| b == b'N'),
+            "first 1000 should be N"
+        );
         // The masked contig length = slop span = [0,4000) clamped → 4000.
         assert_eq!(body.len(), 4000, "masked contig length");
-        assert!(body.as_bytes()[3000..].iter().all(|&b| b == b'N'), "last 1000 should be N");
+        assert!(
+            body.as_bytes()[3000..].iter().all(|&b| b == b'N'),
+            "last 1000 should be N"
+        );
         // Re-running with identical content must not change the file (md5-gate).
         let m1 = file_md5(&out).unwrap();
         mask_genome(&q, &ref_fa, &out, 0.0, 0.0, 1000).unwrap();

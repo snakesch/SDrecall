@@ -274,8 +274,12 @@ fn prepare_subgroup(
     // Fix: use the FC's REAL strand from the all_regions_bed so the correct
     // projection branch (same-strand or opposite-strand) is selected per SD
     // pair. This diverges from Python but recovers FNs.
-    let fc_interval =
-        GenomicInterval::with_strand(fc_row.chrom.clone(), fc_row.start, fc_row.end, fc_row.strand);
+    let fc_interval = GenomicInterval::with_strand(
+        fc_row.chrom.clone(),
+        fc_row.start,
+        fc_row.end,
+        fc_row.strand,
+    );
     let nfc_intervals: Vec<NfcInterval> = nfc_views
         .iter()
         .map(|r| NfcInterval {
@@ -399,9 +403,7 @@ pub fn prepare_masked_align_region_per_rg(
         .par_iter()
         .map(|sub| {
             let nfc_out = nfc_out_path(nfc_out_dir, &derived_label, sub);
-            log::debug!(
-                "Fetching masked align region for NFC of {derived_label} subgroup {sub}"
-            );
+            log::debug!("Fetching masked align region for NFC of {derived_label} subgroup {sub}");
             prepare_subgroup(&rows, &ctx, sub, &nfc_out)
         })
         .collect();
@@ -444,7 +446,10 @@ mod tests {
 
     #[test]
     fn read_fai_parses_contig_sizes() {
-        let f = write_file("chr1\t248956422\t112\t70\t71\nchr2\t242193529\t0\t70\t71\n", ".fai");
+        let f = write_file(
+            "chr1\t248956422\t112\t70\t71\nchr2\t242193529\t0\t70\t71\n",
+            ".fai",
+        );
         let sizes = read_fai(f.path()).unwrap();
         assert_eq!(sizes.get("chr1"), Some(&248956422));
         assert_eq!(sizes.get("chr2"), Some(&242193529));
@@ -499,14 +504,17 @@ mod tests {
             GenomicInterval::new("chr2", 108495902, 108497121), // touches at 108495902
         ];
         let merged = merge_bookended(&ivs);
-        assert_eq!(merged, vec![GenomicInterval::new("chr2", 108495224, 108497121)]);
+        assert_eq!(
+            merged,
+            vec![GenomicInterval::new("chr2", 108495224, 108497121)]
+        );
     }
 
     #[test]
     fn merge_bookended_fuses_overlaps_and_keeps_gaps() {
         let ivs = vec![
             GenomicInterval::new("chr1", 10, 50),
-            GenomicInterval::new("chr1", 40, 80),  // overlaps → fuse to [10,80)
+            GenomicInterval::new("chr1", 40, 80), // overlaps → fuse to [10,80)
             GenomicInterval::new("chr1", 200, 250), // gap → separate
             GenomicInterval::new("chr2", 5, 9),
         ];
@@ -529,7 +537,10 @@ mod tests {
             GenomicInterval::with_strand("chr1", 10, 20, sdrecall_utils::Strand::Forward),
             GenomicInterval::with_strand("chr1", 20, 30, sdrecall_utils::Strand::Reverse),
         ];
-        assert_eq!(merge_bookended(&ivs), vec![GenomicInterval::new("chr1", 10, 30)]);
+        assert_eq!(
+            merge_bookended(&ivs),
+            vec![GenomicInterval::new("chr1", 10, 30)]
+        );
     }
 
     /// Run one RG end-to-end on hand-built files; return the single record + the

@@ -1,3 +1,4 @@
+use ndarray::Array1;
 /// Phase 1 integration test: validates the inspect_haplotypes main loop logic.
 ///
 /// Tests the full Phase 1 data flow using a real BAM file:
@@ -11,21 +12,15 @@
 ///
 /// Output: structured TSV at /paedyl01/disk1/yangyxt/test_tmp/phase1_rust_test.tsv
 ///         debug log at /paedyl01/disk1/yangyxt/test_tmp/phase1_rust_test.log
-
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
-use ndarray::Array1;
 
 use haplotype_inspection::bam_lappers::build_lapper_from_bam;
-use haplotype_inspection::pairwise_read_inspection::{
-    read_id, count_var,
-};
 use haplotype_inspection::identify_misaligned_haps::{
-    extract_continuous_regions_dict,
+    assemble_consensus, extract_continuous_regions_dict, judge_misalignment_by_extreme_vardensity,
     record_hap_err_vectors_per_region,
-    assemble_consensus,
-    judge_misalignment_by_extreme_vardensity,
 };
+use haplotype_inspection::pairwise_read_inspection::{count_var, read_id};
 use rust_htslib::bam::Record;
 
 const BAM_PATH: &str = "/paedyl01/disk1/yangyxt/wgs/GIAB_samples/vcfs/hg38/HG002_hg38_exome_SDrecall/recall_results/HG002.pooled.clean.bam";
@@ -42,12 +37,17 @@ fn main() {
     eprintln!("\n--- Step 1: Build Lapper from BAM ---");
     let bam_lapper = build_lapper_from_bam(BAM_PATH, 20, 10, true, true)
         .expect("Failed to build Lapper from BAM");
-    eprintln!("Lapper built: {} chroms, {} qnames retained, {} noisy filtered",
-              bam_lapper.lapper_dict.len(),
-              bam_lapper.stats.qnames_retained,
-              bam_lapper.stats.noisy_qnames_filtered);
+    eprintln!(
+        "Lapper built: {} chroms, {} qnames retained, {} noisy filtered",
+        bam_lapper.lapper_dict.len(),
+        bam_lapper.stats.qnames_retained,
+        bam_lapper.stats.noisy_qnames_filtered
+    );
     eprintln!("read_dict entries: {}", bam_lapper.read_dict.len());
-    eprintln!("qname_idx_dict entries: {}", bam_lapper.qname_idx_dict.len());
+    eprintln!(
+        "qname_idx_dict entries: {}",
+        bam_lapper.qname_idx_dict.len()
+    );
 
     // Count total records across all qname_idx entries
     let total_records: usize = bam_lapper.read_dict.values().map(|v| v.len()).sum();
@@ -69,7 +69,9 @@ fn main() {
     for (chrom, lapper) in &bam_lapper.lapper_dict {
         for iv in lapper.iter() {
             if let Some(qname) = bam_lapper.qname_dict.get(&iv.val) {
-                qname_to_chrom.entry(qname.as_str()).or_insert_with(|| chrom.clone());
+                qname_to_chrom
+                    .entry(qname.as_str())
+                    .or_insert_with(|| chrom.clone());
             }
         }
     }
@@ -112,7 +114,8 @@ fn main() {
     let mut total_extreme_vard: HashMap<i32, bool> = HashMap::new();
 
     for (&hid, qnames_raw) in hap_qname_info.iter() {
-        let qnames: Vec<String> = qnames_raw.iter()
+        let qnames: Vec<String> = qnames_raw
+            .iter()
             .filter(|qn| !total_lowqual_qnames.contains(qn.as_str()))
             .cloned()
             .collect();
@@ -120,9 +123,11 @@ fn main() {
         let n_qnames = qnames.len();
 
         // Option A read lookup
-        let reads: Vec<&Record> = qnames.iter()
+        let reads: Vec<&Record> = qnames
+            .iter()
             .flat_map(|qn| {
-                qname_to_records.get(qn.as_str())
+                qname_to_records
+                    .get(qn.as_str())
                     .into_iter()
                     .flat_map(|recs| recs.iter())
             })
@@ -134,7 +139,10 @@ fn main() {
         let mut read_id_strs: Vec<String> = reads.iter().map(|r| read_id(r)).collect();
         read_id_strs.sort();
         eprintln!("hap {hid}: {n_qnames} qnames, {n_reads} reads");
-        eprintln!("  read_ids (first 10): {:?}", &read_id_strs[..std::cmp::min(10, read_id_strs.len())]);
+        eprintln!(
+            "  read_ids (first 10): {:?}",
+            &read_id_strs[..std::cmp::min(10, read_id_strs.len())]
+        );
 
         if reads.is_empty() {
             eprintln!("  SKIPPED: no reads");
@@ -142,7 +150,8 @@ fn main() {
         }
 
         // Get chrom for this haplotype
-        let hap_chrom = qnames.iter()
+        let hap_chrom = qnames
+            .iter()
             .find_map(|qn| qname_to_chrom.get(qn.as_str()).cloned())
             .unwrap_or_else(|| "unknown".to_string());
 
@@ -160,15 +169,22 @@ fn main() {
             let region_n_reads = region_reads.len();
             let span = (*span_start, *span_end);
 
-            eprintln!("  region {}:{}-{}: {} reads", hap_chrom, span.0, span.1, region_n_reads);
+            eprintln!(
+                "  region {}:{}-{}: {} reads",
+                hap_chrom, span.0, span.1, region_n_reads
+            );
 
             // a) Record haplotype/error vectors
             let (read_spans, hap_vectors, err_vectors) =
                 record_hap_err_vectors_per_region(&region_reads, &mut hap_cache, &mut err_cache)
                     .expect("record_hap_err_vectors_per_region failed (M op in CIGAR?)");
 
-            eprintln!("    hap_vectors shape: {:?}, err_vectors shape: {:?}, read_spans shape: {:?}",
-                      hap_vectors.dim(), err_vectors.dim(), read_spans.dim());
+            eprintln!(
+                "    hap_vectors shape: {:?}, err_vectors shape: {:?}, read_spans shape: {:?}",
+                hap_vectors.dim(),
+                err_vectors.dim(),
+                read_spans.dim()
+            );
 
             // b) Assemble consensus
             let consensus_sequence = assemble_consensus(&hap_vectors, &err_vectors, &read_spans);
@@ -188,10 +204,21 @@ fn main() {
 
             eprintln!("    var_count={var_count_val}, extreme_vard={extreme_vard}, max_density={region_max_density:.6}");
 
-            output_lines.push(format!("{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.6}",
-                hid, n_qnames, n_reads, n_regions,
-                hap_chrom, span.0, span.1, region_n_reads,
-                consensus_len, var_count_val, extreme_vard, region_max_density));
+            output_lines.push(format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{:.6}",
+                hid,
+                n_qnames,
+                n_reads,
+                n_regions,
+                hap_chrom,
+                span.0,
+                span.1,
+                region_n_reads,
+                consensus_len,
+                var_count_val,
+                extreme_vard,
+                region_max_density
+            ));
         }
     }
 
@@ -200,16 +227,23 @@ fn main() {
     eprintln!("Hap cache size: {}", hap_cache.len());
     eprintln!("Err cache size: {}", err_cache.len());
     for (&hid, &vc) in total_var_counts.iter() {
-        eprintln!("  hap {} total_var_count={} extreme_vard={}", hid, vc,
-                  total_extreme_vard.get(&hid).unwrap_or(&false));
+        eprintln!(
+            "  hap {} total_var_count={} extreme_vard={}",
+            hid,
+            vc,
+            total_extreme_vard.get(&hid).unwrap_or(&false)
+        );
     }
 
     // ── Step 7: Build Lapper for intrinsic BAM ───────────────────────────
     eprintln!("\n--- Step 7: Build Lapper from intrinsic BAM ---");
     let intrin_lapper = build_lapper_from_bam(INTRINSIC_BAM, 0, 0, false, false)
         .expect("Failed to build intrinsic Lapper");
-    eprintln!("Intrinsic Lapper built: {} chroms, {} qnames",
-              intrin_lapper.lapper_dict.len(), intrin_lapper.stats.qnames_retained);
+    eprintln!(
+        "Intrinsic Lapper built: {} chroms, {} qnames",
+        intrin_lapper.lapper_dict.len(),
+        intrin_lapper.stats.qnames_retained
+    );
 
     // ── Write TSV output ─────────────────────────────────────────────────
     let mut f = std::fs::File::create(OUTPUT_TSV).expect("Failed to create output TSV");

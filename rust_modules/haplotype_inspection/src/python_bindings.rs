@@ -1,9 +1,9 @@
 //! Python bindings for haplotype inspection module
 
+use crate::identify_misaligned_haps::inspect_haplotypes;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList, PySet};
 use std::collections::{HashMap, HashSet};
-use crate::identify_misaligned_haps::inspect_haplotypes;
 
 /// Main Python-facing function for haplotype inspection
 /// Replaces Python's inspect_by_haplotypes function
@@ -34,7 +34,6 @@ pub fn inspect_haplotypes_rust(
     recall_mq_cutoff: u8,
     basequal_median_cutoff: u8,
 ) -> PyResult<(Vec<String>, Vec<String>)> {
-
     // Convert hap_qname_info: Dict[int, List[str]] → HashMap<i32, Vec<String>>
     let mut hap_qname_info_rs: HashMap<i32, Vec<String>> = HashMap::new();
     for (key, value) in hap_qname_info.iter() {
@@ -61,15 +60,23 @@ pub fn inspect_haplotypes_rust(
     }
 
     // Convert total_lowqual_qnames: Set[str] or List[str] → HashSet<String>
-    let lowqual_qnames_rs: HashSet<String> = if let Ok(py_set) = total_lowqual_qnames.downcast::<PySet>() {
-        py_set.iter().map(|item| item.extract::<String>()).collect::<PyResult<HashSet<String>>>()?
-    } else if let Ok(py_list) = total_lowqual_qnames.downcast::<PyList>() {
-        py_list.iter().map(|item| item.extract::<String>()).collect::<PyResult<HashSet<String>>>()?
-    } else {
-        // Try as any iterable
-        let iter = total_lowqual_qnames.iter()?;
-        iter.map(|item| item?.extract::<String>()).collect::<PyResult<HashSet<String>>>()?
-    };
+    let lowqual_qnames_rs: HashSet<String> =
+        if let Ok(py_set) = total_lowqual_qnames.downcast::<PySet>() {
+            py_set
+                .iter()
+                .map(|item| item.extract::<String>())
+                .collect::<PyResult<HashSet<String>>>()?
+        } else if let Ok(py_list) = total_lowqual_qnames.downcast::<PyList>() {
+            py_list
+                .iter()
+                .map(|item| item.extract::<String>())
+                .collect::<PyResult<HashSet<String>>>()?
+        } else {
+            // Try as any iterable
+            let iter = total_lowqual_qnames.iter()?;
+            iter.map(|item| item?.extract::<String>())
+                .collect::<PyResult<HashSet<String>>>()?
+        };
 
     // Own the meta-tab path so the compute closure borrows no Python memory.
     let compare_haplotype_meta_tab = compare_haplotype_meta_tab.to_string();

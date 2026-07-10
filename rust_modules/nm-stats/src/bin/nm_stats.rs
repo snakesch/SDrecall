@@ -37,10 +37,7 @@ struct Cli {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let level = cli
-        .log_level
-        .parse()
-        .unwrap_or(log::LevelFilter::Info);
+    let level = cli.log_level.parse().unwrap_or(log::LevelFilter::Info);
     sdrecall_utils::init_console_logger(level);
 
     match nm_distribution_poisson(&cli.bam, cli.conf_level, cli.sample_size, cli.threads) {

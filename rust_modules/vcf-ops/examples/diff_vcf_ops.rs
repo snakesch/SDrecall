@@ -21,12 +21,12 @@ use rust_htslib::bcf::{self, Read};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use vcf_ops::{
-    annotate_inhouse_common, merge_with_priority, InhouseParams, MergeParams,
-};
+use vcf_ops::{annotate_inhouse_common, merge_with_priority, InhouseParams, MergeParams};
 
 fn arg(args: &[String], flag: &str) -> Option<String> {
-    args.iter().position(|a| a == flag).and_then(|i| args.get(i + 1).cloned())
+    args.iter()
+        .position(|a| a == flag)
+        .and_then(|i| args.get(i + 1).cloned())
 }
 
 fn main() {
@@ -89,8 +89,7 @@ fn main() {
     let py = load(&norm_py);
 
     let mut diffs = 0usize;
-    let all_keys: std::collections::BTreeSet<_> =
-        rust.keys().chain(py.keys()).cloned().collect();
+    let all_keys: std::collections::BTreeSet<_> = rust.keys().chain(py.keys()).cloned().collect();
     for k in &all_keys {
         match (rust.get(k), py.get(k)) {
             (Some(r), Some(p)) if r == p => {}
@@ -127,7 +126,11 @@ fn bcftools_norm(input: &Path, ref_genome: &Path, out: &Path) {
         inp = input.display(),
         out = out.display()
     );
-    let st = Command::new("bash").arg("-c").arg(&script).status().expect("spawn bcftools");
+    let st = Command::new("bash")
+        .arg("-c")
+        .arg(&script)
+        .status()
+        .expect("spawn bcftools");
     assert!(st.success(), "bcftools norm failed for {}", input.display());
 }
 
@@ -152,8 +155,10 @@ fn load(path: &Path) -> BTreeMap<(String, i64, String, String), String> {
 
         // FILTER set (sorted for order-independence at the comparison level — the
         // crate's ordering parity is unit-tested separately).
-        let mut filters: Vec<String> =
-            rec.filters().map(|id| String::from_utf8_lossy(&hdr.id_to_name(id)).to_string()).collect();
+        let mut filters: Vec<String> = rec
+            .filters()
+            .map(|id| String::from_utf8_lossy(&hdr.id_to_name(id)).to_string())
+            .collect();
         filters.sort();
 
         let gt = rec

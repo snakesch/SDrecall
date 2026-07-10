@@ -23,7 +23,10 @@ pub fn is_inhouse_contig(name: &str) -> bool {
         Some(r) => r,
         None => return false,
     };
-    !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit() || matches!(b, b'M' | b'T' | b'X' | b'Y'))
+    !rest.is_empty()
+        && rest
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'M' | b'T' | b'X' | b'Y'))
 }
 
 /// Parameters for [`annotate_inhouse_common`].
@@ -134,8 +137,11 @@ pub fn annotate_inhouse_common(p: InhouseParams<'_>) -> Result<()> {
         }
         let q = q_by_contig.get(&rid).cloned().unwrap_or_default();
         let c = c_by_contig.get(&rid).cloned().unwrap_or_default();
-        let CoiterSets { matched, query_only, ref_only: _cohort_only } =
-            coiterate_sorted_vcfs(q, c, &op)?;
+        let CoiterSets {
+            matched,
+            query_only,
+            ref_only: _cohort_only,
+        } = coiterate_sorted_vcfs(q, c, &op)?;
         // Write matched + query-only ONLY (cohort-only dropped — inhouse L426-469).
         for rec in matched.iter().chain(query_only.iter()) {
             writer
@@ -173,8 +179,19 @@ mod tests {
             assert!(is_inhouse_contig(c), "{c} should match the inhouse regex");
         }
         // No `chr` prefix → excluded (unlike main_contigs).
-        for c in ["1", "X", "MT", "chrUn_KI270302v1", "chr1_random", "chr", "GL000220.1"] {
-            assert!(!is_inhouse_contig(c), "{c} should NOT match the inhouse regex");
+        for c in [
+            "1",
+            "X",
+            "MT",
+            "chrUn_KI270302v1",
+            "chr1_random",
+            "chr",
+            "GL000220.1",
+        ] {
+            assert!(
+                !is_inhouse_contig(c),
+                "{c} should NOT match the inhouse regex"
+            );
         }
     }
 
@@ -217,14 +234,10 @@ mod tests {
         let tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
         let mut header = bcf::Header::new();
         header.push_record(b"##contig=<ID=chr1,length=1000000>");
-        header.push_record(
-            b"##INFO=<ID=AC,Number=A,Type=Integer,Description=\"Allele count\">",
-        );
+        header.push_record(b"##INFO=<ID=AC,Number=A,Type=Integer,Description=\"Allele count\">");
         header.push_record(b"##INFO=<ID=AN,Number=1,Type=Integer,Description=\"Allele number\">");
         header.push_record(b"##FILTER=<ID=SDrecall,Description=\"sdrecall\">");
-        header.push_record(
-            b"##FILTER=<ID=INHOUSE_COMMON,Description=\"common\">",
-        );
+        header.push_record(b"##FILTER=<ID=INHOUSE_COMMON,Description=\"common\">");
         header.push_record(b"##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">");
         header.push_sample(b"s1");
         let w = Writer::from_path(tmp.path(), &header, true, Format::Vcf).unwrap();
@@ -273,19 +286,29 @@ mod tests {
         // common cohort variant (AC=10,AN=100) but query lacks SDrecall → no tag;
         // with SDrecall → INHOUSE_COMMON added.
         let (w, _t) = writer_with_ac_an();
-        let op = InhouseOp { added_filter: "INHOUSE_COMMON", cutoff: 0.01, conf_level: 0.999 };
+        let op = InhouseOp {
+            added_filter: "INHOUSE_COMMON",
+            cutoff: 0.01,
+            conf_level: 0.999,
+        };
 
         // query without SDrecall filter
         let mut q_plain = rec_ac_an(&w, 0, 2);
         let mut cohort = rec_ac_an(&w, 10, 100);
         op.on_match(&mut q_plain, &mut cohort);
-        assert!(!has_filter(&q_plain, "INHOUSE_COMMON"), "no tag without SDrecall");
+        assert!(
+            !has_filter(&q_plain, "INHOUSE_COMMON"),
+            "no tag without SDrecall"
+        );
 
         // query WITH SDrecall filter
         let mut q_sd = rec_ac_an(&w, 0, 2);
         q_sd.set_filters(&[b"SDrecall".as_slice()]).unwrap();
         let mut cohort2 = rec_ac_an(&w, 10, 100);
         op.on_match(&mut q_sd, &mut cohort2);
-        assert!(has_filter(&q_sd, "INHOUSE_COMMON"), "tag added with SDrecall + common");
+        assert!(
+            has_filter(&q_sd, "INHOUSE_COMMON"),
+            "tag added with SDrecall + common"
+        );
     }
 }

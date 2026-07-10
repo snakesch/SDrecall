@@ -19,8 +19,7 @@ use std::path::{Path, PathBuf};
 /// Open a VCF/BCF reader (a sorted cursor; the caller streams records). The
 /// inputs are assumed coordinate-sorted (as every SDrecall island VCF is).
 pub fn read_vcf(path: &Path) -> Result<bcf::Reader> {
-    bcf::Reader::from_path(path)
-        .map_err(|e| SdError::Vcf(format!("open {}: {e}", path.display())))
+    bcf::Reader::from_path(path).map_err(|e| SdError::Vcf(format!("open {}: {e}", path.display())))
 }
 
 /// Write records to a VCF/BCF. `header` is the output header (build it from a
@@ -214,7 +213,10 @@ fn remove_vcf_indexes(vcf: &Path) -> Result<()> {
 }
 
 fn vcf_index_paths(vcf: &Path) -> [PathBuf; 2] {
-    [append_path_suffix(vcf, ".csi"), append_path_suffix(vcf, ".tbi")]
+    [
+        append_path_suffix(vcf, ".csi"),
+        append_path_suffix(vcf, ".tbi"),
+    ]
 }
 
 fn append_path_suffix(path: &Path, suffix: &str) -> PathBuf {
@@ -234,9 +236,7 @@ mod tests {
         let tmp = tempfile::Builder::new().suffix(".vcf").tempfile().unwrap();
         let mut header = bcf::Header::new();
         header.push_record(b"##contig=<ID=chr1,length=100000>");
-        header.push_record(
-            b"##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">",
-        );
+        header.push_record(b"##FORMAT=<ID=GT,Number=1,Type=String,Description=\"Genotype\">");
         header.push_sample(b"sample1");
         {
             let mut w =

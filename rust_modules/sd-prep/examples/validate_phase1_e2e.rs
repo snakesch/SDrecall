@@ -52,7 +52,11 @@ fn main() {
     // realign_groups). Probe both locations.
     let py_map_root = python_dir.join("filtered_SD_binary_map.tsv");
     let py_map_rg = python_dir.join("realign_groups/filtered_SD_binary_map.tsv");
-    let py_map = if py_map_root.exists() { py_map_root } else { py_map_rg };
+    let py_map = if py_map_root.exists() {
+        py_map_root
+    } else {
+        py_map_rg
+    };
     let py_pairs = read_sd_pair_set(&py_map);
     let pair_match = rust_pairs == py_pairs;
     println!(

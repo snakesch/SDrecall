@@ -56,8 +56,10 @@ pub fn write_graphml<N, E, Ty>(
 ) -> Result<()>
 where
     Ty: EdgeType,
-    for<'a> &'a Graph<N, E, Ty>:
-        GraphProp + IntoNodeReferences<NodeWeight = N> + IntoEdgeReferences<EdgeWeight = E> + NodeIndexable,
+    for<'a> &'a Graph<N, E, Ty>: GraphProp
+        + IntoNodeReferences<NodeWeight = N>
+        + IntoEdgeReferences<EdgeWeight = E>
+        + NodeIndexable,
 {
     // petgraph-graphml's closures must return `Vec<(Cow<'static,str>, Cow<'a,str>)>`.
     // The attr NAME is owned (static-ified via Cow::Owned); the VALUE borrows the
@@ -298,7 +300,10 @@ mod tests {
     #[test]
     fn write_then_read_round_trip_nodes_edges_attrs() {
         let g = sample();
-        let tmp = tempfile::Builder::new().suffix(".graphml").tempfile().unwrap();
+        let tmp = tempfile::Builder::new()
+            .suffix(".graphml")
+            .tempfile()
+            .unwrap();
         write_graphml(
             tmp.path(),
             &g,
@@ -332,7 +337,10 @@ mod tests {
     #[test]
     fn read_undirected_round_trip_preserves_topology() {
         let g = sample();
-        let tmp = tempfile::Builder::new().suffix(".graphml").tempfile().unwrap();
+        let tmp = tempfile::Builder::new()
+            .suffix(".graphml")
+            .tempfile()
+            .unwrap();
         write_graphml(
             tmp.path(),
             &g,
@@ -355,7 +363,10 @@ mod tests {
     fn node_without_attrs_round_trips_empty_map() {
         let mut g: Graph<String, f64, Undirected> = Graph::new_undirected();
         g.add_node("x".to_string());
-        let tmp = tempfile::Builder::new().suffix(".graphml").tempfile().unwrap();
+        let tmp = tempfile::Builder::new()
+            .suffix(".graphml")
+            .tempfile()
+            .unwrap();
         // emit no attrs at all
         write_graphml(tmp.path(), &g, |_| Vec::new(), |_| Vec::new()).unwrap();
         let back = read_graphml(tmp.path()).unwrap();

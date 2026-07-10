@@ -303,7 +303,11 @@ mod tests {
         // 5000 > 4816 → trimmed. Remaining: [100,200,300,400].
         // mean = 250, median = 250, std(ddof=0) = sqrt(12500) = 111.8033...
         assert!((stats.mean - 250.0).abs() < 1e-9, "mean {}", stats.mean);
-        assert!((stats.median - 250.0).abs() < 1e-9, "median {}", stats.median);
+        assert!(
+            (stats.median - 250.0).abs() < 1e-9,
+            "median {}",
+            stats.median
+        );
         assert!(
             (stats.std - 111.803_398_874_989_48).abs() < 1e-9,
             "std {}",

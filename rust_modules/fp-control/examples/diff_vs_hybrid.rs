@@ -22,14 +22,12 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-use phasing::bam_reading::{
-    build_allele_depth_map, migrate_bam_to_sorted_intervals_grouped,
-};
-use phasing::graph_builder::build_phasing_graph;
-use phasing::structs::HaplotypeConfig;
 use clap::Parser;
 use fp_control::{run_fp_control, FpControlParams};
 use haplotype_inspection::identify_misaligned_haps::inspect_haplotypes;
+use phasing::bam_reading::{build_allele_depth_map, migrate_bam_to_sorted_intervals_grouped};
+use phasing::graph_builder::build_phasing_graph;
+use phasing::structs::HaplotypeConfig;
 use serde::Deserialize;
 
 #[derive(Parser, Debug)]
@@ -112,8 +110,10 @@ fn hybrid_inspect(
 
     // vertex → hap_id
     let qhap_str: HashMap<String, i32> = read_json(&dir.join("phasing_qname_hap_info.json"));
-    let qname_hap_info: HashMap<i32, i32> =
-        qhap_str.into_iter().map(|(k, v)| (k.parse().unwrap(), v)).collect();
+    let qname_hap_info: HashMap<i32, i32> = qhap_str
+        .into_iter()
+        .map(|(k, v)| (k.parse().unwrap(), v))
+        .collect();
 
     // qname → vertex
     let qname_to_node: HashMap<String, i32> = read_json(&dir.join("qname_to_node.json"));

@@ -8,9 +8,7 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::process::ExitCode;
-use vcf_ops::{
-    annotate_inhouse_common, merge_with_priority, InhouseParams, MergeParams,
-};
+use vcf_ops::{annotate_inhouse_common, merge_with_priority, InhouseParams, MergeParams};
 
 #[derive(Parser)]
 #[command(

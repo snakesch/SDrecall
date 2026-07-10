@@ -204,9 +204,7 @@ pub fn sort_merge_bed(ivs: &[GenomicInterval], stranded: bool) -> Vec<GenomicInt
             // / pybedtools `.merge()` fuse bookended features (verified by the T7
             // differential against real pybedtools: 576/576 byte-identical).
             Some(last)
-                if last.chrom == iv.chrom
-                    && last.strand == out_strand
-                    && iv.start <= last.end =>
+                if last.chrom == iv.chrom && last.strand == out_strand && iv.start <= last.end =>
             {
                 if iv.end > last.end {
                     last.end = iv.end;
@@ -300,7 +298,10 @@ pub fn complement(
     // Bucket covered intervals by contig.
     let mut by_chrom: AHashMap<String, Vec<GenomicInterval>> = AHashMap::new();
     for iv in ivs {
-        by_chrom.entry(iv.chrom.clone()).or_default().push(iv.clone());
+        by_chrom
+            .entry(iv.chrom.clone())
+            .or_default()
+            .push(iv.clone());
     }
 
     let mut out = Vec::new();
@@ -313,7 +314,11 @@ pub fn complement(
         let mut cursor = 0i64;
         for m in &merged {
             if m.start > cursor {
-                out.push(GenomicInterval::new(chrom.clone(), cursor, m.start.min(size)));
+                out.push(GenomicInterval::new(
+                    chrom.clone(),
+                    cursor,
+                    m.start.min(size),
+                ));
             }
             cursor = cursor.max(m.end);
             if cursor >= size {
@@ -446,7 +451,10 @@ mod tests {
         let tmp = tempfile::Builder::new().suffix(".bed").tempfile().unwrap();
         std::fs::write(tmp.path(), "chr1\t10\n").unwrap();
         let err = read_bed(tmp.path()).unwrap_err();
-        assert!(matches!(err, SdError::BedParse { line: 1, .. }), "got {err:?}");
+        assert!(
+            matches!(err, SdError::BedParse { line: 1, .. }),
+            "got {err:?}"
+        );
     }
 
     // ── sort_merge ───────────────────────────────────────────────────────────
@@ -565,7 +573,10 @@ mod tests {
         let tmp = tempfile::Builder::new().suffix(".bed").tempfile().unwrap();
         std::fs::write(tmp.path(), "chr1\t200\t100\n").unwrap();
         let err = read_bed(tmp.path()).unwrap_err();
-        assert!(matches!(err, SdError::BedParse { line: 1, .. }), "got {err:?}");
+        assert!(
+            matches!(err, SdError::BedParse { line: 1, .. }),
+            "got {err:?}"
+        );
     }
 
     #[test]

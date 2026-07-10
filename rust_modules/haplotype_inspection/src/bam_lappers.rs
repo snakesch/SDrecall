@@ -1,7 +1,8 @@
+use log::{info, warn};
 /// BAM reading and Lapper construction for interval queries.
 /// Replaces Python's NCLS-based `migrate_bam_to_ncls` with Lapper interval trees.
 use rust_htslib::bam::{self, Read, Record};
-use rust_lapper::{Lapper, Interval};
+use rust_lapper::{Interval, Lapper};
 use rustc_hash::FxHashMap;
 use std::collections::{HashMap, HashSet};
 #[cfg(unix)]
@@ -9,7 +10,6 @@ use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use tempfile::NamedTempFile;
-use log::{info, warn};
 
 /// Result structure from BAM → Lapper construction (replaces Python's migrate_bam_to_ncls).
 #[derive(Debug)]
@@ -197,14 +197,18 @@ pub fn build_lapper_from_bam(
                     // Try 2: temp-file collation
                     match collate_bam_file(bam_path, 4)? {
                         Some(tf) => {
-                            let p = tf.path().to_str()
+                            let p = tf
+                                .path()
+                                .to_str()
                                 .ok_or("Failed to convert temp path to string")?
                                 .to_string();
                             info!("[build_lapper_from_bam] Using temp-file collation: {p}");
                             BamSource::TempFile(p, tf)
                         }
                         None => {
-                            info!("[build_lapper_from_bam] No collation available, two-pass fallback");
+                            info!(
+                                "[build_lapper_from_bam] No collation available, two-pass fallback"
+                            );
                             BamSource::Original(bam_path.to_string())
                         }
                     }
@@ -215,7 +219,9 @@ pub fn build_lapper_from_bam(
         {
             match collate_bam_file(bam_path, 4)? {
                 Some(tf) => {
-                    let p = tf.path().to_str()
+                    let p = tf
+                        .path()
+                        .to_str()
                         .ok_or("Failed to convert temp path to string")?
                         .to_string();
                     BamSource::TempFile(p, tf)
@@ -233,12 +239,8 @@ pub fn build_lapper_from_bam(
     // Open BAM reader (Pipe variant already has one)
     let (mut bam, mut collate_child) = match source {
         BamSource::Pipe(reader, child) => (reader, Some(child)),
-        BamSource::TempFile(ref path, ref _tf) => {
-            (bam::Reader::from_path(path)?, None)
-        }
-        BamSource::Original(ref path) => {
-            (bam::Reader::from_path(path)?, None)
-        }
+        BamSource::TempFile(ref path, ref _tf) => (bam::Reader::from_path(path)?, None),
+        BamSource::Original(ref path) => (bam::Reader::from_path(path)?, None),
     };
 
     let header = bam.header().clone();
@@ -421,8 +423,7 @@ pub fn build_lapper_from_bam(
     for chrom in &chroms {
         let chrom_intervals = &qname_interval_dict[chrom];
         if !chrom_intervals.is_empty() {
-            let mut intervals: Vec<Interval<u32, u32>> =
-                Vec::with_capacity(chrom_intervals.len());
+            let mut intervals: Vec<Interval<u32, u32>> = Vec::with_capacity(chrom_intervals.len());
             for (start, end, qname_idx) in chrom_intervals {
                 // Checked i64 → u32: human coordinates fit comfortably, but a
                 // >4 Gb contig (or a stray negative position) would silently
@@ -431,7 +432,11 @@ pub fn build_lapper_from_bam(
                     .map_err(|_| format!("interval start {start} on {chrom} exceeds u32 range"))?;
                 let stop = u32::try_from(*end)
                     .map_err(|_| format!("interval end {end} on {chrom} exceeds u32 range"))?;
-                intervals.push(Interval { start, stop, val: *qname_idx });
+                intervals.push(Interval {
+                    start,
+                    stop,
+                    val: *qname_idx,
+                });
             }
 
             intervals.sort_by_key(|iv| iv.start);
@@ -489,7 +494,14 @@ fn process_qname_group(
 
     // Check if any read in the group is noisy
     let is_noisy = reads.iter().any(|read| {
-        is_read_noisy(read, header, paired, mapq_filter, basequal_median_filter, filter_noisy)
+        is_read_noisy(
+            read,
+            header,
+            paired,
+            mapq_filter,
+            basequal_median_filter,
+            filter_noisy,
+        )
     });
 
     if is_noisy {
@@ -519,7 +531,10 @@ fn process_qname_group(
 
     // Append reads for this qname (don't overwrite — in coordinate-sorted BAMs,
     // R1 and R2 of the same qname arrive as separate groups)
-    read_dict.entry(qname_idx).or_default().extend(reads.iter().cloned());
+    read_dict
+        .entry(qname_idx)
+        .or_default()
+        .extend(reads.iter().cloned());
 
     // Store one interval per read (not merged across R1/R2)
     for read in reads {
@@ -596,7 +611,10 @@ fn is_read_noisy(
                 return true;
             }
 
-            let num_low = qualities.iter().filter(|&&q| q < basequal_median_filter).count();
+            let num_low = qualities
+                .iter()
+                .filter(|&&q| q < basequal_median_filter)
+                .count();
             if num_low >= 75 {
                 return true;
             }
@@ -743,7 +761,8 @@ pub fn query_overlapping_read_pairs<'a>(
                         let r2_start = r2.pos() as u32;
                         let r2_end = r2.cigar().end_pos() as u32;
 
-                        if (r1_start < end && r1_end > start) || (r2_start < end && r2_end > start) {
+                        if (r1_start < end && r1_end > start) || (r2_start < end && r2_end > start)
+                        {
                             result.push((r1, r2));
                         }
                     }
@@ -782,8 +801,7 @@ mod tests {
         }
 
         let result = build_lapper_from_bam(
-            bam_path,
-            0,     // mapq_filter
+            bam_path, 0,     // mapq_filter
             0,     // basequal_median_filter
             true,  // paired
             false, // filter_noisy
@@ -791,10 +809,16 @@ mod tests {
         .expect("build_lapper_from_bam failed");
 
         eprintln!("=== Collate Pipe Test Results ===");
-        eprintln!("Total reads processed: {}", result.stats.total_reads_processed);
+        eprintln!(
+            "Total reads processed: {}",
+            result.stats.total_reads_processed
+        );
         eprintln!("Skipped alignments: {}", result.stats.skipped_alignments);
         eprintln!("Qnames retained: {}", result.stats.qnames_retained);
-        eprintln!("Noisy qnames filtered: {}", result.stats.noisy_qnames_filtered);
+        eprintln!(
+            "Noisy qnames filtered: {}",
+            result.stats.noisy_qnames_filtered
+        );
         eprintln!("Chromosomes with intervals: {}", result.lapper_dict.len());
         eprintln!("read_dict entries: {}", result.read_dict.len());
 
@@ -819,6 +843,9 @@ mod tests {
         assert!(result.stats.qnames_retained > 0, "No qnames retained");
         assert!(!result.read_dict.is_empty(), "read_dict is empty");
         // Paired mode should produce mostly pairs
-        assert!(pairs > singles, "Expected more pairs than singles in paired mode");
+        assert!(
+            pairs > singles,
+            "Expected more pairs than singles in paired mode"
+        );
     }
 }
