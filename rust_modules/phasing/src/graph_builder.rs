@@ -181,6 +181,23 @@ pub fn build_phasing_graph(
     header: &rust_htslib::bam::HeaderView,
     config: &HaplotypeConfig,
 ) -> Result<PhasingGraphResult, Box<dyn std::error::Error>> {
+    crate::fast_graph_builder::build_phasing_graph(
+        read_pair_map,
+        allele_depth_map,
+        intrinsic_ad_map,
+        header,
+        config,
+    )
+}
+
+/// Original single-threaded graph builder retained for differential testing and A/B runs.
+pub fn build_phasing_graph_legacy(
+    read_pair_map: &ReadPairMap,
+    allele_depth_map: &AlleleDepthMap,
+    intrinsic_ad_map: &AlleleDepthMap,
+    header: &rust_htslib::bam::HeaderView,
+    config: &HaplotypeConfig,
+) -> Result<PhasingGraphResult, Box<dyn std::error::Error>> {
     // ========== STEP 1: Initialize and Validate Input ==========
     let total_read_pairs = read_pair_map.readpair_dict.len();
     info!("[build_phasing_graph] There are totally {} pair of reads, mean read length is {:.1}. with adequate mapping or base quality which can be used to build the graph", 

@@ -432,7 +432,7 @@ pub struct PhasingGraphResult {
     /// the last value when converted to CSR. The diagonal is initialized to `1.0` to match
     /// the previous dense matrix behavior.
     weight_size: Option<usize>,
-    sparse_weight_entries: Vec<(usize, usize, f32)>,
+    sparse_weight_entries: Vec<(u32, u32, f32)>,
 
     /// Read haplotype vectors
     pub read_hap_vectors: AHashMap<String, ReadHaplotypeVector>,
@@ -474,12 +474,18 @@ impl PhasingGraphResult {
             return;
         }
 
+        assert!(
+            u32::try_from(size).is_ok(),
+            "weight store size exceeds compact index range"
+        );
+
         self.weight_size = Some(size);
         self.sparse_weight_entries = Vec::with_capacity(size);
 
         // Preserve previous dense behavior: diagonal starts at 1.0.
         for i in 0..size {
-            self.sparse_weight_entries.push((i, i, 1.0));
+            let index = i as u32;
+            self.sparse_weight_entries.push((index, index, 1.0));
         }
     }
 
@@ -501,9 +507,11 @@ impl PhasingGraphResult {
         }
 
         // Set symmetric values directly with f32 dense-assignment semantics.
-        self.sparse_weight_entries.push((i, j, weight));
+        self.sparse_weight_entries
+            .push((i as u32, j as u32, weight));
         if i != j {
-            self.sparse_weight_entries.push((j, i, weight));
+            self.sparse_weight_entries
+                .push((j as u32, i as u32, weight));
         }
         Ok(())
     }
@@ -518,7 +526,9 @@ impl PhasingGraphResult {
         let size = self.weight_size?;
         Some(Csr::from_entries(
             size,
-            self.sparse_weight_entries.iter().copied(),
+            self.sparse_weight_entries
+                .iter()
+                .map(|&(row, col, value)| (row as usize, col as usize, value)),
         ))
     }
 
@@ -526,12 +536,55 @@ impl PhasingGraphResult {
     pub fn take_weight_csr(&mut self) -> Option<Csr> {
         let size = self.weight_size.take()?;
         let entries = std::mem::take(&mut self.sparse_weight_entries);
-        Some(Csr::from_entries(size, entries))
+        Some(Csr::from_entries(
+            size,
+            entries
+                .into_iter()
+                .map(|(row, col, value)| (row as usize, col as usize, value)),
+        ))
+    }
+
+    pub(crate) fn extend_weight_entries(&mut self, entries: Vec<(u32, u32, f32)>) {
+        debug_assert!(self.weight_size.is_some());
+        self.sparse_weight_entries.extend(entries);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn sparse_weight_entries(&self) -> &[(u32, u32, f32)] {
+        &self.sparse_weight_entries
     }
 
     /// Number of stored sparse weight assignments before CSR duplicate compaction.
     pub fn sparse_weight_entry_count(&self) -> usize {
         self.sparse_weight_entries.len()
+    }
+
+    /// Order-independent fingerprints over sparse assignments and weighted graph edges.
+    pub fn content_digests(&self) -> (u64, u64) {
+        use petgraph::visit::EdgeRef;
+
+        fn mix(mut value: u64) -> u64 {
+            value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            value ^ (value >> 31)
+        }
+
+        fn entry_hash(left: usize, right: usize, weight: f32) -> u64 {
+            mix(mix(mix(left as u64).wrapping_add(right as u64))
+                .wrapping_add(u64::from(weight.to_bits())))
+        }
+
+        let mut assignment_digest = 0u64;
+        for &(left, right, weight) in &self.sparse_weight_entries {
+            assignment_digest ^= entry_hash(left as usize, right as usize, weight);
+        }
+        let mut edge_digest = 0u64;
+        for edge in self.graph.edge_references() {
+            let source = edge.source().index();
+            let target = edge.target().index();
+            edge_digest ^= entry_hash(source.min(target), source.max(target), *edge.weight());
+        }
+        (assignment_digest, edge_digest)
     }
 
     /// Get number of vertices in the graph

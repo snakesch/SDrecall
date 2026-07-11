@@ -21,6 +21,7 @@
 
 // Graph construction (from build_phasing_graph)
 pub mod bam_reading;
+mod fast_graph_builder;
 pub mod graph_builder;
 pub mod haplotype_determination;
 pub mod structs;
