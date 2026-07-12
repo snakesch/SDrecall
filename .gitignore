@@ -14,6 +14,7 @@ fp_control/.ipynb_checkpoints/
 fp_control/vis_bilc_diagnostic.py
 rust_modules/target/*
 rust_modules/target
+rust_modules/target-*/
 .vscode/
 .vscode/*
 *.log

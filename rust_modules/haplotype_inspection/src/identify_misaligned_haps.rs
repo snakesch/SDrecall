@@ -665,7 +665,7 @@ pub fn stat_refseq_similarity(
                     && origin_start <= overlap_start
                     && origin_end >= overlap_end
                 {
-                    warn!(
+                    debug!(
                         "The homologous genomic sequence {homo_refseq_qname} overlapping interval {overlap_start}-{overlap_end} \
                          is aligned to its origin. So ignore this homologous sequence."
                     );

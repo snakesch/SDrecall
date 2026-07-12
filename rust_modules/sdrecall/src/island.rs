@@ -13,7 +13,9 @@
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
+use rayon::prelude::*;
 use sdrecall_utils::{GenomicInterval, Result, SdError};
 
 /// Paths for one coverage island.
@@ -38,14 +40,17 @@ pub fn split_bams_into_islands(
     threads: usize,
     tmp_dir: &Path,
 ) -> Result<Vec<IslandPaths>> {
+    let total_start = Instant::now();
     std::fs::create_dir_all(tmp_dir).map_err(|e| SdError::Io {
         path: tmp_dir.display().to_string(),
         source: e,
     })?;
 
     // Step 1: coverage depth.
+    let depth_start = Instant::now();
     let depth_file = tmp_dir.join("raw.depth");
     crate::tools::samtools_depth(raw_bam, &depth_file, threads)?;
+    let depth_time = depth_start.elapsed();
 
     // Step 2: extract coverage blocks (depth ≥ 3).
     let cov_bed_path = tmp_dir.join("raw.cov.bed");
@@ -64,30 +69,61 @@ pub fn split_bams_into_islands(
     let padded = sdrecall_io::slop(&islands, 1000, chrom_sizes)?;
     let padded = sdrecall_io::sort_merge_bed(&padded, false);
 
-    // Step 5: slice BAMs per island.
-    let mut result = Vec::with_capacity(padded.len());
-    for (i, island) in padded.iter().enumerate() {
-        let id = i + 1;
-        let island_bed = tmp_dir.join(format!("island_{id}.bed"));
-        write_intervals(&island_bed, &[island.clone()])?;
+    // Step 5: slice BAMs per island. The original loop launched thousands of
+    // short subprocesses serially. Run two unchanged command sequences at once;
+    // keeping the original thread argument preserves samtools headers and BGZF
+    // settings for byte-parity testing. IndexedParallelIterator::collect
+    // preserves input order, so scheduling cannot reorder the result vector.
+    let slice_start = Instant::now();
+    let num_jobs = padded.len().min(2).max(1);
+    let threads_per_job = threads;
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(num_jobs)
+        .build()
+        .map_err(|e| SdError::Compute(e.to_string()))?;
+    let slices: Vec<Result<IslandPaths>> = pool.install(|| {
+        padded
+            .par_iter()
+            .enumerate()
+            .map(|(i, island)| {
+                let id = i + 1;
+                let island_bed = tmp_dir.join(format!("island_{id}.bed"));
+                write_intervals(&island_bed, std::slice::from_ref(island))?;
 
-        let island_raw = path_with_island(raw_bam, id);
-        let island_intrin = path_with_island(intrinsic_bam, id);
+                let island_raw = path_with_island(raw_bam, id);
+                let island_intrin = path_with_island(intrinsic_bam, id);
 
-        crate::tools::samtools_view_region(raw_bam, &island_bed, &island_raw, threads)?;
-        crate::tools::samtools_view_region(intrinsic_bam, &island_bed, &island_intrin, threads)?;
+                crate::tools::samtools_view_region(
+                    raw_bam,
+                    &island_bed,
+                    &island_raw,
+                    threads_per_job,
+                )?;
+                crate::tools::samtools_view_region(
+                    intrinsic_bam,
+                    &island_bed,
+                    &island_intrin,
+                    threads_per_job,
+                )?;
 
-        // Get actual coverage from the sliced BAM (captures distant mates).
-        let actual_cov = tmp_dir.join(format!("island_{id}.actual_cov.bed"));
-        actual_coverage_bed(&island_raw, &actual_cov, threads)?;
+                // Get actual coverage from the sliced BAM (captures distant mates).
+                let actual_cov = tmp_dir.join(format!("island_{id}.actual_cov.bed"));
+                actual_coverage_bed(&island_raw, &actual_cov, threads_per_job)?;
 
-        result.push(IslandPaths {
-            id,
-            raw_bam: island_raw,
-            intrinsic_bam: island_intrin,
-            coverage_bed: actual_cov,
-        });
+                Ok(IslandPaths {
+                    id,
+                    raw_bam: island_raw,
+                    intrinsic_bam: island_intrin,
+                    coverage_bed: actual_cov,
+                })
+            })
+            .collect()
+    });
+    let mut result = Vec::with_capacity(slices.len());
+    for slice in slices {
+        result.push(slice?);
     }
+    let slice_time = slice_start.elapsed();
 
     // Sort islands by raw BAM file size (largest first) for load balancing.
     result.sort_by(|a, b| {
@@ -102,6 +138,19 @@ pub fn split_bams_into_islands(
             .map(|m| m.len() > 1000)
             .unwrap_or(false)
     });
+
+    log::warn!(
+        concat!(
+            "[island_slice_metrics] islands={} jobs={} threads_per_job={} ",
+            "t_depth_s={:.3} t_slice_s={:.3} t_total_s={:.3}"
+        ),
+        result.len(),
+        num_jobs,
+        threads_per_job,
+        depth_time.as_secs_f64(),
+        slice_time.as_secs_f64(),
+        total_start.elapsed().as_secs_f64()
+    );
 
     Ok(result)
 }

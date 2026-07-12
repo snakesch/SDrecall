@@ -16,7 +16,7 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use rayon::prelude::*;
 use rust_htslib::{bam, bam::Read};
@@ -1407,6 +1407,7 @@ fn process_one_island(
     mq_cutoff: u8,
     threads: usize,
 ) -> Result<Option<(PathBuf, PathBuf)>> {
+    let total_start = Instant::now();
     let bam_str = island.raw_bam.to_string_lossy().to_string();
     let intrin_str = island.intrinsic_bam.to_string_lossy().to_string();
 
@@ -1418,9 +1419,17 @@ fn process_one_island(
         ..Default::default()
     };
 
+    let fp_control_start = Instant::now();
     let output = fp_control::run_fp_control(&bam_str, &intrin_str, &params)?;
+    let fp_control_time = fp_control_start.elapsed();
 
     let Some(output) = output else {
+        log::warn!(
+            "[fp_control_island_stage_metrics] island={} skipped=true t_fp_control_s={:.3} t_total_s={:.3}",
+            island.id,
+            fp_control_time.as_secs_f64(),
+            total_start.elapsed().as_secs_f64()
+        );
         return Ok(None);
     };
 
@@ -1431,6 +1440,7 @@ fn process_one_island(
 
     // Replace the island raw BAM with HP-tagged primary alignments for parity
     // with Python's visualization path, then derive the clean BAM from it.
+    let annotate_start = Instant::now();
     crate::bam_filter::annotate_hp_tags(
         &island.raw_bam,
         &correct_set,
@@ -1441,9 +1451,11 @@ fn process_one_island(
         island.id,
         threads,
     )?;
+    let annotate_time = annotate_start.elapsed();
 
     // Filter BAM to keep only correct, primary, non-duplicate, non-QC-fail reads.
     let clean_bam = island.raw_bam.with_extension("clean.bam");
+    let filter_start = Instant::now();
     let clean_alignments = crate::bam_filter::filter_bam_by_qnames(
         &island.raw_bam,
         &correct_set,
@@ -1453,6 +1465,7 @@ fn process_one_island(
         island.id,
         threads,
     )?;
+    let filter_time = filter_start.elapsed();
     if clean_alignments == 0 {
         log::warn!(
             "[fp-control] island {} produced an empty clean BAM after Python-policy filtering",
@@ -1464,6 +1477,7 @@ fn process_one_island(
     // Variant-call on the clean BAM. HPSUP annotation happens once, at the very
     // end of post-processing, so these island VCFs stay atomization-safe.
     let clean_vcf = clean_bam.with_extension("vcf.gz");
+    let call_start = Instant::now();
     crate::tools::bcftools_call(
         &clean_bam,
         Path::new(ref_genome),
@@ -1471,6 +1485,22 @@ fn process_one_island(
         sample_id,
         threads,
     )?;
+    let call_time = call_start.elapsed();
+
+    log::warn!(
+        concat!(
+            "[fp_control_island_stage_metrics] island={} skipped=false clean_alignments={} ",
+            "t_fp_control_s={:.3} t_annotate_s={:.3} t_filter_s={:.3} ",
+            "t_call_s={:.3} t_total_s={:.3}"
+        ),
+        island.id,
+        clean_alignments,
+        fp_control_time.as_secs_f64(),
+        annotate_time.as_secs_f64(),
+        filter_time.as_secs_f64(),
+        call_time.as_secs_f64(),
+        total_start.elapsed().as_secs_f64()
+    );
 
     log::info!(
         "[fp-control] island {} done: {} correct, {} mismap",
