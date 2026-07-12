@@ -2,7 +2,7 @@
 //! `realign_recall/slice_bam_by_cov.py::split_bam_by_cov`.
 //!
 //! Given a deduplicated raw BAM and the target recall BED, this module:
-//! 1. Computes per-base depth via `samtools depth` (subprocess)
+//! 1. Computes sparse covered-position depth via `samtools depth` (subprocess)
 //! 2. Extracts continuous coverage blocks (min_depth ≥ 3)
 //! 3. Processes target regions: large (>10 kbp) split by coverage, small
 //!    (<2 kbp) merged with nearby coverage islands, medium padded
@@ -157,7 +157,9 @@ pub fn split_bams_into_islands(
 
 // ─────────────────────────── depth blocks ────────────────────────────────
 
-/// Extract continuous coverage blocks from a `samtools depth -a` file.
+/// Extract continuous coverage blocks from a `samtools depth` file.
+/// Coordinate gaps in sparse output represent zero-depth positions and break
+/// the current block through the same adjacency check used for dense output.
 /// Mirrors `slice_bam_by_cov.py::extract_depth_blocks`.
 fn extract_depth_blocks(depth_file: &Path, min_depth: u32) -> Result<Vec<GenomicInterval>> {
     let file = std::fs::File::open(depth_file).map_err(|e| SdError::Io {
@@ -326,4 +328,51 @@ fn path_with_island(bam: &Path, id: usize) -> PathBuf {
     let stem = bam.file_stem().unwrap_or_default().to_string_lossy();
     let dir = bam.parent().unwrap_or(Path::new("."));
     dir.join(format!("{stem}.{id}.bam"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_depth(contents: &str) -> Vec<GenomicInterval> {
+        let mut file = tempfile::NamedTempFile::new().expect("create depth fixture");
+        file.write_all(contents.as_bytes())
+            .expect("write depth fixture");
+        extract_depth_blocks(file.path(), 3).expect("parse depth fixture")
+    }
+
+    #[test]
+    fn sparse_depth_gaps_match_dense_zero_rows() {
+        let dense = concat!(
+            "chr1\t1\t0\n",
+            "chr1\t2\t3\n",
+            "chr1\t3\t4\n",
+            "chr1\t4\t0\n",
+            "chr1\t5\t0\n",
+            "chr1\t6\t3\n",
+            "chr1\t7\t2\n",
+            "chr1\t8\t3\n",
+            "chr2\t1\t3\n",
+            "chr2\t2\t3\n",
+        );
+        let sparse = concat!(
+            "chr1\t2\t3\n",
+            "chr1\t3\t4\n",
+            "chr1\t6\t3\n",
+            "chr1\t7\t2\n",
+            "chr1\t8\t3\n",
+            "chr2\t1\t3\n",
+            "chr2\t2\t3\n",
+        );
+
+        let expected = vec![
+            GenomicInterval::new("chr1", 1, 3),
+            GenomicInterval::new("chr1", 5, 6),
+            GenomicInterval::new("chr1", 7, 8),
+            GenomicInterval::new("chr2", 0, 2),
+        ];
+
+        assert_eq!(parse_depth(dense), expected);
+        assert_eq!(parse_depth(sparse), expected);
+    }
 }

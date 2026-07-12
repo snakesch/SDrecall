@@ -190,13 +190,15 @@ pub fn samtools_markdup_pipeline(
     run_bash(&script, "samtools markdup pipeline")
 }
 
-/// Run `samtools depth -a` on a BAM, returning the output file path.
+/// Run `samtools depth` on a BAM, returning the sparse output file path.
 ///
-/// Output format: `chrom\tpos\tdepth` (1-based positions).
+/// Output format: `chrom\tpos\tdepth` (1-based covered positions). Omitted
+/// positions have zero depth; the island parser treats coordinate gaps as
+/// coverage breaks.
 pub fn samtools_depth(input_bam: &Path, output_tsv: &Path, threads: usize) -> Result<()> {
     let t = threads.to_string();
     let script = format!(
-        "samtools depth -@ {t} -a {bam} > {out}",
+        "samtools depth -@ {t} {bam} > {out}",
         t = t,
         bam = sq(input_bam),
         out = sq(output_tsv),
