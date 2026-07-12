@@ -201,8 +201,13 @@ pub fn bam_to_fastq(
             }
         }
 
+        let pair_qnames = sorted_pair_qnames(&read_pairs);
+
         // Fetch mates for singletons.
-        for entry in read_pairs.values_mut() {
+        for qname in &pair_qnames {
+            let entry = read_pairs
+                .get_mut(qname)
+                .expect("pair name was collected from this map");
             if let (Some(read), None) | (None, Some(read)) = entry {
                 if read.is_paired() && !read.is_mate_unmapped() {
                     let mtid = read.mtid();
@@ -228,7 +233,10 @@ pub fn bam_to_fastq(
         }
 
         // Write pairs where at least one mate passes the filter.
-        for (r1_opt, r2_opt) in read_pairs.into_values() {
+        for qname in pair_qnames {
+            let (r1_opt, r2_opt) = read_pairs
+                .remove(&qname)
+                .expect("pair name was collected from this map");
             let passes = match (&r1_opt, &r2_opt) {
                 (Some(r1), Some(r2)) => should_include_pair(r1, r2, multi_aligned),
                 _ => false,
@@ -248,6 +256,12 @@ pub fn bam_to_fastq(
     r1_writer.flush()?;
     r2_writer.flush()?;
     Ok((output_freads.to_string(), output_rreads.to_string()))
+}
+
+fn sorted_pair_qnames<T>(read_pairs: &HashMap<Vec<u8>, T>) -> Vec<Vec<u8>> {
+    let mut qnames: Vec<Vec<u8>> = read_pairs.keys().cloned().collect();
+    qnames.sort_unstable();
+    qnames
 }
 
 fn write_fastq_record(w: &mut impl Write, rec: &bam::Record) -> anyhow::Result<()> {
@@ -473,6 +487,20 @@ mod tests {
         assert_eq!(
             merge_regions(regions),
             vec![("chr1".to_string(), 10, 120), ("chr2".to_string(), 5, 9)]
+        );
+    }
+
+    #[test]
+    fn pair_qnames_are_sorted_for_reproducible_fastq_output() {
+        let pairs = HashMap::from([
+            (b"read-c".to_vec(), ()),
+            (b"read-a".to_vec(), ()),
+            (b"read-b".to_vec(), ()),
+        ]);
+
+        assert_eq!(
+            sorted_pair_qnames(&pairs),
+            vec![b"read-a".to_vec(), b"read-b".to_vec(), b"read-c".to_vec()]
         );
     }
 }
