@@ -13,6 +13,8 @@ artifacts=(
     HG002.sdrecall.clean.vcf.gz.csi
     HG002.sdrecall.merged.vcf.gz
     HG002.sdrecall.merged.vcf.gz.csi
+    HG002.sdrecall.raw.vcf.gz
+    HG002.sdrecall.raw.vcf.gz.csi
     HG002.sdrecall.vcf.gz
     HG002.sdrecall.vcf.gz.csi
 )
