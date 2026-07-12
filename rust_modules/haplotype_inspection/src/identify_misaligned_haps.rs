@@ -839,12 +839,18 @@ pub fn cal_similarity_score(
 ) -> HashMap<i32, HapSimilarityScore> {
     let mut results: HashMap<i32, HapSimilarityScore> = HashMap::new();
 
-    for (&hid, gdict) in varcounts_among_refseqs.iter() {
+    let mut hids: Vec<i32> = varcounts_among_refseqs.keys().copied().collect();
+    hids.sort_unstable();
+    for hid in hids {
+        let gdict = &varcounts_among_refseqs[&hid];
         let mut max_psv: f64 = -1.0;
         let mut max_psv_c: i32 = 0;
         let mut max_psv_pos: Vec<i32> = Vec::new();
 
-        for (homo_refseq_qname, pairs) in gdict.iter() {
+        let mut refseq_qnames: Vec<&String> = gdict.keys().collect();
+        refseq_qnames.sort_unstable();
+        for homo_refseq_qname in refseq_qnames {
+            let pairs = &gdict[homo_refseq_qname];
             // Aggregate across all region pairs for this refseq
             let total_shared_psv: i32 = pairs.iter().map(|t| t.shared_psv).sum();
             let alt_snv_count: i32 = pairs.iter().map(|t| t.alt_snv_count).sum();
@@ -1321,7 +1327,10 @@ pub fn group_by_dict_optimized<'a>(
 ) -> HashMap<i32, HapGroup<'a>> {
     let mut grouped: HashMap<i32, HapGroup> = HashMap::new();
 
-    for ((v_idx, qname), reads) in vertices.iter() {
+    let mut entries: Vec<_> = vertices.iter().collect();
+    entries.sort_unstable_by(|(a, _), (b, _)| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+
+    for ((v_idx, qname), reads) in entries {
         let label = vprop[v_idx]; // panics if missing — matches Python KeyError
         let group = grouped.entry(label).or_insert_with(|| HapGroup {
             vertex_indices: Vec::new(),
@@ -1503,7 +1512,10 @@ pub fn summarize_enclosing_haps<'a>(
     }
     let mut inspect_results: Vec<InspectCandidate<'a>> = Vec::new();
 
-    for (&hap_id, group) in hap_subgraphs.iter() {
+    let mut hap_ids: Vec<i32> = hap_subgraphs.keys().copied().collect();
+    hap_ids.sort_unstable();
+    for hap_id in hap_ids {
+        let group = &hap_subgraphs[&hap_id];
         // Flatten all read_pair_lists into a single vec
         let all_reads: Vec<&Record> = group
             .read_pair_lists
@@ -1520,15 +1532,15 @@ pub fn summarize_enclosing_haps<'a>(
 
             if span.0 <= start && span.1 >= end {
                 // Fully enclosing
-                let vert_inds: Vec<i32> = sreads
+                let mut vert_inds: Vec<i32> = sreads
                     .iter()
                     .filter_map(|r| {
                         let qn = std::str::from_utf8(r.qname()).ok()?;
                         qname_to_node.get(qn).copied()
                     })
-                    .collect::<std::collections::HashSet<i32>>()
-                    .into_iter()
                     .collect();
+                vert_inds.sort_unstable();
+                vert_inds.dedup();
 
                 region_haplotype_info.insert(
                     span,
@@ -1572,7 +1584,12 @@ pub fn summarize_enclosing_haps<'a>(
 
     // Sort by overlap_coef descending. `total_cmp` is a total order (never panics
     // on a non-finite coef; NaN sorts to the end of the descending order).
-    inspect_results.sort_by(|a, b| b.overlap_coef.total_cmp(&a.overlap_coef));
+    inspect_results.sort_by(|a, b| {
+        b.overlap_coef
+            .total_cmp(&a.overlap_coef)
+            .then_with(|| a.hap_id.cmp(&b.hap_id))
+            .then_with(|| a.span.cmp(&b.span))
+    });
 
     if inspect_results.is_empty() {
         return None;
@@ -1603,16 +1620,16 @@ pub fn summarize_enclosing_haps<'a>(
     );
 
     for cand in &recover_results {
-        let vert_inds: Vec<i32> = cand
+        let mut vert_inds: Vec<i32> = cand
             .reads
             .iter()
             .filter_map(|r| {
                 let qn = std::str::from_utf8(r.qname()).ok()?;
                 qname_to_node.get(qn).copied()
             })
-            .collect::<std::collections::HashSet<i32>>()
-            .into_iter()
             .collect();
+        vert_inds.sort_unstable();
+        vert_inds.dedup();
 
         region_haplotype_info.insert(
             cand.span,
@@ -1756,7 +1773,14 @@ pub fn identify_misalignment_per_region(
     // ── Step 5: For each hap cluster → consensus → slice to overlapping window ──
     let mut final_clusters: HashMap<i32, HaplotypeClusterInfo> = HashMap::new();
 
-    for (&(span_start, span_end), hap_info) in &region_haplotype_info {
+    let mut region_haps: Vec<_> = region_haplotype_info.iter().collect();
+    region_haps.sort_unstable_by(|(span_a, info_a), (span_b, info_b)| {
+        info_a
+            .hap_id
+            .cmp(&info_b.hap_id)
+            .then_with(|| span_a.cmp(span_b))
+    });
+    for (&(span_start, span_end), hap_info) in region_haps {
         let haplotype_idx = hap_info.hap_id;
         let reads = &hap_info.reads;
 
@@ -2045,12 +2069,12 @@ pub fn inspect_haplotypes(
     let mut total_genomic_haps: HashMap<String, Array1<i16>> = HashMap::new();
     let mut qseq_cache: HashMap<String, ReadQseqData> = HashMap::new();
 
-    info!(
-        "[inspect_haplotypes] All the haplotype IDs are: {:?}",
-        hap_qname_info.keys().collect::<Vec<_>>()
-    );
+    let mut hap_ids: Vec<i32> = hap_qname_info.keys().copied().collect();
+    hap_ids.sort_unstable();
+    info!("[inspect_haplotypes] All the haplotype IDs are: {hap_ids:?}");
 
-    for (&hid, qnames_raw) in hap_qname_info {
+    for hid in hap_ids {
+        let qnames_raw = &hap_qname_info[&hid];
         // Filter out low-quality qnames
         let qnames: Vec<String> = qnames_raw
             .iter()
@@ -4739,12 +4763,29 @@ mod tests {
         let result = group_by_dict_optimized(&vprop, &vertices);
         assert_eq!(result.len(), 1);
         let g = result.get(&1).unwrap();
-        assert_eq!(g.vertex_indices.len(), 2);
-        assert_eq!(g.qnames.len(), 2);
+        assert_eq!(g.vertex_indices, vec![10, 20]);
+        assert_eq!(g.qnames, vec!["qA", "qB"]);
         debug!(
             "two_same_label: verts={:?} qnames={:?}",
             g.vertex_indices, g.qnames
         );
+    }
+
+    #[test]
+    fn test_group_by_orders_vertices_independently_of_insertion() {
+        let r1 = make_named_read(b"qA", 100, 50);
+        let r2 = make_named_read(b"qB", 200, 50);
+        let r3 = make_named_read(b"qC", 300, 50);
+        let vprop = HashMap::from([(30, 7), (10, 7), (20, 7)]);
+        let mut vertices: HashMap<(i32, String), Vec<&Record>> = HashMap::new();
+        vertices.insert((30, "qC".to_string()), vec![&r3]);
+        vertices.insert((10, "qA".to_string()), vec![&r1]);
+        vertices.insert((20, "qB".to_string()), vec![&r2]);
+
+        let result = group_by_dict_optimized(&vprop, &vertices);
+        let group = &result[&7];
+        assert_eq!(group.vertex_indices, vec![10, 20, 30]);
+        assert_eq!(group.qnames, vec!["qA", "qB", "qC"]);
     }
 
     #[test]

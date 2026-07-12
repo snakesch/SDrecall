@@ -75,7 +75,7 @@ pub fn split_bams_into_islands(
     // settings for byte-parity testing. IndexedParallelIterator::collect
     // preserves input order, so scheduling cannot reorder the result vector.
     let slice_start = Instant::now();
-    let num_jobs = padded.len().min(2).max(1);
+    let num_jobs = padded.len().clamp(1, 2);
     let threads_per_job = threads;
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(num_jobs)
