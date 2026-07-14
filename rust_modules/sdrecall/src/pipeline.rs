@@ -956,6 +956,7 @@ fn split_or_resume_islands(
     chrom_sizes: &ahash::AHashMap<String, i64>,
     threads: usize,
 ) -> Result<Vec<IslandPaths>> {
+    let engine = crate::island::configured_slice_engine()?;
     let islands_dir = paths.tmp_dir.join("islands");
     let manifest = islands_manifest_path(paths);
     let outputs = vec![CheckpointFile::nonempty(manifest.clone())];
@@ -965,7 +966,7 @@ fn split_or_resume_islands(
         target_bed.to_path_buf(),
         paths.ref_genome_fai_path(),
     ];
-    let marker = stage_marker(paths, "slice_islands");
+    let marker = stage_marker(paths, &format!("slice_islands.{}", engine.as_str()));
     if checkpoint_valid(&marker, &outputs, &deps) {
         let islands = read_island_manifest(&manifest)?;
         if islands.iter().all(island_slice_outputs_valid) {
@@ -984,6 +985,7 @@ fn split_or_resume_islands(
         chrom_sizes,
         threads,
         &islands_dir,
+        engine,
     )?;
     write_island_manifest(&manifest, &islands)?;
     write_checkpoint(&marker, &outputs, &deps)?;
