@@ -7,7 +7,7 @@
 //! the in-process `sdrecall` orchestrator (T9) calls the library directly.
 
 use clap::Parser;
-use fp_control::{run_fp_control, FpControlParams};
+use fp_control::{run_fp_control, FpControlParams, PairingEngine};
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
@@ -59,6 +59,10 @@ struct Cli {
     #[arg(long, default_value_t = 4)]
     threads: u8,
 
+    /// Read-pair grouping engine.
+    #[arg(long, value_enum, default_value_t = PairingEngine::SamtoolsPipe)]
+    pairing_engine: PairingEngine,
+
     /// Optional haplotype-comparison meta TSV path (inspect's debug dump). Empty = skip.
     #[arg(long, default_value = "")]
     compare_meta: String,
@@ -80,6 +84,7 @@ fn main() -> ExitCode {
         mapq_cutoff: cli.mapq_cutoff,
         basequal_median_cutoff: cli.basequal_median_cutoff,
         threads: cli.threads,
+        pairing_engine: cli.pairing_engine,
         compare_haplotype_meta_tab: cli.compare_meta,
     };
 

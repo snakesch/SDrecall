@@ -65,18 +65,6 @@ impl UnionFind {
     }
 }
 
-fn thread_count() -> usize {
-    if let Ok(value) = std::env::var("RUST_GCE_THREADS") {
-        if let Ok(parsed) = value.trim().parse::<usize>() {
-            return parsed.max(1);
-        }
-    }
-    std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(1)
-        .min(8)
-}
-
 fn par_chunk_reduce<T, M, R>(n: usize, threads: usize, map: M, mut reduce: R, init: T) -> T
 where
     T: Send,
@@ -186,18 +174,24 @@ impl<'a> FastGraph<'a> {
 /// then partitions every subset as a masked view of the original CSR.
 pub struct GceContext<'a> {
     graph: FastGraph<'a>,
+    threads: usize,
 }
 
 impl<'a> GceContext<'a> {
     pub fn new(csr: &'a Csr) -> Self {
+        Self::with_threads(csr, 1)
+    }
+
+    pub fn with_threads(csr: &'a Csr, threads: usize) -> Self {
         Self {
             graph: FastGraph::from_csr(csr),
+            threads: threads.max(1),
         }
     }
 
     fn partition(&self, cutoff: f32) -> Vec<Vec<usize>> {
         let n = self.graph.n;
-        partition_on_mask(&self.graph, vec![true; n], n, cutoff)
+        partition_on_mask(&self.graph, vec![true; n], n, cutoff, self.threads)
     }
 
     pub fn partition_subset(&self, nodes: &[usize], cutoff: f32) -> Vec<Vec<usize>> {
@@ -216,7 +210,7 @@ impl<'a> GceContext<'a> {
         for &node in nodes {
             active[node] = true;
         }
-        partition_on_mask(&self.graph, active, nodes.len(), cutoff)
+        partition_on_mask(&self.graph, active, nodes.len(), cutoff, self.threads)
     }
 }
 
@@ -416,6 +410,7 @@ fn partition_on_mask_sequential(
     mut active: Vec<bool>,
     mut active_count: usize,
     cutoff: f32,
+    threads: usize,
 ) -> Vec<Vec<usize>> {
     let n = graph.n;
     if n == 0 || active_count == 0 {
@@ -423,11 +418,7 @@ fn partition_on_mask_sequential(
     }
 
     let mut cand = vec![false; n];
-    let seed_threads = if active_count < 20_000 {
-        1
-    } else {
-        thread_count()
-    };
+    let seed_threads = if active_count < 20_000 { 1 } else { threads };
     let entries = par_chunk_reduce(
         n,
         seed_threads,
@@ -569,13 +560,14 @@ fn partition_on_mask(
     mut active: Vec<bool>,
     mut active_count: usize,
     cutoff: f32,
+    threads: usize,
 ) -> Vec<Vec<usize>> {
     let n = graph.n;
     if n == 0 || active_count == 0 {
         return Vec::new();
     }
     if cutoff < 0.0 {
-        return partition_on_mask_sequential(graph, active, active_count, cutoff);
+        return partition_on_mask_sequential(graph, active, active_count, cutoff, threads);
     }
 
     let mut finder = UnionFind::new(n);
@@ -619,12 +611,12 @@ fn partition_on_mask(
     }
 
     if comps.is_empty() {
-        return partition_on_mask_sequential(graph, active, active_count, cutoff);
+        return partition_on_mask_sequential(graph, active, active_count, cutoff, threads);
     }
 
     let mut order: Vec<usize> = (0..comps.len()).collect();
     order.sort_unstable_by_key(|&idx| std::cmp::Reverse(comps[idx].len()));
-    let workers = thread_count().min(comps.len());
+    let workers = threads.max(1).min(comps.len());
 
     let mut streams: Vec<CliqueStream> = Vec::with_capacity(comps.len());
     if workers <= 1 {
@@ -701,7 +693,7 @@ fn partition_on_mask(
         }
     }
 
-    let mut tail = partition_on_mask_sequential(graph, active, active_count, cutoff);
+    let mut tail = partition_on_mask_sequential(graph, active, active_count, cutoff, threads);
     cliques.append(&mut tail);
     cliques
 }
@@ -1374,6 +1366,34 @@ mod tests {
         assert_eq!(
             canonical_local_cliques(&fast),
             canonical_local_cliques(&legacy)
+        );
+    }
+
+    #[test]
+    fn explicit_thread_budgets_produce_identical_partitions() {
+        let mut entries = Vec::new();
+        for component in 0..4 {
+            let start = component * 3;
+            for node in start..(start + 3) {
+                entries.push((node, node, 1.0));
+            }
+            for left in start..(start + 3) {
+                for right in start..(start + 3) {
+                    if left != right {
+                        entries.push((left, right, 0.8));
+                    }
+                }
+            }
+        }
+        let csr = Csr::from_entries(12, entries);
+        let one = GceContext::with_threads(&csr, 1).partition(0.3);
+        let two = GceContext::with_threads(&csr, 2).partition(0.3);
+        let four = GceContext::with_threads(&csr, 4).partition(0.3);
+
+        assert_eq!(canonical_local_cliques(&two), canonical_local_cliques(&one));
+        assert_eq!(
+            canonical_local_cliques(&four),
+            canonical_local_cliques(&one)
         );
     }
 

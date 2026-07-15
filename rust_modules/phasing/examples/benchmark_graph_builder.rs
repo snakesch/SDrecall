@@ -5,6 +5,7 @@ use clap::{Parser, ValueEnum};
 use phasing::bam_reading::{build_allele_depth_map, migrate_bam_to_sorted_intervals_grouped};
 use phasing::graph_builder::{build_phasing_graph, build_phasing_graph_legacy};
 use phasing::structs::HaplotypeConfig;
+use phasing::PairingEngine;
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 enum Engine {
@@ -30,6 +31,8 @@ struct Args {
     mean_read_length: f32,
     #[arg(long, default_value_t = 25)]
     threads: u8,
+    #[arg(long, value_enum, default_value_t = PairingEngine::SamtoolsPipe)]
+    pairing_engine: PairingEngine,
 }
 
 fn main() -> Result<()> {
@@ -43,7 +46,7 @@ fn main() -> Result<()> {
         args.mapq_cutoff,
         args.basequal_median_cutoff,
         true,
-        true,
+        args.pairing_engine,
         args.threads,
     )
     .map_err(|error| anyhow::anyhow!(error.to_string()))?;

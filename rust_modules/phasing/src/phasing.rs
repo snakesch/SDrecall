@@ -288,11 +288,14 @@ fn find_cliques_in_components(input: &PhasingInput) -> Vec<(Round, HashSet<i32>)
 }
 
 /// CSR-native version of [`find_cliques_in_components`].
-fn find_cliques_in_components_sparse(input: &SparsePhasingInput) -> Vec<(Round, HashSet<i32>)> {
+fn find_cliques_in_components_sparse(
+    input: &SparsePhasingInput,
+    threads: usize,
+) -> Vec<(Round, HashSet<i32>)> {
     let weights = &input.weights;
     let size = weights.size;
     let cutoff = input.edge_weight_cutoff;
-    let gce_ctx = GceContext::new(weights);
+    let gce_ctx = GceContext::with_threads(weights, threads);
     let refinement_transpose = structural_transpose(weights);
 
     let comp = connected_components(size, &input.edges);
@@ -598,7 +601,12 @@ pub fn phase(input: &PhasingInput) -> HashMap<i32, i32> {
 /// CSR-native phasing prototype. Intended to prove parity before replacing the
 /// production dense `Array2<f32>` graph build.
 pub fn phase_sparse(input: &SparsePhasingInput) -> HashMap<i32, i32> {
-    let cliques = find_cliques_in_components_sparse(input);
+    phase_sparse_with_threads(input, 1)
+}
+
+/// Sparse phasing with an explicit GCE worker budget.
+pub fn phase_sparse_with_threads(input: &SparsePhasingInput, threads: usize) -> HashMap<i32, i32> {
+    let cliques = find_cliques_in_components_sparse(input, threads.max(1));
     find_components_inside_cliques_sparse(&cliques, input)
 }
 
@@ -767,6 +775,16 @@ mod tests {
         let dense_hap = phase(&dense);
         let sparse_hap = phase_sparse(&sparse);
         assert_eq!(vertex_partition(&sparse_hap), vertex_partition(&dense_hap));
+    }
+
+    #[test]
+    fn sparse_phase_is_thread_budget_invariant() {
+        let (_, sparse) = dense_sparse_pair();
+        let one = phase_sparse_with_threads(&sparse, 1);
+        let two = phase_sparse_with_threads(&sparse, 2);
+        let four = phase_sparse_with_threads(&sparse, 4);
+        assert_eq!(vertex_partition(&two), vertex_partition(&one));
+        assert_eq!(vertex_partition(&four), vertex_partition(&one));
     }
 
     #[test]

@@ -3,14 +3,43 @@ use rust_htslib::bam::ext::BamRecordExtensions;
 use rust_htslib::bam::{self, Read, Record};
 
 use ahash::AHashMap; // Faster HashMap for string keys
+use clap::ValueEnum;
 use log::{debug, error, info, warn};
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read as IoRead};
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tempfile::NamedTempFile;
+
+/// How coordinate-sorted BAM records are grouped into read pairs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum PairingEngine {
+    /// Retained benchmark control: write a collated BAM and reopen it.
+    #[value(name = "temp-file")]
+    SamtoolsTempFile,
+    /// Stream uncompressed collated BAM records through an OS pipe.
+    #[default]
+    #[value(name = "samtools-pipe")]
+    SamtoolsPipe,
+    /// Group primary records directly in Rust without invoking samtools.
+    #[value(name = "rust-memory")]
+    RustMemory,
+}
+
+impl std::fmt::Display for PairingEngine {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = match self {
+            Self::SamtoolsTempFile => "temp-file",
+            Self::SamtoolsPipe => "samtools-pipe",
+            Self::RustMemory => "rust-memory",
+        };
+        formatter.write_str(value)
+    }
+}
 
 fn should_skip_alignment(read: &Record) -> bool {
     // Skip secondary, supplementary, and duplicate alignments early
@@ -149,41 +178,28 @@ fn is_read_noisy(
     false
 }
 
-/// Optional: Run samtools collate to group reads by qname
-/// This produces a temporary file that is automatically deleted when the function returns
-fn collate_bam_file(
+/// Retained control engine: collate through a temporary BAM on disk.
+fn collate_bam_temp_file(
     bam_file_path: &str,
     threads: u8,
-) -> Result<Option<NamedTempFile>, Box<dyn std::error::Error>> {
-    // Check if samtools is available
-    let samtools_check = Command::new("samtools").arg("--version").output();
-
-    if samtools_check.is_err() {
-        // samtools not available, return None to use original file
-        return Ok(None);
-    }
-
-    // Create a temporary file for collated output, make sure the temp file end with .bam suffix
-    // ? operator: propagates any error from NamedTempFile creation up to the caller
+) -> Result<NamedTempFile, Box<dyn std::error::Error>> {
     let temp_file = NamedTempFile::with_suffix_in(".bam", Path::new("."))?;
     let temp_path = temp_file
         .path()
         .to_str()
-        // ok_or: converts Option<&str> to Result<&str, &str> - if None, returns Err with the message
-        .ok_or("Failed to convert temp path to string")?; // ? operator: propagates the error if conversion failed
+        .ok_or("failed to convert collated BAM path to UTF-8")?;
 
-    // Run samtools collate with fast mode for efficiency
     let output = Command::new("samtools")
         .args([
             "collate",
-            "-f", // Fast mode - primary alignments only
+            "-f",
             "-@",
-            &threads.to_string(), // Use threads
+            &threads.to_string(),
             bam_file_path,
             "-o",
             temp_path,
         ])
-        .output()?; // ? operator: propagates any error from command execution
+        .output()?;
 
     if !output.status.success() {
         return Err(format!(
@@ -193,7 +209,160 @@ fn collate_bam_file(
         .into());
     }
 
-    Ok(Some(temp_file))
+    Ok(temp_file)
+}
+
+#[cfg(unix)]
+struct CollateProcess {
+    child: std::process::Child,
+    stderr_reader: Option<thread::JoinHandle<Vec<u8>>>,
+    finished: bool,
+}
+
+#[cfg(unix)]
+impl CollateProcess {
+    fn finish(mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let status = self.child.wait()?;
+        let stderr = self
+            .stderr_reader
+            .take()
+            .ok_or("samtools collate stderr reader was already consumed")?
+            .join()
+            .map_err(|_| "samtools collate stderr reader panicked")?;
+        self.finished = true;
+
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "samtools collate failed with {status}: {}",
+                String::from_utf8_lossy(&stderr)
+            )
+            .into())
+        }
+    }
+}
+
+#[cfg(unix)]
+impl Drop for CollateProcess {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(stderr_reader) = self.stderr_reader.take() {
+            let _ = stderr_reader.join();
+        }
+    }
+}
+
+enum PairingReaderGuard {
+    None,
+    TempFile {
+        _file: NamedTempFile,
+    },
+    #[cfg(unix)]
+    Pipe(CollateProcess),
+}
+
+impl PairingReaderGuard {
+    fn finish(self) -> Result<(), Box<dyn std::error::Error>> {
+        match self {
+            Self::None | Self::TempFile { .. } => Ok(()),
+            #[cfg(unix)]
+            Self::Pipe(process) => process.finish(),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn collate_bam_pipe(
+    bam_file_path: &str,
+    threads: u8,
+) -> Result<(bam::Reader, PairingReaderGuard), Box<dyn std::error::Error>> {
+    let mut child = Command::new("samtools")
+        .args([
+            "collate",
+            "-f",
+            "-u",
+            "-O",
+            "-@",
+            &threads.to_string(),
+            bam_file_path,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("failed to capture samtools collate stdout")?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or("failed to capture samtools collate stderr")?;
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = BufReader::new(stderr).read_to_end(&mut bytes);
+        bytes
+    });
+
+    let fd_path = format!("/dev/fd/{}", stdout.as_raw_fd());
+    let reader = match bam::Reader::from_path(&fd_path) {
+        Ok(reader) => reader,
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stderr_reader.join();
+            return Err(format!("failed to open collated BAM pipe {fd_path}: {error}").into());
+        }
+    };
+    drop(stdout);
+
+    Ok((
+        reader,
+        PairingReaderGuard::Pipe(CollateProcess {
+            child,
+            stderr_reader: Some(stderr_reader),
+            finished: false,
+        }),
+    ))
+}
+
+fn open_pairing_reader(
+    bam_file_path: &str,
+    engine: PairingEngine,
+    threads: u8,
+) -> Result<(bam::Reader, PairingReaderGuard), Box<dyn std::error::Error>> {
+    match engine {
+        PairingEngine::SamtoolsTempFile => {
+            let temp_file = collate_bam_temp_file(bam_file_path, threads)?;
+            let reader = bam::Reader::from_path(temp_file.path())?;
+            Ok((reader, PairingReaderGuard::TempFile { _file: temp_file }))
+        }
+        PairingEngine::SamtoolsPipe => {
+            #[cfg(unix)]
+            {
+                collate_bam_pipe(bam_file_path, threads)
+            }
+            #[cfg(not(unix))]
+            {
+                let temp_file = collate_bam_temp_file(bam_file_path, threads)?;
+                let reader = bam::Reader::from_path(temp_file.path())?;
+                Ok((reader, PairingReaderGuard::TempFile { _file: temp_file }))
+            }
+        }
+        PairingEngine::RustMemory => {
+            let mut reader = bam::Reader::from_path(bam_file_path)?;
+            if threads > 1 {
+                reader.set_threads(usize::from(threads - 1))?;
+            }
+            Ok((reader, PairingReaderGuard::None))
+        }
+    }
 }
 
 /// Process BAM file by iterating through qname-grouped reads
@@ -203,33 +372,16 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
     mapq_filter: u8,
     basequal_median_filter: u8,
     filter_noisy: bool,
-    use_collate: bool,
+    engine: PairingEngine,
     threads: u8,
 ) -> Result<(ReadPairMap, rust_htslib::bam::HeaderView), Box<dyn std::error::Error>> {
-    info!("[migrate_bam_to_sorted_intervals_grouped] Starting BAM processing: file={}, mapq_filter={}, basequal_median_filter={}, filter_noisy={}, use_collate={}, threads={}", 
-         bam_file_path, mapq_filter, basequal_median_filter, filter_noisy, use_collate, threads);
+    info!(
+        "[migrate_bam_to_sorted_intervals_grouped] file={bam_file_path} \
+         mapq_filter={mapq_filter} basequal_median_filter={basequal_median_filter} \
+         filter_noisy={filter_noisy} engine={engine} threads={threads}"
+    );
 
-    // Optionally collate the BAM file first, make sure the temp file end with .bam suffix
-    let (bam_path, _temp_file) = if use_collate {
-        // ? operator: propagates any error from collate_bam_file function
-        match collate_bam_file(bam_file_path, threads)? {
-            Some(temp_file) => {
-                let path = temp_file
-                    .path()
-                    .to_str()
-                    // ok_or: converts Option<&str> to Result<&str, &str>
-                    .ok_or("Failed to convert temp path to string")? // ? operator: propagates error if path conversion fails
-                    .to_string();
-                (path, Some(temp_file))
-            }
-            None => (bam_file_path.to_string(), None),
-        }
-    } else {
-        (bam_file_path.to_string(), None)
-    };
-
-    // ? operator: propagates any error from BAM file opening
-    let mut bam = bam::Reader::from_path(&bam_path)?;
+    let (mut bam, reader_guard) = open_pairing_reader(bam_file_path, engine, threads)?;
     let header = bam.header().clone();
     info!("[migrate_bam_to_sorted_intervals_grouped] BAM file opened successfully, {} chromosomes found", header.target_count());
 
@@ -248,9 +400,63 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
             .insert(chrom, SortedVecIntervals::new());
     }
     info!(
-        "[migrate_bam_to_sorted_intervals_grouped] Interval trees initialized for {} chromosomes",
-        chrom_count
+        "[migrate_bam_to_sorted_intervals_grouped] Interval trees initialized for \
+         {chrom_count} chromosomes"
     );
+
+    if engine == PairingEngine::RustMemory {
+        let mut qname_order = Vec::new();
+        let mut groups: AHashMap<String, Vec<Record>> = AHashMap::new();
+        let mut total_reads_processed = 0usize;
+        let mut skipped_alignments = 0usize;
+
+        for read_result in bam.records() {
+            let read = read_result?;
+            total_reads_processed += 1;
+            if should_skip_alignment(&read) {
+                skipped_alignments += 1;
+                continue;
+            }
+
+            let qname = String::from_utf8_lossy(read.qname()).to_string();
+            if let Some(reads) = groups.get_mut(&qname) {
+                reads.push(read);
+            } else {
+                qname_order.push(qname.clone());
+                groups.insert(qname, vec![read]);
+            }
+        }
+
+        for qname in qname_order {
+            let mut reads = groups
+                .remove(&qname)
+                .expect("qname order and in-memory groups stay synchronized");
+            process_qname_group(
+                &mut result,
+                &header,
+                qname,
+                &mut reads,
+                &mut qname_idx_counter,
+                mapq_filter,
+                basequal_median_filter,
+                filter_noisy,
+            )?;
+        }
+
+        drop(bam);
+        reader_guard.finish()?;
+        for interval_tree in result.interval_trees.values_mut() {
+            interval_tree.finalize()?;
+        }
+        info!(
+            "[migrate_bam_to_sorted_intervals_grouped] BAM processing complete: {} total reads processed, {} alignments skipped, {} read pairs retained, {} noisy qnames filtered",
+            total_reads_processed,
+            skipped_alignments,
+            result.readpair_dict.len(),
+            result.noisy_qnames.len()
+        );
+        return Ok((result, header));
+    }
 
     // Buffer for collecting reads with the same qname
     let mut current_qname: Option<String> = None;
@@ -317,6 +523,9 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
         )?; // ? operator: propagates any error from process_qname_group
     }
 
+    drop(bam);
+    reader_guard.finish()?;
+
     // Finalize all interval trees
     for interval_tree in result.interval_trees.values_mut() {
         // ? operator: propagates any error from finalize
@@ -326,7 +535,6 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
     info!("[migrate_bam_to_sorted_intervals_grouped] BAM processing complete: {} total reads processed, {} alignments skipped, {} read pairs retained, {} noisy qnames filtered",
          total_reads_processed, skipped_alignments, result.readpair_dict.len(), result.noisy_qnames.len());
 
-    // The temp file will be automatically deleted when _temp_file goes out of scope
     Ok((result, header))
 }
 
@@ -666,6 +874,123 @@ pub(crate) fn base_to_index(base: char) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rust_htslib::bam::header::HeaderRecord;
+    use rust_htslib::bam::record::{Cigar, CigarString};
+    use rust_htslib::bam::{Format, Header, Writer};
+    use std::path::Path;
+
+    const PAIRED: u16 = 0x1;
+    const PROPER_PAIR: u16 = 0x2;
+    const READ1: u16 = 0x40;
+    const READ2: u16 = 0x80;
+    const SECONDARY: u16 = 0x100;
+    const DUPLICATE: u16 = 0x400;
+    const SUPPLEMENTARY: u16 = 0x800;
+
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct RecordPayload {
+        tid: i32,
+        pos: i64,
+        mtid: i32,
+        mpos: i64,
+        insert_size: i64,
+        flags: u16,
+        mapq: u8,
+        cigar: String,
+        sequence: Vec<u8>,
+        qualities: Vec<u8>,
+    }
+
+    #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct PairPayload {
+        qname: String,
+        read1: RecordPayload,
+        read2: RecordPayload,
+    }
+
+    fn make_record(qname: &[u8], pos: i64, mate_pos: i64, flags: u16, mapq: u8) -> Record {
+        let sequence = vec![b'A'; 100];
+        let qualities = vec![30; 100];
+        let mut record = Record::new();
+        record.set(
+            qname,
+            Some(&CigarString(vec![Cigar::Match(100)])),
+            &sequence,
+            &qualities,
+        );
+        record.set_tid(0);
+        record.set_pos(pos);
+        record.set_mtid(0);
+        record.set_mpos(mate_pos);
+        record.set_insert_size(mate_pos - pos);
+        record.set_flags(flags);
+        record.set_mapq(mapq);
+        record
+    }
+
+    fn write_pairing_fixture(path: &Path) {
+        let mut sq = HeaderRecord::new(b"SQ");
+        sq.push_tag(b"SN", "stream1");
+        sq.push_tag(b"LN", 10_000);
+        let mut header = Header::new();
+        header.push_record(&sq);
+
+        let valid_read1 = PAIRED | PROPER_PAIR | READ1;
+        let valid_read2 = PAIRED | PROPER_PAIR | READ2;
+        let records = vec![
+            make_record(b"alpha", 100, 700, valid_read1, 60),
+            make_record(b"beta", 150, 600, valid_read1, 60),
+            make_record(b"incomplete", 175, 900, valid_read1, 60),
+            make_record(b"noisy", 200, 650, valid_read1, 5),
+            make_record(b"duplicate", 225, 750, valid_read1 | DUPLICATE, 60),
+            make_record(b"alpha", 250, 700, valid_read1 | SECONDARY, 60),
+            make_record(b"alpha", 350, 700, valid_read1 | SUPPLEMENTARY, 60),
+            make_record(b"beta", 600, 150, valid_read2, 60),
+            make_record(b"noisy", 650, 200, valid_read2, 60),
+            make_record(b"alpha", 700, 100, valid_read2, 60),
+            make_record(b"duplicate", 750, 225, valid_read2 | DUPLICATE, 60),
+        ];
+
+        let mut writer = Writer::from_path(path, &header, Format::Bam).expect("create fixture BAM");
+        for record in &records {
+            writer.write(record).expect("write fixture record");
+        }
+    }
+
+    fn record_payload(record: &Record) -> RecordPayload {
+        RecordPayload {
+            tid: record.tid(),
+            pos: record.pos(),
+            mtid: record.mtid(),
+            mpos: record.mpos(),
+            insert_size: record.insert_size(),
+            flags: record.flags(),
+            mapq: record.mapq(),
+            cigar: record.cigar().to_string(),
+            sequence: record.seq().as_bytes(),
+            qualities: record.qual().to_vec(),
+        }
+    }
+
+    fn canonical_pairs(result: &ReadPairMap) -> Vec<PairPayload> {
+        let mut pairs: Vec<_> = result
+            .readpair_dict
+            .values()
+            .map(|pair| PairPayload {
+                qname: pair.qname.clone(),
+                read1: record_payload(&pair.read1),
+                read2: record_payload(pair.read2.as_ref().expect("complete pair")),
+            })
+            .collect();
+        pairs.sort_unstable();
+        pairs
+    }
+
+    fn noisy_qnames(result: &ReadPairMap) -> Vec<String> {
+        let mut qnames: Vec<_> = result.noisy_qnames.keys().cloned().collect();
+        qnames.sort_unstable();
+        qnames
+    }
 
     #[test]
     fn median_phred_matches_np_median() {
@@ -675,5 +1000,52 @@ mod tests {
         assert_eq!(median_phred(&[15, 16]), 15.5);
         assert_eq!(median_phred(&[30, 10, 20, 40]), 25.0); // unsorted even
         assert_eq!(median_phred(&[]), 0.0);
+    }
+
+    #[test]
+    fn pairing_engines_match_on_interleaved_coordinate_sorted_records() {
+        let fixture = NamedTempFile::with_suffix(".bam").expect("create fixture path");
+        write_pairing_fixture(fixture.path());
+        let fixture_path = fixture.path().to_string_lossy();
+
+        let run = |engine| {
+            migrate_bam_to_sorted_intervals_grouped(&fixture_path, 10, 15, true, engine, 2)
+                .expect("pair fixture records")
+                .0
+        };
+        let temp_file = run(PairingEngine::SamtoolsTempFile);
+        let pipe = run(PairingEngine::SamtoolsPipe);
+        let rust_memory = run(PairingEngine::RustMemory);
+
+        let expected_qnames = vec!["alpha".to_string(), "beta".to_string()];
+        let retained_qnames = |result: &ReadPairMap| {
+            let mut qnames: Vec<_> = result.qname_to_idx.keys().cloned().collect();
+            qnames.sort_unstable();
+            qnames
+        };
+        assert_eq!(retained_qnames(&temp_file), expected_qnames);
+        assert_eq!(retained_qnames(&pipe), expected_qnames);
+        assert_eq!(retained_qnames(&rust_memory), expected_qnames);
+
+        assert_eq!(canonical_pairs(&pipe), canonical_pairs(&temp_file));
+        assert_eq!(canonical_pairs(&rust_memory), canonical_pairs(&temp_file));
+        assert_eq!(noisy_qnames(&temp_file), vec!["noisy"]);
+        assert_eq!(noisy_qnames(&pipe), noisy_qnames(&temp_file));
+        assert_eq!(noisy_qnames(&rust_memory), noisy_qnames(&temp_file));
+
+        assert_eq!(pipe.qname_to_idx, temp_file.qname_to_idx);
+        assert_eq!(pipe.idx_to_qname, temp_file.idx_to_qname);
+
+        for result in [&temp_file, &pipe, &rust_memory] {
+            let overlap_ids = result.interval_trees["stream1"]
+                .find_overlaps(0, 1_000)
+                .expect("query finalized intervals");
+            let mut overlap_qnames: Vec<_> = overlap_ids
+                .into_iter()
+                .map(|idx| result.idx_to_qname[&idx].clone())
+                .collect();
+            overlap_qnames.sort_unstable();
+            assert_eq!(overlap_qnames, expected_qnames);
+        }
     }
 }

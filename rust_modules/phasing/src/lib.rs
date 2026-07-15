@@ -38,7 +38,11 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-pub use phasing::{phase, phase_sparse, qname_partition, PhasingInput, Round, SparsePhasingInput};
+pub use bam_reading::PairingEngine;
+pub use phasing::{
+    phase, phase_sparse, phase_sparse_with_threads, qname_partition, PhasingInput, Round,
+    SparsePhasingInput,
+};
 
 use crate::kernels::Csr;
 use sdrecall_utils::{Result, SdError};
@@ -55,6 +59,7 @@ pub struct PhaserParams {
     pub mapq_cutoff: u8,
     pub basequal_median_cutoff: u8,
     pub threads: u8,
+    pub pairing_engine: PairingEngine,
 }
 
 impl Default for PhaserParams {
@@ -65,6 +70,7 @@ impl Default for PhaserParams {
             mapq_cutoff: 10,
             basequal_median_cutoff: 15,
             threads: 4,
+            pairing_engine: PairingEngine::SamtoolsPipe,
         }
     }
 }
@@ -317,7 +323,7 @@ pub fn build_and_phase_with_intrinsic(
         params.mapq_cutoff,
         params.basequal_median_cutoff,
         true,
-        true,
+        params.pairing_engine,
         params.threads,
     )
     .map_err(|e| SdError::Compute(format!("BAM read/pairing failed for {bam}: {e}")))?;
@@ -417,7 +423,7 @@ pub fn build_and_phase_with_intrinsic(
         total_start.elapsed().as_secs_f64()
     );
     let phase_start = Instant::now();
-    let vertex_hap = phase_sparse(&phasing_input);
+    let vertex_hap = phase_sparse_with_threads(&phasing_input, usize::from(params.threads));
     let phase_time = phase_start.elapsed();
 
     let haplotype_clusters = {

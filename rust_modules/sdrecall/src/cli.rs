@@ -134,10 +134,17 @@ pub struct PreparationArgs {
 /// `SDrecall:400-403`).
 #[derive(clap::Args, Debug, Clone)]
 pub struct RealignmentArgs {
-    /// Number of threads for numba acceleration (kept for CLI parity; the Rust
-    /// path uses rayon, so this becomes the per-island inner-thread hint).
-    #[arg(long = "numba_threads", default_value_t = 2)]
-    pub numba_threads: usize,
+    /// Inner thread budget assigned to each active island.
+    #[arg(long = "island_threads", default_value_t = 2)]
+    pub island_threads: usize,
+
+    /// Engine used to group island records into read pairs.
+    #[arg(
+        long = "island_pairing_engine",
+        value_enum,
+        default_value_t = fp_control::PairingEngine::SamtoolsPipe
+    )]
+    pub island_pairing_engine: fp_control::PairingEngine,
 
     /// Abort the run if any island's false-positive control fails or panics.
     /// The default (`false`) mirrors the Python pipeline — per-island failures are
@@ -276,8 +283,46 @@ mod tests {
                 assert_eq!(args.common.target_tag, "exome");
                 assert_eq!(args.common.mq_cutoff, 41);
                 assert_eq!(args.prep.minimum_depth, 5);
-                assert_eq!(args.realign.numba_threads, 2);
+                assert_eq!(args.realign.island_threads, 2);
+                assert_eq!(
+                    args.realign.island_pairing_engine,
+                    fp_control::PairingEngine::SamtoolsPipe
+                );
                 assert!(args.conventional.conventional_vcf.is_none());
+            }
+            _ => panic!("expected Run subcommand"),
+        }
+    }
+
+    #[test]
+    fn parses_explicit_island_threads_and_pairing_engine() {
+        let cli = Cli::try_parse_from([
+            "sdrecall",
+            "run",
+            "-r",
+            "/refs/g.fasta",
+            "-o",
+            "/tmp/out",
+            "-i",
+            "/data/s.bam",
+            "-m",
+            "/refs/map.tsv",
+            "-b",
+            "/refs/t.bed",
+            "--island_threads",
+            "4",
+            "--island_pairing_engine",
+            "rust-memory",
+        ])
+        .expect("explicit island options should parse");
+
+        match cli.command {
+            Command::Run(args) => {
+                assert_eq!(args.realign.island_threads, 4);
+                assert_eq!(
+                    args.realign.island_pairing_engine,
+                    fp_control::PairingEngine::RustMemory
+                );
             }
             _ => panic!("expected Run subcommand"),
         }

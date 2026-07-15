@@ -11,7 +11,7 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use phasing::{phase_bam_with_intrinsic, PhaserParams};
+use phasing::{phase_bam_with_intrinsic, PairingEngine, PhaserParams};
 
 #[derive(Parser, Debug)]
 #[command(about = "Standalone BAM phaser for paired short-read data")]
@@ -54,6 +54,10 @@ struct Args {
     /// htslib / samtools thread budget.
     #[arg(long, default_value_t = 4)]
     threads: u8,
+
+    /// Read-pair grouping engine.
+    #[arg(long, value_enum, default_value_t = PairingEngine::SamtoolsPipe)]
+    pairing_engine: PairingEngine,
 }
 
 fn main() -> Result<()> {
@@ -66,6 +70,7 @@ fn main() -> Result<()> {
         mapq_cutoff: args.mapq_cutoff,
         basequal_median_cutoff: args.basequal_median_cutoff,
         threads: args.threads,
+        pairing_engine: args.pairing_engine,
     };
 
     let t0 = Instant::now();

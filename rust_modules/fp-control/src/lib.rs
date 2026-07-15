@@ -42,6 +42,7 @@
 use std::collections::{HashMap, HashSet};
 
 use haplotype_inspection::identify_misaligned_haps::inspect_haplotypes;
+pub use phasing::PairingEngine;
 use phasing::{build_and_phase_with_intrinsic, GraphPhaseMetrics, PhaserParams};
 use sdrecall_utils::{Result, SdError};
 
@@ -63,6 +64,8 @@ pub struct FpControlParams {
     pub basequal_median_cutoff: u8,
     /// htslib BGZF / collate thread budget.
     pub threads: u8,
+    /// Engine used to group coordinate-sorted records into read pairs.
+    pub pairing_engine: PairingEngine,
     /// Path for the haplotype-comparison meta TSV inspect writes (Python's
     /// `compare_haplotype_meta_tab`). May be empty to skip the dump.
     pub compare_haplotype_meta_tab: String,
@@ -77,6 +80,7 @@ impl Default for FpControlParams {
             mapq_cutoff: 10,
             basequal_median_cutoff: 15,
             threads: 4,
+            pairing_engine: PairingEngine::SamtoolsPipe,
             compare_haplotype_meta_tab: String::new(),
         }
     }
@@ -221,6 +225,7 @@ pub fn run_fp_control(
         mapq_cutoff: params.mapq_cutoff,
         basequal_median_cutoff: params.basequal_median_cutoff,
         threads: params.threads,
+        pairing_engine: params.pairing_engine,
     };
     log::info!("[fp_control] Stages 1-2: building + phasing graph from {bam}");
 

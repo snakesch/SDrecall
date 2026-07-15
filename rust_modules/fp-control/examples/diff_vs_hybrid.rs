@@ -68,7 +68,7 @@ fn graph_lowqual(meta: &Meta, reference: &str) -> HashSet<String> {
         meta.recall_mq_cutoff,
         meta.basequal_median_cutoff,
         true,
-        true,
+        fp_control::PairingEngine::SamtoolsPipe,
         4,
     )
     .expect("graph BAM read");
@@ -175,6 +175,7 @@ fn main() {
             mapq_cutoff: meta.recall_mq_cutoff,
             basequal_median_cutoff: meta.basequal_median_cutoff,
             threads: 4,
+            pairing_engine: fp_control::PairingEngine::SamtoolsPipe,
             compare_haplotype_meta_tab: String::new(),
         };
 

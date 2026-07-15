@@ -139,7 +139,8 @@ pub fn run_realign_only(args: &RealignArgs, paths: &Paths) -> Result<PathBuf> {
     let sdrecall_vcf = realign_and_recall_inner(
         paths,
         args.common.threads,
-        args.realign.numba_threads,
+        args.realign.island_threads,
+        args.realign.island_pairing_engine,
         args.common.mq_cutoff,
         args.realign.strict_islands,
     )?;
@@ -296,7 +297,8 @@ fn realign_and_recall(args: &RunArgs, paths: &Paths) -> Result<PathBuf> {
     realign_and_recall_inner(
         paths,
         args.common.threads,
-        args.realign.numba_threads,
+        args.realign.island_threads,
+        args.realign.island_pairing_engine,
         args.common.mq_cutoff,
         args.realign.strict_islands,
     )
@@ -305,7 +307,8 @@ fn realign_and_recall(args: &RunArgs, paths: &Paths) -> Result<PathBuf> {
 fn realign_and_recall_inner(
     paths: &Paths,
     threads: usize,
-    numba_threads: usize,
+    island_threads: usize,
+    pairing_engine: fp_control::PairingEngine,
     mq_cutoff: i32,
     strict_islands: bool,
 ) -> Result<PathBuf> {
@@ -374,7 +377,16 @@ fn realign_and_recall_inner(
         "realign_and_recall",
         "fp_control",
         realign_start,
-        || eliminate_misalignments(paths, threads, numba_threads, mq_cutoff, strict_islands),
+        || {
+            eliminate_misalignments(
+                paths,
+                threads,
+                island_threads,
+                pairing_engine,
+                mq_cutoff,
+                strict_islands,
+            )
+        },
     )?;
 
     // ── Step 7: priority-merge raw vs clean, subset to target ───────────
@@ -1011,7 +1023,8 @@ fn raw_bam_merge_outputs(paths: &Paths) -> Vec<CheckpointFile> {
 fn eliminate_misalignments(
     paths: &Paths,
     threads: usize,
-    numba_threads: usize,
+    island_threads: usize,
+    pairing_engine: fp_control::PairingEngine,
     mq_cutoff: i32,
     strict_islands: bool,
 ) -> Result<()> {
@@ -1079,13 +1092,22 @@ fn eliminate_misalignments(
     // wiring.
 
     // Per-island fp-control (rayon parallel).
-    let island_budget = ThreadBudget::new(threads, numba_threads as f64);
+    let island_budget = ThreadBudget::new(threads, island_threads as f64);
     let (clean_bams, clean_vcfs) = timed_pipeline_stage(
         paths,
         "fp_control",
         "process_islands",
         fp_control_start,
-        || fp_control_per_island(paths, &islands, island_budget, mq_cutoff, strict_islands),
+        || {
+            fp_control_per_island(
+                paths,
+                &islands,
+                island_budget,
+                pairing_engine,
+                mq_cutoff,
+                strict_islands,
+            )
+        },
     )?;
 
     // Merge per-island outputs.
@@ -1400,6 +1422,7 @@ fn fp_control_per_island(
     paths: &Paths,
     islands: &[IslandPaths],
     budget: ThreadBudget,
+    pairing_engine: fp_control::PairingEngine,
     mq_cutoff: i32,
     strict_islands: bool,
 ) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
@@ -1451,6 +1474,7 @@ fn fp_control_per_island(
                         &paths.sample_id,
                         mq_cutoff as u8,
                         tpj,
+                        pairing_engine,
                     )
                 }));
 
@@ -1584,6 +1608,7 @@ fn process_one_island(
     sample_id: &str,
     mq_cutoff: u8,
     threads: usize,
+    pairing_engine: fp_control::PairingEngine,
 ) -> Result<Option<(PathBuf, PathBuf)>> {
     let total_start = Instant::now();
     let bam_str = island.raw_bam.to_string_lossy().to_string();
@@ -1594,6 +1619,7 @@ fn process_one_island(
         mapq_cutoff: mq_cutoff,
         basequal_median_cutoff: 15,
         threads: clamp_threads_u8(threads),
+        pairing_engine,
         ..Default::default()
     };
 
