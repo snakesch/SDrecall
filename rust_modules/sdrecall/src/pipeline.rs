@@ -27,6 +27,10 @@ use crate::island::IslandPaths;
 use crate::paths::{Paths, RgRef};
 use crate::rg_discovery::RgInfo;
 
+/// Keep largest-first task lists stealable item by item. Without this bound,
+/// Rayon can fold a contiguous heavy prefix serially after other workers idle.
+const RAYON_TASK_MAX_LEN: usize = 1;
+
 /// Resolved thread budget for one pipeline run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ThreadBudget {
@@ -443,6 +447,7 @@ fn prepare_masked_align_regions(
     let errors: Vec<_> = pool.install(|| {
         rg_infos
             .par_iter()
+            .with_max_len(RAYON_TASK_MAX_LEN)
             .filter_map(|rg| {
                 let rg_ref = RgRef::Label(&rg.label);
                 let whole_bed = match paths.all_homo_regions_bed_path(rg_ref) {
@@ -544,6 +549,7 @@ fn realign_per_rg(
     let results: Vec<Result<(PathBuf, PathBuf)>> = pool.install(|| {
         rg_infos
             .par_iter()
+            .with_max_len(RAYON_TASK_MAX_LEN)
             .map(|rg| {
                 let rg_ref = RgRef::Label(&rg.label);
                 let rg_dir = paths.rg_dir(rg_ref)?;
@@ -1415,6 +1421,7 @@ fn fp_control_per_island(
     let outcomes: Vec<IslandOutcome> = pool.install(|| {
         islands
             .par_iter()
+            .with_max_len(RAYON_TASK_MAX_LEN)
             .map(|island| {
                 let clean_bam = island.raw_bam.with_extension("clean.bam");
                 let clean_vcf = clean_bam.with_extension("vcf.gz");
