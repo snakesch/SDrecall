@@ -26,6 +26,7 @@ use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use sdrecall_utils::{clamp_threads_u8, GenomicInterval, Result, SdError, Strand};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 /// Tuning parameters for the Phase-1 pick (mirrors the Python `prepare_recall_regions`
 /// keyword args). Defaults match the Python defaults.
@@ -733,6 +734,7 @@ fn write_total_recall_sd_region_bed(
 /// BEDs + masked genomes + intrinsic BAMs + total intrinsic BAM. rayon over the
 /// independent axes (RG establishment).
 pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<PrepResult> {
+    let total_start = Instant::now();
     std::fs::create_dir_all(paths.realign_dir()).map_err(|e| SdError::Io {
         path: paths.realign_dir().display().to_string(),
         source: e,
@@ -743,6 +745,7 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
     // paths.frag_size_std (insert_size.py), and mean_read_length =
     // calculate_mean_read_length(bam). We auto-derive them here (overriding the
     // PrepParams placeholders) so the size filter + pruning cutoffs match Python.
+    let stats_start = Instant::now();
     let mut params = *params;
     match sdrecall_io::get_insert_size_distribution(&paths.input_bam)? {
         Some(stats) => {
@@ -766,8 +769,10 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
         log::info!("BAM mean read length: {mrl:.2}bp");
     }
     let params = &params;
+    let stats_time = stats_start.elapsed();
 
     // ── Step 1: multi-align depth pick ───────────────────────────────────────
+    let multialign_start = Instant::now();
     let target = sdrecall_io::read_bed(&paths.target_bed)?;
     log::info!(
         "Phase-1: picking multi-align regions over {} target intervals",
@@ -794,8 +799,10 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
         "Wrote multi-align BED to {}",
         paths.multi_align_bed.display()
     );
+    let multialign_time = multialign_start.elapsed();
 
     // ── Steps 2-3: SD-map load + umbrella filter + dedup ─────────────────────
+    let sd_map_start = Instant::now();
     let bin_rows = load_and_filter_sd_map(&paths.reference_sd_map, &multi_align, params.avg_frag)?;
     log::info!("{} SD rows after target overlap", bin_rows.len());
     let umbrella = umbrella_filter_and_dedup(&bin_rows);
@@ -805,9 +812,12 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
     );
     let filtered_sd_map = paths.filtered_sd_map();
     write_filtered_sd_map(&filtered_sd_map, &umbrella.deduped)?;
+    let sd_map_time = sd_map_start.elapsed();
 
     // ── Step 4: multiplex graph ──────────────────────────────────────────────
+    let graph_start = Instant::now();
     let graph = build_multiplex_graph(&umbrella.sd_rows, params.threads);
+    let graph_time = graph_start.elapsed();
 
     // ── Step 5: traversal → SD paralog pairs + connected-qnodes graph ────────
     // query_nodes are the pre-frozenset-dedup distinct chr_1 segments (Python
@@ -819,6 +829,7 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
         .filter(|k| graph.has_node(k))
         .cloned()
         .collect();
+    let traversal_start = Instant::now();
     let traversal = extract_sd_paralog_pairs(
         &query_nodes,
         &graph,
@@ -827,13 +838,17 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
         params.std_frag,
         params.mean_read_length,
     )?;
+    let traversal_time = traversal_start.elapsed();
 
     // ── Step 6: coloring → RG groups ─────────────────────────────────────────
+    let grouping_start = Instant::now();
     let color_groups = traversal.connected.color_groups_keys();
     let rg_groups = build_rg_groups(&color_groups, &traversal.sd_paralog_pairs);
     log::info!("{} realignment groups after coloring", rg_groups.len());
+    let grouping_time = grouping_start.elapsed();
 
     // ── Step 7: per-RG outputs (rayon over RGs) ──────────────────────────────
+    let establish_start = Instant::now();
     let labels: Vec<String> = (0..rg_groups.len()).map(|i| format!("RG{i}")).collect();
     let rg_outputs: Vec<Result<RgOutputs>> = rg_groups
         .par_iter()
@@ -844,7 +859,9 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
     for r in rg_outputs {
         outputs.push(r?);
     }
+    let establish_time = establish_start.elapsed();
 
+    let finalize_start = Instant::now();
     let total_recall_sd_region_bed = paths.total_recall_sd_region_bed();
     write_total_recall_sd_region_bed(&outputs, &multi_align, &total_recall_sd_region_bed)?;
 
@@ -856,6 +873,24 @@ pub fn prepare_recall_regions(paths: &PrepPaths, params: &PrepParams) -> Result<
         let inputs: Vec<&Path> = outputs.iter().map(|o| o.intrinsic_bam.as_path()).collect();
         crate::intrinsic::merge_total_intrinsic_bam(&inputs, &total_intrinsic_bam)?;
     }
+    let finalize_time = finalize_start.elapsed();
+
+    log::warn!(
+        concat!(
+            "[prep_stage_metrics] t_stats_s={:.3} t_multialign_s={:.3} ",
+            "t_sd_map_s={:.3} t_graph_s={:.3} t_traversal_s={:.3} ",
+            "t_grouping_s={:.3} t_establish_rg_s={:.3} t_finalize_s={:.3} t_total_s={:.3}"
+        ),
+        stats_time.as_secs_f64(),
+        multialign_time.as_secs_f64(),
+        sd_map_time.as_secs_f64(),
+        graph_time.as_secs_f64(),
+        traversal_time.as_secs_f64(),
+        grouping_time.as_secs_f64(),
+        establish_time.as_secs_f64(),
+        finalize_time.as_secs_f64(),
+        total_start.elapsed().as_secs_f64()
+    );
 
     Ok(PrepResult {
         multi_align_bed: paths.multi_align_bed.clone(),

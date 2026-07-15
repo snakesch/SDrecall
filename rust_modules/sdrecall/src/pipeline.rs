@@ -47,11 +47,47 @@ impl ThreadBudget {
     }
 }
 
+fn timed_pipeline_stage<T>(
+    paths: &Paths,
+    scope: &str,
+    stage: &str,
+    scope_start: Instant,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    let stage_start = Instant::now();
+    let result = operation();
+    log::warn!(
+        concat!(
+            "[pipeline_stage_metrics] sample={} assembly={} scope={} stage={} status={} ",
+            "t_stage_s={:.3} t_scope_elapsed_s={:.3}"
+        ),
+        paths.sample_id,
+        paths.assembly,
+        scope,
+        stage,
+        if result.is_ok() { "ok" } else { "error" },
+        stage_start.elapsed().as_secs_f64(),
+        scope_start.elapsed().as_secs_f64()
+    );
+    result
+}
+
+fn log_pipeline_scope_total(paths: &Paths, scope: &str, scope_start: Instant) {
+    log::warn!(
+        "[pipeline_scope_metrics] sample={} assembly={} scope={} t_total_s={:.3}",
+        paths.sample_id,
+        paths.assembly,
+        scope,
+        scope_start.elapsed().as_secs_f64()
+    );
+}
+
 // ════════════════════════════════════════════════════════════════════════
 //  Top-level subcommand orchestration
 // ════════════════════════════════════════════════════════════════════════
 
 pub fn run_full_pipeline(args: &RunArgs, paths: &Paths) -> Result<PathBuf> {
+    let pipeline_start = Instant::now();
     log::info!(
         "[run] full pipeline for sample={} assembly={} target_tag={}",
         paths.sample_id,
@@ -59,10 +95,32 @@ pub fn run_full_pipeline(args: &RunArgs, paths: &Paths) -> Result<PathBuf> {
         paths.target_tag
     );
 
-    ensure_dirs(paths)?;
-    prepare(&args.common, &args.prep, paths)?;
-    let sdrecall_vcf = realign_and_recall(args, paths)?;
-    post_process_vcf(&sdrecall_vcf, &args.conventional, &args.cohort, paths)
+    timed_pipeline_stage(
+        paths,
+        "full_pipeline",
+        "ensure_dirs",
+        pipeline_start,
+        || ensure_dirs(paths),
+    )?;
+    timed_pipeline_stage(paths, "full_pipeline", "prepare", pipeline_start, || {
+        prepare(&args.common, &args.prep, paths)
+    })?;
+    let sdrecall_vcf = timed_pipeline_stage(
+        paths,
+        "full_pipeline",
+        "realign_and_recall",
+        pipeline_start,
+        || realign_and_recall(args, paths),
+    )?;
+    let final_vcf = timed_pipeline_stage(
+        paths,
+        "full_pipeline",
+        "post_process_vcf",
+        pipeline_start,
+        || post_process_vcf(&sdrecall_vcf, &args.conventional, &args.cohort, paths),
+    )?;
+    log_pipeline_scope_total(paths, "full_pipeline", pipeline_start);
+    Ok(final_vcf)
 }
 
 pub fn run_preparation_only(args: &PrepareArgs, paths: &Paths) -> Result<()> {
@@ -247,13 +305,20 @@ fn realign_and_recall_inner(
     mq_cutoff: i32,
     strict_islands: bool,
 ) -> Result<PathBuf> {
+    let realign_start = Instant::now();
     log::info!(
         "[realign] start for sample={} (threads={threads})",
         paths.sample_id
     );
 
     // ── Step 1: per-RG region size stats ────────────────────────────────
-    let rg_infos = stat_realign_group_regions(paths)?;
+    let rg_infos = timed_pipeline_stage(
+        paths,
+        "realign_and_recall",
+        "rg_discovery",
+        realign_start,
+        || stat_realign_group_regions(paths),
+    )?;
     let rg_labels: Vec<&str> = rg_infos.iter().map(|r| r.label.as_str()).collect();
     log::info!(
         "[realign] {} RGs discovered: {:?}",
@@ -263,24 +328,61 @@ fn realign_and_recall_inner(
 
     // ── Step 2: per-RG masked-align region prep ─────────────────────────
     let prep_budget = ThreadBudget::new(threads, 1.0);
-    prepare_masked_align_regions(paths, &rg_infos, prep_budget)?;
+    timed_pipeline_stage(
+        paths,
+        "realign_and_recall",
+        "region_prep",
+        realign_start,
+        || prepare_masked_align_regions(paths, &rg_infos, prep_budget),
+    )?;
 
     // ── Step 3: per-RG realign + variant call ───────────────────────────
     let realign_budget = ThreadBudget::new(threads, 3.0);
-    let (per_rg_bams, per_rg_vcfs) = realign_per_rg(paths, &rg_infos, realign_budget)?;
+    let (per_rg_bams, per_rg_vcfs) = timed_pipeline_stage(
+        paths,
+        "realign_and_recall",
+        "realign_per_rg",
+        realign_start,
+        || realign_per_rg(paths, &rg_infos, realign_budget),
+    )?;
 
     // ── Step 4: merge per-RG raw BAMs + dedup ───────────────────────────
-    merge_and_markdup_raw_bams(paths, &per_rg_bams, threads)?;
+    timed_pipeline_stage(
+        paths,
+        "realign_and_recall",
+        "merge_markdup_raw_bams",
+        realign_start,
+        || merge_and_markdup_raw_bams(paths, &per_rg_bams, threads),
+    )?;
 
     // ── Step 5: concat per-RG raw VCFs ──────────────────────────────────
-    concat_raw_vcfs(paths, &per_rg_vcfs, threads)?;
+    timed_pipeline_stage(
+        paths,
+        "realign_and_recall",
+        "concat_raw_vcfs",
+        realign_start,
+        || concat_raw_vcfs(paths, &per_rg_vcfs, threads),
+    )?;
 
     // ── Step 6: misalignment elimination ────────────────────────────────
-    eliminate_misalignments(paths, threads, numba_threads, mq_cutoff, strict_islands)?;
+    timed_pipeline_stage(
+        paths,
+        "realign_and_recall",
+        "fp_control",
+        realign_start,
+        || eliminate_misalignments(paths, threads, numba_threads, mq_cutoff, strict_islands),
+    )?;
 
     // ── Step 7: priority-merge raw vs clean, subset to target ───────────
-    merge_and_subset_final_vcf(paths, threads)?;
+    timed_pipeline_stage(
+        paths,
+        "realign_and_recall",
+        "merge_subset_final_vcf",
+        realign_start,
+        || merge_and_subset_final_vcf(paths, threads),
+    )?;
 
+    log_pipeline_scope_total(paths, "realign_and_recall", realign_start);
     Ok(paths.final_recall_vcf_path())
 }
 
@@ -469,11 +571,15 @@ fn realign_per_rg(
                     return Ok((raw_bam, raw_vcf));
                 }
 
+                let rg_start = Instant::now();
+                let merge_beds_start = Instant::now();
                 merge_targeted_nfc_beds(&nfc_inputs, &nfc_bed)?;
+                let merge_beds_time = merge_beds_start.elapsed();
 
                 // 3a: read extraction (BAM → FASTQ).
                 let r1_str = r1.to_string_lossy().to_string();
                 let r2_str = r2.to_string_lossy().to_string();
+                let fc_extract_start = Instant::now();
                 rust_read_extraction::bam_to_fastq(
                     &input_bam_str,
                     &fc_bed.to_string_lossy(),
@@ -483,8 +589,10 @@ fn realign_per_rg(
                     tpj,
                 )
                 .map_err(|e| SdError::Compute(format!("{}: read extraction: {e}", rg.label)))?;
+                let fc_extract_time = fc_extract_start.elapsed();
 
                 // Also extract multi-aligned reads from the counterpart regions.
+                let nfc_extract_start = Instant::now();
                 if nfc_bed.exists() && file_nonempty(&nfc_bed) {
                     let r1c = rg_dir.join(format!("{}.nfc.r1.fastq", rg.label));
                     let r2c = rg_dir.join(format!("{}.nfc.r2.fastq", rg.label));
@@ -502,11 +610,15 @@ fn realign_per_rg(
                     append_file(&r1c, &r1)?;
                     append_file(&r2c, &r2)?;
                 }
+                let nfc_extract_time = nfc_extract_start.elapsed();
+                let fastq_dedup_start = Instant::now();
                 dedup_and_pair_fastqs(&r1, &r2)?;
+                let fastq_dedup_time = fastq_dedup_start.elapsed();
 
                 // 3b: minimap2 realign onto the masked genome (contigs `{chrom}:{start}`)
                 // → an intermediate LOCAL-coordinate BAM.
                 let local_bam = raw_bam.with_extension("local.bam");
+                let align_start = Instant::now();
                 crate::tools::minimap2_align(
                     &r1,
                     &r2,
@@ -515,12 +627,14 @@ fn realign_per_rg(
                     &local_bam,
                     tpj,
                 )?;
+                let align_time = align_start.elapsed();
 
                 // 3b': remap masked(local) → ORIGINAL-genome coordinates (port of
                 // shell_utils.sh independent_minimap2_masked's modify_bam_sq_lines +
                 // modify_masked_genome_coords). This makes `raw_bam` genomic so the
                 // later merge of all per-RG BAMs shares the original-ref header (Bug B)
                 // and bcftools mpileup -f ref_genome is coordinate-consistent.
+                let remap_start = Instant::now();
                 sdrecall_io::remap_masked_bam_to_genomic(
                     &local_bam,
                     &ref_genome,
@@ -529,10 +643,34 @@ fn realign_per_rg(
                 )?;
                 let _ = std::fs::remove_file(&local_bam);
                 let _ = std::fs::remove_file(format!("{}.bai", local_bam.display()));
+                let remap_time = remap_start.elapsed();
 
                 // 3c: variant call on the GENOMIC BAM.
+                let call_start = Instant::now();
                 crate::tools::bcftools_call(&raw_bam, &ref_genome, &raw_vcf, &rg.label, tpj)?;
+                let call_time = call_start.elapsed();
+                let checkpoint_start = Instant::now();
                 write_checkpoint(&marker, &outputs, &deps)?;
+                let checkpoint_time = checkpoint_start.elapsed();
+
+                log::warn!(
+                    concat!(
+                        "[realign_rg_stage_metrics] rg={} t_merge_beds_s={:.3} ",
+                        "t_fc_extract_s={:.3} t_nfc_extract_s={:.3} t_fastq_dedup_s={:.3} ",
+                        "t_align_s={:.3} t_remap_s={:.3} t_call_s={:.3} ",
+                        "t_checkpoint_s={:.3} t_total_s={:.3}"
+                    ),
+                    rg.label,
+                    merge_beds_time.as_secs_f64(),
+                    fc_extract_time.as_secs_f64(),
+                    nfc_extract_time.as_secs_f64(),
+                    fastq_dedup_time.as_secs_f64(),
+                    align_time.as_secs_f64(),
+                    remap_time.as_secs_f64(),
+                    call_time.as_secs_f64(),
+                    checkpoint_time.as_secs_f64(),
+                    rg_start.elapsed().as_secs_f64()
+                );
 
                 log::info!("[realign] {} done → {:?}", rg.label, raw_bam);
                 Ok((raw_bam, raw_vcf))
@@ -871,6 +1009,7 @@ fn eliminate_misalignments(
     mq_cutoff: i32,
     strict_islands: bool,
 ) -> Result<()> {
+    let fp_control_start = Instant::now();
     log::info!(
         "[fp-control] misalignment elimination for {}",
         paths.sample_id
@@ -879,15 +1018,32 @@ fn eliminate_misalignments(
     // Python feeds fp-control with the multi-align BED, not the user target BED.
     let target_bed = paths.multi_align_bed_path();
     let filtered_intrin = paths.tmp_dir.join("intrinsic.filtered.bam");
-    prepare_fp_control_inputs(paths, &target_bed, &filtered_intrin, threads)?;
+    timed_pipeline_stage(
+        paths,
+        "fp_control",
+        "prepare_inputs",
+        fp_control_start,
+        || prepare_fp_control_inputs(paths, &target_bed, &filtered_intrin, threads),
+    )?;
 
     // Load chrom sizes from the reference .fai for interval padding.
-    let chrom_sizes = load_chrom_sizes(&paths.ref_genome_fai_path())?;
+    let chrom_sizes = timed_pipeline_stage(
+        paths,
+        "fp_control",
+        "load_chrom_sizes",
+        fp_control_start,
+        || load_chrom_sizes(&paths.ref_genome_fai_path()),
+    )?;
 
     // Slice into islands.
     let deduped = paths.deduped_raw_bam_path();
-    let islands =
-        split_or_resume_islands(paths, &filtered_intrin, &target_bed, &chrom_sizes, threads)?;
+    let islands = timed_pipeline_stage(
+        paths,
+        "fp_control",
+        "slice_islands",
+        fp_control_start,
+        || split_or_resume_islands(paths, &filtered_intrin, &target_bed, &chrom_sizes, threads),
+    )?;
     log::info!("[fp-control] {} islands to process", islands.len());
 
     if islands.is_empty() {
@@ -904,6 +1060,7 @@ fn eliminate_misalignments(
             path: paths.recall_filtered_vcf_path().display().to_string(),
             source: e,
         })?;
+        log_pipeline_scope_total(paths, "fp_control", fp_control_start);
         return Ok(());
     }
 
@@ -917,12 +1074,24 @@ fn eliminate_misalignments(
 
     // Per-island fp-control (rayon parallel).
     let island_budget = ThreadBudget::new(threads, numba_threads as f64);
-    let (clean_bams, clean_vcfs) =
-        fp_control_per_island(paths, &islands, island_budget, mq_cutoff, strict_islands)?;
+    let (clean_bams, clean_vcfs) = timed_pipeline_stage(
+        paths,
+        "fp_control",
+        "process_islands",
+        fp_control_start,
+        || fp_control_per_island(paths, &islands, island_budget, mq_cutoff, strict_islands),
+    )?;
 
     // Merge per-island outputs.
-    merge_island_outputs(paths, &clean_bams, &clean_vcfs, threads)?;
+    timed_pipeline_stage(
+        paths,
+        "fp_control",
+        "merge_island_outputs",
+        fp_control_start,
+        || merge_island_outputs(paths, &clean_bams, &clean_vcfs, threads),
+    )?;
 
+    log_pipeline_scope_total(paths, "fp_control", fp_control_start);
     Ok(())
 }
 

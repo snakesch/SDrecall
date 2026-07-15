@@ -20,6 +20,7 @@ mod vcf_hp;
 
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::Instant;
 
 use clap::Parser;
 
@@ -46,10 +47,17 @@ fn main() -> ExitCode {
 fn dispatch(cli: Cli) -> Result<Option<std::path::PathBuf>, String> {
     match cli.command {
         Command::Run(args) => {
+            let command_start = Instant::now();
             args.common.validate()?;
             let mut paths = derive_paths(&args.common)?;
             compute_frag_stats(&mut paths);
+            let setup_time = command_start.elapsed();
             let vcf = pipeline::run_full_pipeline(&args, &paths).map_err(|e| e.to_string())?;
+            log::warn!(
+                "[command_stage_metrics] command=run t_setup_s={:.3} t_total_s={:.3}",
+                setup_time.as_secs_f64(),
+                command_start.elapsed().as_secs_f64()
+            );
             Ok(Some(vcf))
         }
         Command::Prepare(args) => {
