@@ -41,6 +41,10 @@ impl std::fmt::Display for PairingEngine {
     }
 }
 
+fn htslib_additional_threads(total_threads: u8) -> u8 {
+    total_threads.saturating_sub(1)
+}
+
 fn should_skip_alignment(read: &Record) -> bool {
     // Skip secondary, supplementary, and duplicate alignments early
     // These are not quality issues but different types of alignments
@@ -189,12 +193,13 @@ fn collate_bam_temp_file(
         .to_str()
         .ok_or("failed to convert collated BAM path to UTF-8")?;
 
+    let additional_threads = htslib_additional_threads(threads).to_string();
     let output = Command::new("samtools")
         .args([
             "collate",
             "-f",
             "-@",
-            &threads.to_string(),
+            &additional_threads,
             bam_file_path,
             "-o",
             temp_path,
@@ -281,6 +286,7 @@ fn collate_bam_pipe(
     bam_file_path: &str,
     threads: u8,
 ) -> Result<(bam::Reader, PairingReaderGuard), Box<dyn std::error::Error>> {
+    let additional_threads = htslib_additional_threads(threads).to_string();
     let mut child = Command::new("samtools")
         .args([
             "collate",
@@ -288,7 +294,7 @@ fn collate_bam_pipe(
             "-u",
             "-O",
             "-@",
-            &threads.to_string(),
+            &additional_threads,
             bam_file_path,
         ])
         .stdin(Stdio::null())
@@ -357,8 +363,9 @@ fn open_pairing_reader(
         }
         PairingEngine::RustMemory => {
             let mut reader = bam::Reader::from_path(bam_file_path)?;
-            if threads > 1 {
-                reader.set_threads(usize::from(threads - 1))?;
+            let additional_threads = htslib_additional_threads(threads);
+            if additional_threads > 0 {
+                reader.set_threads(usize::from(additional_threads))?;
             }
             Ok((reader, PairingReaderGuard::None))
         }
@@ -1000,6 +1007,14 @@ mod tests {
         assert_eq!(median_phred(&[15, 16]), 15.5);
         assert_eq!(median_phred(&[30, 10, 20, 40]), 25.0); // unsorted even
         assert_eq!(median_phred(&[]), 0.0);
+    }
+
+    #[test]
+    fn total_thread_budget_converts_to_htslib_additional_threads() {
+        assert_eq!(htslib_additional_threads(0), 0);
+        assert_eq!(htslib_additional_threads(1), 0);
+        assert_eq!(htslib_additional_threads(2), 1);
+        assert_eq!(htslib_additional_threads(4), 3);
     }
 
     #[test]
