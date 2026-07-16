@@ -85,6 +85,7 @@ fn main() -> ExitCode {
         basequal_median_cutoff: cli.basequal_median_cutoff,
         threads: cli.threads,
         pairing_engine: cli.pairing_engine,
+        resources: None,
         compare_haplotype_meta_tab: cli.compare_meta,
     };
 

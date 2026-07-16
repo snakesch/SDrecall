@@ -71,6 +71,7 @@ fn main() -> Result<()> {
         basequal_median_cutoff: args.basequal_median_cutoff,
         threads: args.threads,
         pairing_engine: args.pairing_engine,
+        resources: None,
     };
 
     let t0 = Instant::now();

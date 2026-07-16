@@ -176,6 +176,7 @@ fn main() {
             basequal_median_cutoff: meta.basequal_median_cutoff,
             threads: 4,
             pairing_engine: fp_control::PairingEngine::SamtoolsPipe,
+            resources: None,
             compare_haplotype_meta_tab: String::new(),
         };
 

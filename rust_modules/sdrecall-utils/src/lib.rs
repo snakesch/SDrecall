@@ -21,8 +21,12 @@ mod fatal;
 mod geometry;
 mod logging;
 mod parallel;
+mod resources;
 
 pub use error::{Result, SdError};
 pub use geometry::{GenomicInterval, HapId, QnameIdx, RegionKey, Strand};
 pub use logging::init_console_logger;
 pub use parallel::{clamp_threads_u8, configure_parallelism};
+pub use resources::{
+    graph_memory_units, CpuLease, CpuPhase, IslandResourceGuard, MemoryLease, PhaseResources,
+};

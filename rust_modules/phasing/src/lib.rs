@@ -45,7 +45,9 @@ pub use phasing::{
 };
 
 use crate::kernels::Csr;
-use sdrecall_utils::{Result, SdError};
+use sdrecall_utils::{
+    clamp_threads_u8, graph_memory_units, CpuPhase, PhaseResources, Result, SdError,
+};
 
 /// Parameters for the standalone BAM phaser.
 ///
@@ -60,6 +62,7 @@ pub struct PhaserParams {
     pub basequal_median_cutoff: u8,
     pub threads: u8,
     pub pairing_engine: PairingEngine,
+    pub resources: Option<PhaseResources>,
 }
 
 impl Default for PhaserParams {
@@ -71,6 +74,7 @@ impl Default for PhaserParams {
             basequal_median_cutoff: 15,
             threads: 4,
             pairing_engine: PairingEngine::SamtoolsPipe,
+            resources: None,
         }
     }
 }
@@ -317,6 +321,28 @@ pub fn build_and_phase_with_intrinsic(
     params: &PhaserParams,
 ) -> Result<Option<PhasedReads>> {
     let total_start = Instant::now();
+    let pairing_phase = match params.pairing_engine {
+        PairingEngine::SamtoolsTempFile | PairingEngine::SamtoolsPipe => CpuPhase::SamtoolsCollate,
+        PairingEngine::RustMemory => CpuPhase::RustPairing,
+    };
+    let pairing_lease = params
+        .resources
+        .as_ref()
+        .map(|resources| resources.acquire_cpu(pairing_phase));
+    let pairing_threads = pairing_lease
+        .as_ref()
+        .map_or(params.threads, |lease| clamp_threads_u8(lease.threads()));
+    if let Some(lease) = &pairing_lease {
+        log::warn!(
+            "[fp_control_resource_lease_metrics] bam={} phase=pairing threads={} remaining_islands={}",
+            bam,
+            lease.threads(),
+            params
+                .resources
+                .as_ref()
+                .map_or(0, PhaseResources::remaining_islands)
+        );
+    }
     let read_pairing_start = Instant::now();
     let (read_pair_map, header) = bam_reading::migrate_bam_to_sorted_intervals_grouped(
         bam,
@@ -324,10 +350,11 @@ pub fn build_and_phase_with_intrinsic(
         params.basequal_median_cutoff,
         true,
         params.pairing_engine,
-        params.threads,
+        pairing_threads,
     )
     .map_err(|e| SdError::Compute(format!("BAM read/pairing failed for {bam}: {e}")))?;
     let read_pairing_time = read_pairing_start.elapsed();
+    drop(pairing_lease);
     let read_pairs = read_pair_map.readpair_dict.len();
     log::warn!(
         "[fp_control_read_pair_metrics] bam={} read_pairs={} t_read_pairing_s={:.3}",
@@ -366,16 +393,61 @@ pub fn build_and_phase_with_intrinsic(
     let intrinsic_allele_depth_time = intrinsic_ad_start.elapsed();
 
     let config = structs::HaplotypeConfig::new(params.mean_read_length);
+    let graph_memory_lease = params
+        .resources
+        .as_ref()
+        .map(|resources| resources.acquire_memory(graph_memory_units(read_pairs)));
+    let graph_cpu_lease = params
+        .resources
+        .as_ref()
+        .map(|resources| resources.acquire_cpu(CpuPhase::GraphBuild));
+    let graph_threads = graph_cpu_lease
+        .as_ref()
+        .map_or(usize::from(params.threads), |lease| lease.threads())
+        .max(1);
+    if let Some(lease) = &graph_cpu_lease {
+        log::warn!(
+            "[fp_control_resource_lease_metrics] bam={} phase=graph threads={} memory_units={} remaining_islands={}",
+            bam,
+            lease.threads(),
+            graph_memory_lease.as_ref().map_or(0, |memory| memory.units()),
+            params
+                .resources
+                .as_ref()
+                .map_or(0, PhaseResources::remaining_islands)
+        );
+    }
     let graph_build_start = Instant::now();
-    let mut graph = graph_builder::build_phasing_graph(
-        &read_pair_map,
-        &allele_depth_map,
-        &intrinsic_ad_map,
-        &header,
-        &config,
-    )
-    .map_err(|e| SdError::Compute(format!("graph build failed for {bam}: {e}")))?;
+    let graph_header = rust_htslib::bam::Header::from_template(&header);
+    let graph_read_pairs = &read_pair_map;
+    let graph_allele_depth = &allele_depth_map;
+    let graph_intrinsic_depth = &intrinsic_ad_map;
+    let graph_config = &config;
+    let build_graph = move || -> Result<structs::PhasingGraphResult> {
+        let graph_header = rust_htslib::bam::HeaderView::from_header(&graph_header);
+        graph_builder::build_phasing_graph(
+            graph_read_pairs,
+            graph_allele_depth,
+            graph_intrinsic_depth,
+            &graph_header,
+            graph_config,
+        )
+        .map_err(|error| SdError::Compute(format!("graph build failed for {bam}: {error}")))
+    };
+    let graph_result = if graph_threads > 1 {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(graph_threads)
+            .build()
+            .map_err(|error| {
+                SdError::Compute(format!("graph thread pool failed for {bam}: {error}"))
+            })?
+            .install(build_graph)
+    } else {
+        build_graph()
+    };
+    let mut graph = graph_result?;
     let graph_build_time = graph_build_start.elapsed();
+    drop(graph_cpu_lease);
 
     let graph_vertices = graph.graph.node_count();
     let graph_edges = graph.graph.edge_count();
@@ -446,7 +518,7 @@ pub fn build_and_phase_with_intrinsic(
         total_start.elapsed().as_secs_f64()
     );
 
-    Ok(Some(PhasedReads {
+    let phased_reads = PhasedReads {
         vertex_hap,
         vertex_qname,
         lowqual_qnames: graph.lowqual_qnames,
@@ -466,7 +538,9 @@ pub fn build_and_phase_with_intrinsic(
             phase_time,
             total_time: total_start.elapsed(),
         },
-    }))
+    };
+    drop(graph_memory_lease);
+    Ok(Some(phased_reads))
 }
 
 /// High-level API: BAM → HP-tagged BAM.

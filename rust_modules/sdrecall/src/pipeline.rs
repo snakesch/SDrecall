@@ -20,7 +20,7 @@ use std::time::{Instant, SystemTime};
 
 use rayon::prelude::*;
 use rust_htslib::{bam, bam::Read};
-use sdrecall_utils::{clamp_threads_u8, Result, SdError};
+use sdrecall_utils::{clamp_threads_u8, CpuPhase, PhaseResources, Result, SdError};
 
 use crate::cli::{PrepareArgs, RealignArgs, RunArgs};
 use crate::island::IslandPaths;
@@ -1440,12 +1440,28 @@ fn fp_control_per_island(
 
     let ref_genome_str = paths.ref_genome.to_string_lossy().to_string();
     let tpj = budget.threads_per_job;
+    let resources = PhaseResources::new(
+        budget.total_threads,
+        budget.num_jobs,
+        islands.len(),
+        budget.total_threads,
+        (budget.total_threads / 2).max(1),
+    );
+    log::warn!(
+        "[fp_control_resource_pool_metrics] islands={} total_cpu={} max_active={} memory_units={} collate_limit={}",
+        islands.len(),
+        budget.total_threads,
+        budget.num_jobs,
+        budget.total_threads,
+        (budget.total_threads / 2).max(1)
+    );
 
     let outcomes: Vec<IslandOutcome> = pool.install(|| {
         islands
             .par_iter()
             .with_max_len(RAYON_TASK_MAX_LEN)
             .map(|island| {
+                let _resource_guard = resources.island_guard();
                 let clean_bam = island.raw_bam.with_extension("clean.bam");
                 let clean_vcf = clean_bam.with_extension("vcf.gz");
                 let outputs = island_clean_outputs(&clean_bam, &clean_vcf);
@@ -1475,6 +1491,7 @@ fn fp_control_per_island(
                         mq_cutoff as u8,
                         tpj,
                         pairing_engine,
+                        resources.clone(),
                     )
                 }));
 
@@ -1609,6 +1626,7 @@ fn process_one_island(
     mq_cutoff: u8,
     threads: usize,
     pairing_engine: fp_control::PairingEngine,
+    resources: PhaseResources,
 ) -> Result<Option<(PathBuf, PathBuf)>> {
     let total_start = Instant::now();
     let bam_str = island.raw_bam.to_string_lossy().to_string();
@@ -1620,6 +1638,7 @@ fn process_one_island(
         basequal_median_cutoff: 15,
         threads: clamp_threads_u8(threads),
         pairing_engine,
+        resources: Some(resources.clone()),
         ..Default::default()
     };
 
@@ -1681,15 +1700,24 @@ fn process_one_island(
     // Variant-call on the clean BAM. HPSUP annotation happens once, at the very
     // end of post-processing, so these island VCFs stay atomization-safe.
     let clean_vcf = clean_bam.with_extension("vcf.gz");
+    let calling_lease = resources.acquire_cpu(CpuPhase::Calling);
+    let calling_threads = calling_lease.threads();
+    log::warn!(
+        "[fp_control_resource_lease_metrics] island={} phase=calling threads={} remaining_islands={}",
+        island.id,
+        calling_threads,
+        resources.remaining_islands()
+    );
     let call_start = Instant::now();
     crate::tools::bcftools_call(
         &clean_bam,
         Path::new(ref_genome),
         &clean_vcf,
         sample_id,
-        threads,
+        calling_threads,
     )?;
     let call_time = call_start.elapsed();
+    drop(calling_lease);
 
     log::warn!(
         concat!(
