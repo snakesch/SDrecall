@@ -397,24 +397,35 @@ pub fn build_and_phase_with_intrinsic(
         .resources
         .as_ref()
         .map(|resources| resources.acquire_memory(graph_memory_units(read_pairs)));
+    let graph_work_units = graph_memory_lease
+        .as_ref()
+        .map_or_else(|| graph_memory_units(read_pairs), |memory| memory.units());
+    let graph_lease_start = Instant::now();
     let graph_cpu_lease = params
         .resources
         .as_ref()
-        .map(|resources| resources.acquire_cpu(CpuPhase::GraphBuild));
+        .map(|resources| resources.acquire_cpu_weighted(CpuPhase::GraphBuild, graph_work_units));
+    let graph_lease_wait_time = graph_lease_start.elapsed();
     let graph_threads = graph_cpu_lease
         .as_ref()
         .map_or(usize::from(params.threads), |lease| lease.threads())
         .max(1);
     if let Some(lease) = &graph_cpu_lease {
         log::warn!(
-            "[fp_control_resource_lease_metrics] bam={} phase=graph threads={} memory_units={} remaining_islands={}",
+            concat!(
+                "[fp_control_resource_lease_metrics] bam={} phase=graph threads={} ",
+                "memory_units={} remaining_islands={} t_wait_s={:.3}"
+            ),
             bam,
             lease.threads(),
-            graph_memory_lease.as_ref().map_or(0, |memory| memory.units()),
+            graph_memory_lease
+                .as_ref()
+                .map_or(0, |memory| memory.units()),
             params
                 .resources
                 .as_ref()
-                .map_or(0, PhaseResources::remaining_islands)
+                .map_or(0, PhaseResources::remaining_islands),
+            graph_lease_wait_time.as_secs_f64()
         );
     }
     let graph_build_start = Instant::now();
@@ -498,7 +509,7 @@ pub fn build_and_phase_with_intrinsic(
     let gce_cpu_lease = params
         .resources
         .as_ref()
-        .map(|resources| resources.acquire_cpu(CpuPhase::Gce));
+        .map(|resources| resources.acquire_cpu_weighted(CpuPhase::Gce, graph_work_units));
     let gce_lease_wait_time = gce_lease_start.elapsed();
     let gce_threads = gce_cpu_lease
         .as_ref()

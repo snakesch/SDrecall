@@ -33,6 +33,8 @@ struct ResourceState {
     extra_cpu_in_use: usize,
     memory_in_use: usize,
     collates_in_use: usize,
+    next_weighted_ticket: u64,
+    serving_weighted_ticket: u64,
 }
 
 struct ResourceInner {
@@ -73,6 +75,8 @@ impl PhaseResources {
                     extra_cpu_in_use: 0,
                     memory_in_use: 0,
                     collates_in_use: 0,
+                    next_weighted_ticket: 0,
+                    serving_weighted_ticket: 0,
                 }),
                 changed: Condvar::new(),
             }),
@@ -81,43 +85,101 @@ impl PhaseResources {
 
     /// Borrows currently idle CPU capacity for one phase without blocking on extra CPUs.
     pub fn acquire_cpu(&self, phase: CpuPhase) -> CpuLease {
+        self.acquire_cpu_inner(phase, 1, false)
+    }
+
+    /// Reserves a complete workload-weighted CPU grant for a graph-sized phase.
+    ///
+    /// Unlike [`Self::acquire_cpu`], this waits until the phase can receive its
+    /// full grant. That prevents a large graph from starting permanently
+    /// throttled because short-lived phases currently hold the lendable tokens.
+    pub fn acquire_cpu_weighted(&self, phase: CpuPhase, work_units: usize) -> CpuLease {
+        self.acquire_cpu_inner(phase, work_units.max(1), true)
+    }
+
+    fn acquire_cpu_inner(
+        &self,
+        phase: CpuPhase,
+        work_units: usize,
+        wait_for_full_grant: bool,
+    ) -> CpuLease {
         let needs_collate_slot = phase == CpuPhase::SamtoolsCollate;
         let mut state = self.lock_state();
-        while needs_collate_slot && state.collates_in_use >= self.inner.config.collate_limit {
-            state = self.wait(state);
-        }
+        let weighted_ticket = wait_for_full_grant.then(|| {
+            let ticket = state.next_weighted_ticket;
+            state.next_weighted_ticket = state
+                .next_weighted_ticket
+                .checked_add(1)
+                .expect("weighted CPU lease ticket overflow");
+            ticket
+        });
+        loop {
+            if needs_collate_slot && state.collates_in_use >= self.inner.config.collate_limit {
+                state = self.wait(state);
+                continue;
+            }
 
-        let active = state
-            .remaining_islands
-            .min(self.inner.config.max_active_islands)
+            if weighted_ticket.is_some_and(|ticket| ticket != state.serving_weighted_ticket) {
+                state = self.wait(state);
+                continue;
+            }
+
+            let active = state
+                .remaining_islands
+                .min(self.inner.config.max_active_islands)
+                .max(1);
+            let fair_threads = self.inner.config.total_cpu.div_ceil(active).max(1);
+            let phase_cap = match phase {
+                CpuPhase::SamtoolsCollate | CpuPhase::RustPairing | CpuPhase::Calling => 8,
+                CpuPhase::GraphBuild | CpuPhase::Gce => self.inner.config.total_cpu,
+            };
+            let requested_threads = if wait_for_full_grant {
+                fair_threads.max(work_units)
+            } else {
+                fair_threads
+            }
+            .min(phase_cap)
             .max(1);
-        let fair_threads = self.inner.config.total_cpu.div_ceil(active).max(1);
-        let phase_cap = match phase {
-            CpuPhase::SamtoolsCollate | CpuPhase::RustPairing | CpuPhase::Calling => 8,
-            CpuPhase::GraphBuild | CpuPhase::Gce => self.inner.config.total_cpu,
-        };
-        let requested_threads = fair_threads.min(phase_cap).max(1);
-        let reserved_base = active.min(self.inner.config.total_cpu);
-        let extra_capacity = self
-            .inner
-            .config
-            .total_cpu
-            .saturating_sub(reserved_base)
-            .saturating_sub(state.extra_cpu_in_use);
-        let extra_cpu = requested_threads.saturating_sub(1).min(extra_capacity);
+            let reserved_base = active.min(self.inner.config.total_cpu);
+            let total_extra_capacity = self.inner.config.total_cpu.saturating_sub(reserved_base);
+            let requested_extra = requested_threads
+                .saturating_sub(1)
+                .min(total_extra_capacity);
+            let weighted_lease_queued = state.serving_weighted_ticket != state.next_weighted_ticket;
+            let available_extra = if weighted_ticket.is_none() && weighted_lease_queued {
+                0
+            } else {
+                total_extra_capacity.saturating_sub(state.extra_cpu_in_use)
+            };
 
-        state.extra_cpu_in_use += extra_cpu;
-        if needs_collate_slot {
-            state.collates_in_use += 1;
-        }
-        drop(state);
+            if wait_for_full_grant && available_extra < requested_extra {
+                state = self.wait(state);
+                continue;
+            }
 
-        CpuLease {
-            resources: self.clone(),
-            phase,
-            threads: 1 + extra_cpu,
-            extra_cpu,
-            collate_slot: needs_collate_slot,
+            let extra_cpu = requested_extra.min(available_extra);
+            state.extra_cpu_in_use += extra_cpu;
+            if needs_collate_slot {
+                state.collates_in_use += 1;
+            }
+            if weighted_ticket.is_some() {
+                state.serving_weighted_ticket = state
+                    .serving_weighted_ticket
+                    .checked_add(1)
+                    .expect("weighted CPU lease ticket overflow");
+            }
+            drop(state);
+            if weighted_ticket.is_some() {
+                self.inner.changed.notify_all();
+            }
+
+            return CpuLease {
+                resources: self.clone(),
+                phase,
+                threads: 1 + extra_cpu,
+                extra_cpu,
+                collate_slot: needs_collate_slot,
+            };
         }
     }
 
@@ -297,6 +359,50 @@ mod tests {
             leases.iter().filter(|lease| lease.threads() == 1).count(),
             1
         );
+    }
+
+    #[test]
+    fn weighted_cpu_lease_matches_large_graph_share() {
+        let resources = PhaseResources::new(25, 13, 13, 25, 12);
+        let lease = resources.acquire_cpu_weighted(CpuPhase::GraphBuild, 15);
+        assert_eq!(lease.threads(), 13);
+
+        let base_leases: Vec<_> = (0..12)
+            .map(|_| resources.acquire_cpu(CpuPhase::Calling))
+            .collect();
+        assert!(base_leases.iter().all(|lease| lease.threads() == 1));
+        assert_eq!(
+            lease.threads() + base_leases.iter().map(CpuLease::threads).sum::<usize>(),
+            25
+        );
+    }
+
+    #[test]
+    fn weighted_cpu_lease_waits_for_a_complete_grant() {
+        let resources = PhaseResources::new(8, 4, 4, 8, 2);
+        let first = resources.acquire_cpu_weighted(CpuPhase::GraphBuild, 4);
+        assert_eq!(first.threads(), 4);
+
+        let worker_resources = resources.clone();
+        let (sender, receiver) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let lease = worker_resources.acquire_cpu_weighted(CpuPhase::GraphBuild, 4);
+            sender.send(lease.threads()).expect("send lease size");
+        });
+
+        while {
+            let state = resources.lock_state();
+            state.next_weighted_ticket == state.serving_weighted_ticket
+        } {
+            std::thread::yield_now();
+        }
+        assert!(receiver.recv_timeout(Duration::from_millis(50)).is_err());
+        let opportunistic = resources.acquire_cpu(CpuPhase::GraphBuild);
+        assert_eq!(opportunistic.threads(), 1);
+        drop(opportunistic);
+        drop(first);
+        assert_eq!(receiver.recv_timeout(Duration::from_secs(1)).unwrap(), 4);
+        worker.join().unwrap();
     }
 
     #[test]
