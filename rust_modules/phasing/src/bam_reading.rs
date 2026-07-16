@@ -72,6 +72,9 @@ const FAST_COLLATE_BIN_COUNT: usize = 64;
 // Fast collate opens 64 temporary writers whose dispatcher threads would each
 // otherwise be eligible for a separate glibc allocation arena.
 const COLLATE_MALLOC_ARENA_MAX: &str = "4";
+// Mpileup and query already run as a pipeline. Prevent each helper from also
+// inheriting a machine-sized BLAS pool through the scheduler environment.
+const ALLELE_DEPTH_OPENBLAS_THREADS: &str = "1";
 
 fn hash_wang(mut key: u32) -> u32 {
     key = key.wrapping_add(!(key << 15));
@@ -806,6 +809,7 @@ pub fn build_allele_depth_map(
 
     // Stream mpileup stdout directly into query stdin, and write query stdout to the .ad file
     let mut mpileup_child = Command::new("bcftools")
+        .env("OPENBLAS_NUM_THREADS", ALLELE_DEPTH_OPENBLAS_THREADS)
         .args([
             "mpileup",
             "-Ou",
@@ -852,6 +856,7 @@ pub fn build_allele_depth_map(
         .ok_or("Failed to capture mpileup stdout")?;
 
     let mut query_child = Command::new("bcftools")
+        .env("OPENBLAS_NUM_THREADS", ALLELE_DEPTH_OPENBLAS_THREADS)
         .args(["query", "-f", "%CHROM\t%POS\t%REF\t%ALT\t[%AD]\\n", "-"])
         .stdin(Stdio::from(mpileup_stdout))
         .stdout(Stdio::piped())
