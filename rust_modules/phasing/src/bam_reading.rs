@@ -13,7 +13,7 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempDir};
 
 /// How coordinate-sorted BAM records are grouped into read pairs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
@@ -43,6 +43,28 @@ impl std::fmt::Display for PairingEngine {
 
 fn htslib_additional_threads(total_threads: u8) -> u8 {
     total_threads.saturating_sub(1)
+}
+
+struct CollateScratch {
+    _directory: TempDir,
+    prefix: String,
+}
+
+impl CollateScratch {
+    fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        let directory = tempfile::Builder::new()
+            .prefix("sdrecall-collate-")
+            .tempdir()?;
+        let prefix = directory
+            .path()
+            .join("spill")
+            .to_string_lossy()
+            .into_owned();
+        Ok(Self {
+            _directory: directory,
+            prefix,
+        })
+    }
 }
 
 fn should_skip_alignment(read: &Record) -> bool {
@@ -193,11 +215,14 @@ fn collate_bam_temp_file(
         .to_str()
         .ok_or("failed to convert collated BAM path to UTF-8")?;
 
+    let scratch = CollateScratch::new()?;
     let additional_threads = htslib_additional_threads(threads).to_string();
     let output = Command::new("samtools")
         .args([
             "collate",
             "-f",
+            "-T",
+            &scratch.prefix,
             "-@",
             &additional_threads,
             bam_file_path,
@@ -221,6 +246,7 @@ fn collate_bam_temp_file(
 struct CollateProcess {
     child: std::process::Child,
     stderr_reader: Option<thread::JoinHandle<Vec<u8>>>,
+    _scratch: CollateScratch,
     finished: bool,
 }
 
@@ -286,6 +312,7 @@ fn collate_bam_pipe(
     bam_file_path: &str,
     threads: u8,
 ) -> Result<(bam::Reader, PairingReaderGuard), Box<dyn std::error::Error>> {
+    let scratch = CollateScratch::new()?;
     let additional_threads = htslib_additional_threads(threads).to_string();
     let mut child = Command::new("samtools")
         .args([
@@ -293,6 +320,8 @@ fn collate_bam_pipe(
             "-f",
             "-u",
             "-O",
+            "-T",
+            &scratch.prefix,
             "-@",
             &additional_threads,
             bam_file_path,
@@ -333,6 +362,7 @@ fn collate_bam_pipe(
         PairingReaderGuard::Pipe(CollateProcess {
             child,
             stderr_reader: Some(stderr_reader),
+            _scratch: scratch,
             finished: false,
         }),
     ))
@@ -1015,6 +1045,17 @@ mod tests {
         assert_eq!(htslib_additional_threads(1), 0);
         assert_eq!(htslib_additional_threads(2), 1);
         assert_eq!(htslib_additional_threads(4), 3);
+    }
+
+    #[test]
+    fn collate_scratch_uses_managed_system_temp_directory() {
+        let first = CollateScratch::new().expect("first scratch directory");
+        let second = CollateScratch::new().expect("second scratch directory");
+        assert!(first._directory.path().starts_with(std::env::temp_dir()));
+        assert!(second._directory.path().starts_with(std::env::temp_dir()));
+        assert_ne!(first.prefix, second.prefix);
+        assert!(first._directory.path().is_dir());
+        assert!(second._directory.path().is_dir());
     }
 
     #[test]
