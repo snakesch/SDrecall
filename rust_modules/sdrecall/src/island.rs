@@ -395,7 +395,12 @@ fn partition_bam_one_pass(
     let pg_links = next_samtools_pg_links(&header_view);
     let router = IntervalRouter::new(plans, &header_view);
 
-    let thread_pool = if threads > 1 {
+    // A threaded BGZF writer owns a dispatcher thread even when many writers
+    // share one htslib worker pool. Keeping every island writer threaded would
+    // therefore create one OS thread per island while all outputs are open.
+    // Parallelize source decompression here; output compression remains serial
+    // per writer and preserves the same routed record stream.
+    let reader_thread_pool = if threads > 1 {
         let pool = ThreadPool::new(u32::from(sdrecall_utils::clamp_threads_u8(threads - 1)))
             .map_err(|error| SdError::Htslib(format!("create BAM thread pool: {error}")))?;
         reader
@@ -418,21 +423,13 @@ fn partition_bam_one_pass(
             threads,
             samtools_version,
         );
-        let mut writer =
+        let writer =
             bam::Writer::from_path(output_bam, &header, bam::Format::Bam).map_err(|error| {
                 SdError::Htslib(format!(
                     "create island BAM {}: {error}",
                     output_bam.display()
                 ))
             })?;
-        if let Some(pool) = &thread_pool {
-            writer.set_thread_pool(pool).map_err(|error| {
-                SdError::Htslib(format!(
-                    "set BAM writer thread pool for {}: {error}",
-                    output_bam.display()
-                ))
-            })?;
-        }
         writers.push(writer);
     }
 
@@ -473,7 +470,7 @@ fn partition_bam_one_pass(
     }
     drop(reader);
     drop(writers);
-    drop(thread_pool);
+    drop(reader_thread_pool);
 
     Ok(PartitionResult {
         source_records,
