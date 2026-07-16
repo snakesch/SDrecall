@@ -494,9 +494,38 @@ pub fn build_and_phase_with_intrinsic(
         csr_build_time.as_secs_f64(),
         total_start.elapsed().as_secs_f64()
     );
+    let gce_lease_start = Instant::now();
+    let gce_cpu_lease = params
+        .resources
+        .as_ref()
+        .map(|resources| resources.acquire_cpu(CpuPhase::Gce));
+    let gce_lease_wait_time = gce_lease_start.elapsed();
+    let gce_threads = gce_cpu_lease
+        .as_ref()
+        .map_or(usize::from(params.threads), |lease| lease.threads())
+        .max(1);
+    if let Some(lease) = &gce_cpu_lease {
+        log::warn!(
+            concat!(
+                "[fp_control_resource_lease_metrics] bam={} phase=gce threads={} ",
+                "memory_units={} remaining_islands={} t_wait_s={:.3}"
+            ),
+            bam,
+            lease.threads(),
+            graph_memory_lease
+                .as_ref()
+                .map_or(0, |memory| memory.units()),
+            params
+                .resources
+                .as_ref()
+                .map_or(0, PhaseResources::remaining_islands),
+            gce_lease_wait_time.as_secs_f64()
+        );
+    }
     let phase_start = Instant::now();
-    let vertex_hap = phase_sparse_with_threads(&phasing_input, usize::from(params.threads));
+    let vertex_hap = phase_sparse_with_threads(&phasing_input, gce_threads);
     let phase_time = phase_start.elapsed();
+    drop(gce_cpu_lease);
 
     let haplotype_clusters = {
         let mut hap_ids: Vec<i32> = vertex_hap.values().copied().collect();
