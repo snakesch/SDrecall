@@ -325,7 +325,7 @@ pub fn graph_memory_units(read_pairs: usize) -> usize {
 mod tests {
     use super::*;
     use std::sync::mpsc;
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn cpu_leases_expand_when_the_island_tail_shrinks() {
@@ -403,6 +403,47 @@ mod tests {
         drop(first);
         assert_eq!(receiver.recv_timeout(Duration::from_secs(1)).unwrap(), 4);
         worker.join().unwrap();
+    }
+
+    #[test]
+    fn concurrent_graph_to_gce_transitions_do_not_stall() {
+        const WORKERS: usize = 13;
+        let resources = PhaseResources::new(25, WORKERS, 91, 25, 12);
+        let (sender, receiver) = mpsc::channel();
+        let workers: Vec<_> = (0..WORKERS)
+            .map(|worker_id| {
+                let worker_resources = resources.clone();
+                let worker_sender = sender.clone();
+                std::thread::spawn(move || {
+                    let memory_units = 1 + worker_id % 5;
+                    let memory = worker_resources.acquire_memory(memory_units);
+
+                    let graph =
+                        worker_resources.acquire_cpu_weighted(CpuPhase::GraphBuild, memory.units());
+                    std::thread::sleep(Duration::from_millis(2));
+                    drop(graph);
+
+                    let gce = worker_resources.acquire_cpu_weighted(CpuPhase::Gce, memory.units());
+                    std::thread::sleep(Duration::from_millis(2));
+                    drop(gce);
+                    drop(memory);
+
+                    worker_sender.send(worker_id).expect("send completion");
+                })
+            })
+            .collect();
+        drop(sender);
+
+        let deadline = Instant::now() + Duration::from_secs(3);
+        for _ in 0..WORKERS {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            receiver
+                .recv_timeout(remaining)
+                .expect("weighted graph-to-GCE transition stalled");
+        }
+        for worker in workers {
+            worker.join().unwrap();
+        }
     }
 
     #[test]

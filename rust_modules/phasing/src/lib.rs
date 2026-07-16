@@ -49,6 +49,23 @@ use sdrecall_utils::{
     clamp_threads_u8, graph_memory_units, CpuPhase, PhaseResources, Result, SdError,
 };
 
+// A cross-pool `install` may steal another outer Rayon task while waiting,
+// recursively retaining phase leases. Block on an ordinary scoped thread instead.
+fn install_without_outer_rayon_reentry<Output, Operation>(
+    pool: &rayon::ThreadPool,
+    operation: Operation,
+) -> Output
+where
+    Output: Send,
+    Operation: FnOnce() -> Output + Send,
+{
+    let outcome = std::thread::scope(|scope| scope.spawn(move || pool.install(operation)).join());
+    match outcome {
+        Ok(output) => output,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
 /// Parameters for the standalone BAM phaser.
 ///
 /// The reference genome is **not** stored here — it is a required input passed
@@ -446,13 +463,13 @@ pub fn build_and_phase_with_intrinsic(
         .map_err(|error| SdError::Compute(format!("graph build failed for {bam}: {error}")))
     };
     let graph_result = if graph_threads > 1 {
-        rayon::ThreadPoolBuilder::new()
+        let graph_pool = rayon::ThreadPoolBuilder::new()
             .num_threads(graph_threads)
             .build()
             .map_err(|error| {
                 SdError::Compute(format!("graph thread pool failed for {bam}: {error}"))
-            })?
-            .install(build_graph)
+            })?;
+        install_without_outer_rayon_reentry(&graph_pool, build_graph)
     } else {
         build_graph()
     };
@@ -662,6 +679,8 @@ pub fn phase_bam_with_intrinsic(
 mod tests {
     use super::*;
     use ndarray::Array2;
+    use rayon::prelude::*;
+    use std::sync::mpsc;
 
     #[test]
     fn phasing_input_glue_shapes_match() {
@@ -721,5 +740,47 @@ mod tests {
             vec!["qA:65".to_string(), "qA:129".to_string()]
         );
         assert_eq!(pi.node_read_ids[1], vec!["qB:65".to_string()]);
+    }
+
+    #[test]
+    fn weighted_phase_pools_do_not_reenter_the_outer_worker() {
+        const WORKERS: usize = 13;
+        let resources = PhaseResources::new(25, WORKERS, 91, 25, 12);
+        let (sender, receiver) = mpsc::channel();
+        std::thread::spawn(move || {
+            let outer = rayon::ThreadPoolBuilder::new()
+                .num_threads(1)
+                .build()
+                .expect("build outer pool");
+            outer.install(|| {
+                (0..WORKERS).into_par_iter().with_max_len(1).for_each(|_| {
+                    let memory = resources.acquire_memory(1);
+                    let graph =
+                        resources.acquire_cpu_weighted(CpuPhase::GraphBuild, memory.units());
+                    let graph_pool = rayon::ThreadPoolBuilder::new()
+                        .num_threads(graph.threads())
+                        .build()
+                        .expect("build graph pool");
+                    install_without_outer_rayon_reentry(&graph_pool, || {
+                        std::thread::sleep(Duration::from_millis(50));
+                        (0..1_000usize)
+                            .into_par_iter()
+                            .map(|value| value.wrapping_mul(31))
+                            .sum::<usize>()
+                    });
+                    drop(graph);
+
+                    let gce = resources.acquire_cpu_weighted(CpuPhase::Gce, memory.units());
+                    std::thread::sleep(Duration::from_millis(50));
+                    drop(gce);
+                    drop(memory);
+                });
+            });
+            sender.send(()).expect("send phase-pool completion");
+        });
+
+        receiver
+            .recv_timeout(Duration::from_secs(3))
+            .expect("weighted phase pools stalled");
     }
 }
