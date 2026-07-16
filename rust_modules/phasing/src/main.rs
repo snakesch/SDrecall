@@ -72,6 +72,7 @@ fn main() -> Result<()> {
         threads: args.threads,
         pairing_engine: args.pairing_engine,
         resources: None,
+        graph_pools: None,
     };
 
     let t0 = Instant::now();

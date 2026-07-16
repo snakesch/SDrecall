@@ -36,6 +36,8 @@ pub mod hp_writer;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 pub use bam_reading::PairingEngine;
@@ -66,6 +68,146 @@ where
     }
 }
 
+/// A per-run cache of private Rayon pools used by weighted graph phases.
+///
+/// Checked-out pools are exclusive to one graph build, so their worker count
+/// continues to match the phase's CPU lease exactly. Returned pools are kept
+/// only while the total number of idle workers stays within the configured
+/// bound.
+#[derive(Clone)]
+pub struct GraphThreadPoolCache {
+    inner: Arc<GraphThreadPoolCacheInner>,
+}
+
+struct GraphThreadPoolCacheInner {
+    max_idle_threads: usize,
+    state: Mutex<GraphThreadPoolCacheState>,
+    pools_built: AtomicUsize,
+    pools_reused: AtomicUsize,
+    next_pool_id: AtomicUsize,
+}
+
+#[derive(Default)]
+struct GraphThreadPoolCacheState {
+    idle_by_threads: HashMap<usize, Vec<rayon::ThreadPool>>,
+    idle_threads: usize,
+}
+
+/// Snapshot of reusable graph-pool activity for diagnostics and tests.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GraphThreadPoolCacheStats {
+    pub pools_built: usize,
+    pub pools_reused: usize,
+    pub idle_pools: usize,
+    pub idle_threads: usize,
+}
+
+impl std::fmt::Debug for GraphThreadPoolCache {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("GraphThreadPoolCache")
+            .field("max_idle_threads", &self.inner.max_idle_threads)
+            .field("stats", &self.stats())
+            .finish()
+    }
+}
+
+impl GraphThreadPoolCache {
+    /// Creates a cache retaining at most `max_idle_threads` Rayon workers.
+    pub fn new(max_idle_threads: usize) -> Self {
+        Self {
+            inner: Arc::new(GraphThreadPoolCacheInner {
+                max_idle_threads: max_idle_threads.max(1),
+                state: Mutex::new(GraphThreadPoolCacheState::default()),
+                pools_built: AtomicUsize::new(0),
+                pools_reused: AtomicUsize::new(0),
+                next_pool_id: AtomicUsize::new(0),
+            }),
+        }
+    }
+
+    fn checkout(
+        &self,
+        threads: usize,
+    ) -> std::result::Result<CachedGraphThreadPool, rayon::ThreadPoolBuildError> {
+        let threads = threads.max(1);
+        let cached = {
+            let mut state = self.lock_state();
+            let pool = state.idle_by_threads.get_mut(&threads).and_then(Vec::pop);
+            if pool.is_some() {
+                state.idle_threads = state.idle_threads.saturating_sub(threads);
+            }
+            pool
+        };
+
+        let pool = if let Some(pool) = cached {
+            self.inner.pools_reused.fetch_add(1, Ordering::Relaxed);
+            pool
+        } else {
+            let pool_id = self.inner.next_pool_id.fetch_add(1, Ordering::Relaxed);
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .thread_name(move |index| format!("sdgraph-{pool_id}-{threads}-{index}"))
+                .build()?;
+            self.inner.pools_built.fetch_add(1, Ordering::Relaxed);
+            pool
+        };
+
+        Ok(CachedGraphThreadPool {
+            cache: self.clone(),
+            threads,
+            pool: Some(pool),
+        })
+    }
+
+    /// Returns cumulative construction/reuse counts and the current idle size.
+    pub fn stats(&self) -> GraphThreadPoolCacheStats {
+        let state = self.lock_state();
+        GraphThreadPoolCacheStats {
+            pools_built: self.inner.pools_built.load(Ordering::Relaxed),
+            pools_reused: self.inner.pools_reused.load(Ordering::Relaxed),
+            idle_pools: state.idle_by_threads.values().map(Vec::len).sum(),
+            idle_threads: state.idle_threads,
+        }
+    }
+
+    fn lock_state(&self) -> MutexGuard<'_, GraphThreadPoolCacheState> {
+        self.inner
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+struct CachedGraphThreadPool {
+    cache: GraphThreadPoolCache,
+    threads: usize,
+    pool: Option<rayon::ThreadPool>,
+}
+
+impl CachedGraphThreadPool {
+    fn pool(&self) -> &rayon::ThreadPool {
+        self.pool.as_ref().expect("checked-out graph pool missing")
+    }
+}
+
+impl Drop for CachedGraphThreadPool {
+    fn drop(&mut self) {
+        let Some(pool) = self.pool.take() else {
+            return;
+        };
+        let mut state = self.cache.lock_state();
+        if state.idle_threads.saturating_add(self.threads) <= self.cache.inner.max_idle_threads {
+            state
+                .idle_by_threads
+                .entry(self.threads)
+                .or_default()
+                .push(pool);
+            state.idle_threads += self.threads;
+        }
+    }
+}
+
 /// Parameters for the standalone BAM phaser.
 ///
 /// The reference genome is **not** stored here — it is a required input passed
@@ -80,6 +222,7 @@ pub struct PhaserParams {
     pub threads: u8,
     pub pairing_engine: PairingEngine,
     pub resources: Option<PhaseResources>,
+    pub graph_pools: Option<GraphThreadPoolCache>,
 }
 
 impl Default for PhaserParams {
@@ -92,6 +235,7 @@ impl Default for PhaserParams {
             threads: 4,
             pairing_engine: PairingEngine::SamtoolsPipe,
             resources: None,
+            graph_pools: None,
         }
     }
 }
@@ -463,13 +607,14 @@ pub fn build_and_phase_with_intrinsic(
         .map_err(|error| SdError::Compute(format!("graph build failed for {bam}: {error}")))
     };
     let graph_result = if graph_threads > 1 {
-        let graph_pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(graph_threads)
-            .build()
-            .map_err(|error| {
-                SdError::Compute(format!("graph thread pool failed for {bam}: {error}"))
-            })?;
-        install_without_outer_rayon_reentry(&graph_pool, build_graph)
+        let graph_pool = match &params.graph_pools {
+            Some(cache) => cache.checkout(graph_threads),
+            None => GraphThreadPoolCache::new(graph_threads).checkout(graph_threads),
+        }
+        .map_err(|error| {
+            SdError::Compute(format!("graph thread pool failed for {bam}: {error}"))
+        })?;
+        install_without_outer_rayon_reentry(graph_pool.pool(), build_graph)
     } else {
         build_graph()
     };
@@ -743,9 +888,47 @@ mod tests {
     }
 
     #[test]
+    fn graph_pool_cache_reuses_matching_worker_pool() {
+        let cache = GraphThreadPoolCache::new(4);
+        for _ in 0..3 {
+            let graph_pool = cache.checkout(2).expect("checkout graph pool");
+            let observed = install_without_outer_rayon_reentry(graph_pool.pool(), || {
+                (0..100usize).into_par_iter().sum::<usize>()
+            });
+            assert_eq!(observed, 4_950);
+        }
+
+        assert_eq!(
+            cache.stats(),
+            GraphThreadPoolCacheStats {
+                pools_built: 1,
+                pools_reused: 2,
+                idle_pools: 1,
+                idle_threads: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn graph_pool_cache_bounds_idle_worker_threads() {
+        let cache = GraphThreadPoolCache::new(4);
+        let three_threads = cache.checkout(3).expect("checkout three-thread pool");
+        let two_threads = cache.checkout(2).expect("checkout two-thread pool");
+        drop(three_threads);
+        drop(two_threads);
+
+        let stats = cache.stats();
+        assert_eq!(stats.pools_built, 2);
+        assert_eq!(stats.pools_reused, 0);
+        assert_eq!(stats.idle_pools, 1);
+        assert!(stats.idle_threads <= 4);
+    }
+
+    #[test]
     fn weighted_phase_pools_do_not_reenter_the_outer_worker() {
         const WORKERS: usize = 13;
         let resources = PhaseResources::new(25, WORKERS, 91, 25, 12);
+        let graph_pools = GraphThreadPoolCache::new(25);
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn(move || {
             let outer = rayon::ThreadPoolBuilder::new()
@@ -757,11 +940,10 @@ mod tests {
                     let memory = resources.acquire_memory(1);
                     let graph =
                         resources.acquire_cpu_weighted(CpuPhase::GraphBuild, memory.units());
-                    let graph_pool = rayon::ThreadPoolBuilder::new()
-                        .num_threads(graph.threads())
-                        .build()
-                        .expect("build graph pool");
-                    install_without_outer_rayon_reentry(&graph_pool, || {
+                    let graph_pool = graph_pools
+                        .checkout(graph.threads())
+                        .expect("checkout graph pool");
+                    install_without_outer_rayon_reentry(graph_pool.pool(), || {
                         std::thread::sleep(Duration::from_millis(50));
                         (0..1_000usize)
                             .into_par_iter()

@@ -177,6 +177,7 @@ fn main() {
             threads: 4,
             pairing_engine: fp_control::PairingEngine::SamtoolsPipe,
             resources: None,
+            graph_pools: None,
             compare_haplotype_meta_tab: String::new(),
         };
 

@@ -86,6 +86,7 @@ fn main() -> ExitCode {
         threads: cli.threads,
         pairing_engine: cli.pairing_engine,
         resources: None,
+        graph_pools: None,
         compare_haplotype_meta_tab: cli.compare_meta,
     };
 

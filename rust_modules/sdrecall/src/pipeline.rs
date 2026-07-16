@@ -1447,6 +1447,7 @@ fn fp_control_per_island(
         budget.total_threads,
         (budget.total_threads / 2).max(1),
     );
+    let graph_pools = fp_control::GraphThreadPoolCache::new(budget.total_threads);
     log::warn!(
         "[fp_control_resource_pool_metrics] islands={} total_cpu={} max_active={} memory_units={} collate_limit={}",
         islands.len(),
@@ -1492,6 +1493,7 @@ fn fp_control_per_island(
                         tpj,
                         pairing_engine,
                         resources.clone(),
+                        graph_pools.clone(),
                     )
                 }));
 
@@ -1533,6 +1535,17 @@ fn fp_control_per_island(
             })
             .collect()
     });
+    let graph_pool_stats = graph_pools.stats();
+    log::warn!(
+        concat!(
+            "[fp_control_graph_pool_metrics] pools_built={} pools_reused={} ",
+            "idle_pools={} idle_threads={}"
+        ),
+        graph_pool_stats.pools_built,
+        graph_pool_stats.pools_reused,
+        graph_pool_stats.idle_pools,
+        graph_pool_stats.idle_threads
+    );
 
     let mut bams = Vec::new();
     let mut vcfs = Vec::new();
@@ -1627,6 +1640,7 @@ fn process_one_island(
     threads: usize,
     pairing_engine: fp_control::PairingEngine,
     resources: PhaseResources,
+    graph_pools: fp_control::GraphThreadPoolCache,
 ) -> Result<Option<(PathBuf, PathBuf)>> {
     let total_start = Instant::now();
     let bam_str = island.raw_bam.to_string_lossy().to_string();
@@ -1639,6 +1653,7 @@ fn process_one_island(
         threads: clamp_threads_u8(threads),
         pairing_engine,
         resources: Some(resources.clone()),
+        graph_pools: Some(graph_pools),
         ..Default::default()
     };
 

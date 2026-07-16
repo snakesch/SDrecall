@@ -42,8 +42,8 @@
 use std::collections::{HashMap, HashSet};
 
 use haplotype_inspection::identify_misaligned_haps::inspect_haplotypes;
-pub use phasing::PairingEngine;
 use phasing::{build_and_phase_with_intrinsic, GraphPhaseMetrics, PhaserParams};
+pub use phasing::{GraphThreadPoolCache, PairingEngine};
 use sdrecall_utils::{PhaseResources, Result, SdError};
 
 /// Parameters for one fused FP-control island run, mirroring the per-chunk
@@ -68,6 +68,8 @@ pub struct FpControlParams {
     pub pairing_engine: PairingEngine,
     /// Optional shared phase-aware CPU and memory lease manager.
     pub resources: Option<PhaseResources>,
+    /// Optional per-run cache of private weighted-graph Rayon pools.
+    pub graph_pools: Option<GraphThreadPoolCache>,
     /// Path for the haplotype-comparison meta TSV inspect writes (Python's
     /// `compare_haplotype_meta_tab`). May be empty to skip the dump.
     pub compare_haplotype_meta_tab: String,
@@ -84,6 +86,7 @@ impl Default for FpControlParams {
             threads: 4,
             pairing_engine: PairingEngine::SamtoolsPipe,
             resources: None,
+            graph_pools: None,
             compare_haplotype_meta_tab: String::new(),
         }
     }
@@ -230,6 +233,7 @@ pub fn run_fp_control(
         threads: params.threads,
         pairing_engine: params.pairing_engine,
         resources: params.resources.clone(),
+        graph_pools: params.graph_pools.clone(),
     };
     log::info!("[fp_control] Stages 1-2: building + phasing graph from {bam}");
 
