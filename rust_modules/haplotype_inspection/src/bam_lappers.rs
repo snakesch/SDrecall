@@ -11,6 +11,10 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use tempfile::NamedTempFile;
 
+// Fast collate opens 64 temporary writers whose dispatcher threads would each
+// otherwise be eligible for a separate glibc allocation arena.
+const COLLATE_MALLOC_ARENA_MAX: &str = "4";
+
 /// Result structure from BAM → Lapper construction (replaces Python's migrate_bam_to_ncls).
 #[derive(Debug)]
 pub struct BamLapperResult {
@@ -70,6 +74,7 @@ fn spawn_collate_pipe(
     );
 
     let mut child = Command::new("samtools")
+        .env("MALLOC_ARENA_MAX", COLLATE_MALLOC_ARENA_MAX)
         .args([
             "collate",
             "-f",
@@ -137,6 +142,7 @@ fn collate_bam_file(
     );
 
     let output = Command::new("samtools")
+        .env("MALLOC_ARENA_MAX", COLLATE_MALLOC_ARENA_MAX)
         .args([
             "collate",
             "-f",

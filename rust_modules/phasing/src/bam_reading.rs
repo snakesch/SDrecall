@@ -69,6 +69,9 @@ impl CollateScratch {
 
 const FAST_COLLATE_STORE_MAX: usize = 10_000;
 const FAST_COLLATE_BIN_COUNT: usize = 64;
+// Fast collate opens 64 temporary writers whose dispatcher threads would each
+// otherwise be eligible for a separate glibc allocation arena.
+const COLLATE_MALLOC_ARENA_MAX: &str = "4";
 
 fn hash_wang(mut key: u32) -> u32 {
     key = key.wrapping_add(!(key << 15));
@@ -355,6 +358,7 @@ fn collate_bam_temp_file(
     let scratch = CollateScratch::new()?;
     let additional_threads = htslib_additional_threads(threads).to_string();
     let output = Command::new("samtools")
+        .env("MALLOC_ARENA_MAX", COLLATE_MALLOC_ARENA_MAX)
         .args([
             "collate",
             "-f",
@@ -452,6 +456,7 @@ fn collate_bam_pipe(
     let scratch = CollateScratch::new()?;
     let additional_threads = htslib_additional_threads(threads).to_string();
     let mut child = Command::new("samtools")
+        .env("MALLOC_ARENA_MAX", COLLATE_MALLOC_ARENA_MAX)
         .args([
             "collate",
             "-f",
