@@ -25,7 +25,7 @@ pub enum PairingEngine {
     #[default]
     #[value(name = "samtools-pipe")]
     SamtoolsPipe,
-    /// Group primary records directly in Rust without invoking samtools.
+    /// Reproduce samtools fast-collate ordering with spill bins retained in RAM.
     #[value(name = "rust-memory")]
     RustMemory,
 }
@@ -65,6 +65,143 @@ impl CollateScratch {
             prefix,
         })
     }
+}
+
+const FAST_COLLATE_STORE_MAX: usize = 10_000;
+const FAST_COLLATE_BIN_COUNT: usize = 64;
+
+fn hash_wang(mut key: u32) -> u32 {
+    key = key.wrapping_add(!(key << 15));
+    key ^= key >> 10;
+    key = key.wrapping_add(key << 3);
+    key ^= key >> 6;
+    key = key.wrapping_add(!(key << 11));
+    key ^= key >> 16;
+    key
+}
+
+fn hash_x31_wang(qname: &[u8]) -> u32 {
+    let Some((&first, rest)) = qname.split_first() else {
+        return 0;
+    };
+    if first == 0 {
+        return 0;
+    }
+
+    let mut hash = u32::from(first);
+    for &byte in rest {
+        hash = hash
+            .wrapping_shl(5)
+            .wrapping_sub(hash)
+            .wrapping_add(u32::from(byte));
+    }
+    hash_wang(hash)
+}
+
+fn fast_collate_accepts(record: &Record) -> bool {
+    let pair_flag = record.flags() & 0x00c0;
+    !record.is_secondary()
+        && !record.is_supplementary()
+        && (pair_flag == 0x0040 || pair_flag == 0x0080)
+}
+
+fn spill_record_order(record: &Record) -> u16 {
+    (record.flags() >> 6) & 3
+}
+
+fn emit_spill_bins<F>(bins: &mut [Vec<Record>], emit: &mut F) -> Result<(), String>
+where
+    F: FnMut(Vec<Record>) -> Result<(), String>,
+{
+    for bin in bins {
+        bin.sort_unstable_by(|left, right| {
+            hash_x31_wang(left.qname())
+                .cmp(&hash_x31_wang(right.qname()))
+                .then_with(|| left.qname().cmp(right.qname()))
+                .then_with(|| spill_record_order(left).cmp(&spill_record_order(right)))
+        });
+
+        let mut group: Vec<Record> = Vec::new();
+        for record in bin.drain(..) {
+            if group
+                .first()
+                .is_some_and(|first| first.qname() != record.qname())
+            {
+                emit(std::mem::take(&mut group))?;
+            }
+            group.push(record);
+        }
+        if !group.is_empty() {
+            emit(group)?;
+        }
+    }
+    Ok(())
+}
+
+fn rust_fast_collate<F>(
+    bam: &mut bam::Reader,
+    store_max: usize,
+    bin_count: usize,
+    mut emit: F,
+) -> Result<usize, Box<dyn std::error::Error>>
+where
+    F: FnMut(Vec<Record>) -> Result<(), String>,
+{
+    let store_max = store_max.max(2);
+    let bin_count = bin_count.max(1);
+    let mut ring: Vec<Option<Record>> = (0..store_max).map(|_| None).collect();
+    let mut stored: AHashMap<Vec<u8>, usize> = AHashMap::with_capacity(store_max);
+    let mut bins: Vec<Vec<Record>> = (0..bin_count).map(|_| Vec::new()).collect();
+    let mut ring_index = 0usize;
+    let mut accepted_records = 0usize;
+
+    for record_result in bam.records() {
+        let record = record_result?;
+        if !fast_collate_accepts(&record) {
+            continue;
+        }
+        accepted_records += 1;
+
+        if let Some(stored_index) = stored.remove(record.qname()) {
+            let stored_record = ring[stored_index]
+                .take()
+                .ok_or("fast-collate qname map referenced an empty ring slot")?;
+            let pair = if record.is_first_in_template() {
+                vec![record, stored_record]
+            } else {
+                vec![stored_record, record]
+            };
+            emit(pair).map_err(|error| format!("fast-collate emit failed: {error}"))?;
+            continue;
+        }
+
+        if ring[ring_index].is_some() {
+            return Err("fast-collate current ring slot was not evicted".into());
+        }
+        let qname = record.qname().to_vec();
+        ring[ring_index] = Some(record);
+        stored.insert(qname, ring_index);
+
+        ring_index = (ring_index + 1) % store_max;
+        if let Some(evicted) = ring[ring_index].take() {
+            if stored.remove(evicted.qname()) != Some(ring_index) {
+                return Err("fast-collate evicted qname was absent from the ring map".into());
+            }
+            let bin = hash_x31_wang(evicted.qname()) as usize % bin_count;
+            bins[bin].push(evicted);
+        }
+    }
+
+    for slot in &mut ring {
+        if let Some(record) = slot.take() {
+            let bin = hash_x31_wang(record.qname()) as usize % bin_count;
+            bins[bin].push(record);
+        }
+    }
+    emit_spill_bins(&mut bins, &mut emit)
+        .map_err(|error| format!("fast-collate spill emit failed: {error}"))?;
+
+    Ok(accepted_records)
 }
 
 fn should_skip_alignment(read: &Record) -> bool {
@@ -442,43 +579,32 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
     );
 
     if engine == PairingEngine::RustMemory {
-        let mut qname_order = Vec::new();
-        let mut groups: AHashMap<String, Vec<Record>> = AHashMap::new();
-        let mut total_reads_processed = 0usize;
         let mut skipped_alignments = 0usize;
-
-        for read_result in bam.records() {
-            let read = read_result?;
-            total_reads_processed += 1;
-            if should_skip_alignment(&read) {
-                skipped_alignments += 1;
-                continue;
-            }
-
-            let qname = String::from_utf8_lossy(read.qname()).to_string();
-            if let Some(reads) = groups.get_mut(&qname) {
-                reads.push(read);
-            } else {
-                qname_order.push(qname.clone());
-                groups.insert(qname, vec![read]);
-            }
-        }
-
-        for qname in qname_order {
-            let mut reads = groups
-                .remove(&qname)
-                .expect("qname order and in-memory groups stay synchronized");
-            process_qname_group(
-                &mut result,
-                &header,
-                qname,
-                &mut reads,
-                &mut qname_idx_counter,
-                mapq_filter,
-                basequal_median_filter,
-                filter_noisy,
-            )?;
-        }
+        let total_reads_processed = rust_fast_collate(
+            &mut bam,
+            FAST_COLLATE_STORE_MAX,
+            FAST_COLLATE_BIN_COUNT,
+            |mut reads| {
+                let original_len = reads.len();
+                reads.retain(|read| !should_skip_alignment(read));
+                skipped_alignments += original_len - reads.len();
+                let Some(first) = reads.first() else {
+                    return Ok(());
+                };
+                let qname = String::from_utf8_lossy(first.qname()).to_string();
+                process_qname_group(
+                    &mut result,
+                    &header,
+                    qname,
+                    &mut reads,
+                    &mut qname_idx_counter,
+                    mapq_filter,
+                    basequal_median_filter,
+                    filter_noisy,
+                )
+                .map_err(|error| error.to_string())
+            },
+        )?;
 
         drop(bam);
         reader_guard.finish()?;
@@ -1059,6 +1185,62 @@ mod tests {
     }
 
     #[test]
+    fn x31_wang_hash_matches_samtools_1_20() {
+        assert_eq!(hash_x31_wang(b""), 0);
+        assert_eq!(hash_x31_wang(b"alpha"), 193_829_870);
+        assert_eq!(hash_x31_wang(b"beta"), 49_602_855);
+        assert_eq!(hash_x31_wang(b"HG002-1038429"), 2_443_186_596);
+        assert_eq!(hash_x31_wang(b"read/1"), 3_964_866_155);
+    }
+
+    #[test]
+    fn rust_fast_collate_emits_matches_before_hash_ordered_spills() {
+        let fixture = NamedTempFile::with_suffix(".bam").expect("create fixture path");
+        let mut sq = HeaderRecord::new(b"SQ");
+        sq.push_tag(b"SN", "stream1");
+        sq.push_tag(b"LN", 10_000);
+        let mut header = Header::new();
+        header.push_record(&sq);
+
+        let read1 = PAIRED | PROPER_PAIR | READ1;
+        let read2 = PAIRED | PROPER_PAIR | READ2;
+        let records = [
+            make_record(b"a", 100, 700, read1, 60),
+            make_record(b"b", 110, 710, read1, 60),
+            make_record(b"c", 120, 720, read1, 60),
+            make_record(b"c", 720, 120, read2, 60),
+            make_record(b"a", 700, 100, read2, 60),
+            make_record(b"b", 710, 110, read2, 60),
+        ];
+        let mut writer = Writer::from_path(fixture.path(), &header, Format::Bam)
+            .expect("create spill fixture BAM");
+        for record in &records {
+            writer.write(record).expect("write spill fixture record");
+        }
+        drop(writer);
+
+        let mut reader = bam::Reader::from_path(fixture.path()).expect("open spill fixture");
+        let mut emitted = Vec::new();
+        let accepted = rust_fast_collate(&mut reader, 2, 4, |records| {
+            emitted.push(String::from_utf8_lossy(records[0].qname()).to_string());
+            Ok(())
+        })
+        .expect("collate spill fixture");
+
+        let mut spilled = vec!["a", "b"];
+        spilled.sort_unstable_by_key(|qname| {
+            let hash = hash_x31_wang(qname.as_bytes());
+            (hash % 4, hash)
+        });
+        let expected: Vec<String> = std::iter::once("c")
+            .chain(spilled)
+            .map(str::to_string)
+            .collect();
+        assert_eq!(accepted, records.len());
+        assert_eq!(emitted, expected);
+    }
+
+    #[test]
     fn pairing_engines_match_on_interleaved_coordinate_sorted_records() {
         let fixture = NamedTempFile::with_suffix(".bam").expect("create fixture path");
         write_pairing_fixture(fixture.path());
@@ -1091,6 +1273,8 @@ mod tests {
 
         assert_eq!(pipe.qname_to_idx, temp_file.qname_to_idx);
         assert_eq!(pipe.idx_to_qname, temp_file.idx_to_qname);
+        assert_eq!(rust_memory.qname_to_idx, temp_file.qname_to_idx);
+        assert_eq!(rust_memory.idx_to_qname, temp_file.idx_to_qname);
 
         for result in [&temp_file, &pipe, &rust_memory] {
             let overlap_ids = result.interval_trees["stream1"]
