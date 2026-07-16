@@ -210,6 +210,7 @@ pub fn lp_solve_remained_haplotypes_with_obj(
 
     // --- Step 5: Solve ---
     let mut model = pb.optimise(Sense::Minimise);
+    model.set_option("threads", 1);
     model.make_quiet();
     let solved = model.solve();
 
