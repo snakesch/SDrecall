@@ -11,8 +11,8 @@
 //! ## Port status
 //!
 //! The struct + `qnode_relative_region` (the pure coordinate math) are ported and
-//! UNIT-TESTED. The route is built by [`crate::traversal`] (STUBBED) — see that
-//! module. The `traverse_route` here is `Vec<RouteStep>` where each step owns a
+//! UNIT-TESTED. The route is built by [`crate::traversal`]. The `traverse_route`
+//! here is `Vec<RouteStep>` where each step owns a
 //! snapshot of the upstream node it was reached from (matching Python's
 //! `(HOMOSEQ_REGION, edge_type)` tuples, which the back-projection reads for
 //! `start`/`end`/`strand`).

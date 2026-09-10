@@ -2,23 +2,17 @@
 members = ["read_extraction", "haplotype_inspection", "phasing", "sdrecall-utils", "sdrecall-io", "nm-stats", "vcf-ops", "region-prep", "fp-control", "sd-prep", "sdrecall"]
 resolver = "2"
 
-# Optimize for release builds (important for Python modules)
-# NOTE: panic strategy is left at the default "unwind" on purpose. As a PyO3
-# cdylib, an unwinding panic is caught at the #[pyfunction] boundary and turned
-# into a Python exception; "abort" would instead hard-kill the whole host
-# process. Important once the pipeline fuses into one long-running Rust process.
+# Optimize the production binaries and libraries for runtime performance.
 [profile.release]
 opt-level = 3
 lto = true
 codegen-units = 1
 
 [workspace.dependencies]
-pyo3 = { version = "0.21", features = ["extension-module", "abi3-py38"] }
-numpy = "0.21"
 rust-htslib = "0.47"
 rayon = "1.8"
 thiserror = "1.0"
 anyhow = "1.0"
 
 [workspace.lints.clippy]
-all = "warn" 
+all = "warn"

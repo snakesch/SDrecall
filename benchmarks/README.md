@@ -101,3 +101,43 @@ Files are offered in this github repository:
 - benchmarks/hg19.coding.pid.pad20.bed
 - benchmarks/hg38.coding.pid.pad20.bed
 
+## HG002 hg38 Rust benchmark
+
+`benchmark_hg002_hg38.sh` prepares a reproducible comparison of the Rust
+SDrecall callset merged with DeepVariant against the GIAB HG002 v4.2.1 truth
+set. It also evaluates DeepVariant alone over the same callable interval as a
+baseline.
+
+The callable interval is the exact intersection of the run-specific
+`all_target_recall_SD_regions.bed` and the GIAB confident-region BED. All three
+VCFs are normalized with the same reference, atomized, split to biallelic
+records, deduplicated, restricted to that BED, and indexed before comparison.
+The bundled evaluator reports both exact allele metrics and genotype-aware
+metrics that require matching alternate-allele dosage.
+
+The merged benchmark excludes records carrying SDrecall's `MISALIGNED` FILTER;
+`RAW`, `CLEAN`, `SDrecall`, and `DeepVariant` are retained as provenance rather
+than treated as generic failures. Region restriction explicitly uses bcftools
+record-overlap mode (`--regions-overlap 1`).
+
+This is an exact normalized-allele/dosage regression benchmark. It does not
+perform haplotype-aware reconciliation of complex but equivalent variant
+representations, so it should not be presented as a definitive GIAB benchmark
+until the same callsets are also evaluated with hap.py or RTG vcfeval.
+
+```bash
+source ~/.bashrc
+mamba activate SDrecall
+
+# Validate inputs and inspect every command without writing outputs.
+bash benchmarks/benchmark_hg002_hg38.sh --dry-run
+
+# Run after the release vcf-ops binary has passed its header/merge tests.
+bash benchmarks/benchmark_hg002_hg38.sh \
+  --output-dir /path/to/hg002_hg38_benchmark
+```
+
+Run `bash benchmarks/benchmark_hg002_hg38.sh --help` for every input and tool
+override. The output directory contains the merged and normalized VCFs, a
+two-row metrics table comparing `SDrecall+DeepVariant` with the `DeepVariant`
+baseline, and merged command/output logs.

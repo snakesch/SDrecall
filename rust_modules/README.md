@@ -1,11 +1,10 @@
 # SDrecall Rust Workspace
 
 This directory is a **Cargo workspace** holding the Rust port of the SDrecall
-pipeline. The **north star** is a single self-contained `sdrecall` binary — no
-Python interpreter, no PyO3 on the hot path, all file I/O in-process via
-`rust-htslib` / `bedrs` / `petgraph-graphml`. The only deliberately-external
-processes are the read aligner (`minimap2`) and the variant caller / BAM munging
-tools (`bcftools`, `samtools`), invoked as leaf subprocesses.
+pipeline. The production path is a single `sdrecall` Rust binary with no Python
+interpreter or PyO3 bindings. Core stages call one another as Rust libraries;
+`minimap2`, `bcftools`, and `samtools` remain supported external tools for
+alignment, variant calling, and selected BAM/VCF operations.
 
 This README is the **developer/operator reference** for the workspace: how the
 crates fit together, how the orchestrator threads them, and a copy-pasteable
@@ -35,8 +34,8 @@ Two **foundation crates** hold the shared plumbing so no stage re-implements it:
 |-------|------|------|-------------------|
 | `sdrecall-utils` | shared types, errors, logging, parallelism math — **no file I/O** | — (library) | `utils.py` / `log.py` / `const.py` helpers |
 | `sdrecall-io` | in-process BAM/BED/VCF/GraphML/TSV + insert-size I/O | — (library) | `utils.py` I/O, `insert_size.py` |
-| `read_extraction` | BAM → FASTQ (region/multi-align filtered) | — (lib + PyO3) | `realign_recall` read extraction |
-| `haplotype_inspection` | consensus / similarity / BILC solve | — (lib + PyO3) | `fp_control/identify_misaligned_haps.py` |
+| `read_extraction` | BAM → FASTQ (region/multi-align filtered) | — (library) | `realign_recall` read extraction |
+| `haplotype_inspection` | consensus / similarity / BILC solve | — (library) | `fp_control/identify_misaligned_haps.py` |
 | `phasing` | BAM → phasing graph + weight matrix → GCE partition → HP-tagged BAM | bin = phaser + diff harness | `fp_control/graph_build.py` + `phasing.py` + `gce_algorithm.py` |
 | `region-prep` | per-RG fc/nfc realignment-region projection | `region-prep` | `prepare_masked_align_region.py` |
 | `fp-control` | **fused** Phase-2c: graph → phasing → inspect → BILC | `fp-control` | `realign_filter_per_cov.py` wiring |
@@ -45,12 +44,11 @@ Two **foundation crates** hold the shared plumbing so no stage re-implements it:
 | `sd-prep` | Phase-1 SD graph + region prep (**partial CLI**) | `sd-prep` (graph/mask) | `prepare_recall_regions.py` + `preparation/*` |
 | `sdrecall` | **top-level orchestrator** — threads all stages | `sdrecall` | `SDrecall` CLI + `realign_and_recall.py` + `misalignment_elimination.py` |
 
-`read_extraction` and `haplotype_inspection` are the oldest crates and still ship
-a **PyO3 `cdylib`** so the in-flight Python pipeline can call them during
-differential validation; they expose pure-Rust `rlib` APIs too (this is what the
-orchestrator links). The graph builder absorbed from the former
-`build_phasing_graph` crate now lives in `phasing` (pure-Rust, no `cdylib`). PyO3
-is transitional and retired stage-by-stage.
+The obsolete PyO3 bindings, Maturin manifests, extension build scripts, and
+checked-in wheel were removed on 2026-07-17. `read_extraction` and
+`haplotype_inspection` now expose only the Rust library APIs used by the
+orchestrator. The graph builder absorbed from the former `build_phasing_graph`
+crate lives in `phasing`.
 
 ---
 
@@ -148,7 +146,8 @@ Shared types and pure helpers used by every crate; **no file I/O**.
 - **Consumed by:** every other crate. There is nothing to run on its own.
 
 #### `sdrecall-io`
-In-process file I/O so no stage shells out to samtools/bedtools for reading.
+Shared in-process file I/O plus the checked `samtools`/`bcftools` leaf wrappers
+that remain deliberate production dependencies.
 
 - **Library surface (modules):** `bam`, `bed`, `vcf`, `graphml`, `tsv`,
   `insert_size`. Frequently-used fns: `read_bed`, `sort_merge_bed`, `slop`,
@@ -267,11 +266,10 @@ cargo run -p phasing --release -- --path <dump_root>/island_7 --single
 - **Outputs:** a per-island `MATCH`/`MISMATCH` report and an `N/total islands
   match` summary; non-zero exit if any island mismatches.
 
-#### `read_extraction` — BAM → FASTQ (library + PyO3, no CLI)
+#### `read_extraction` — BAM → FASTQ (library, no CLI)
 - **Library surface:** `bam_to_fastq(input_bam, region_bed, r1, r2,
-  multi_aligned, threads)`. The PyO3 wrapper (`bam_to_fastq_biobambam`) is gated
-  behind the `python` feature; the orchestrator links with
-  `default-features = false` to get the pure-Rust API without libpython.
+  multi_aligned, threads)`. The orchestrator links this API directly; there is
+  no Python feature or extension-module build.
 - **Inputs:** an indexed BAM + a region BED. **Outputs:** paired `r1`/`r2`
   FASTQ files of reads overlapping the regions (`multi_aligned` toggles the
   multi-alignment recruitment filter).
@@ -279,10 +277,9 @@ cargo run -p phasing --release -- --path <dump_root>/island_7 --single
 #### `phasing` / `haplotype_inspection` — Phase-2c kernels
 The compute core of `fp-control`: BAM → phasing graph + weight matrix → GCE
 partition (`phasing`, which absorbed the former `build_phasing_graph` crate) and
-consensus / similarity / BILC solve (`haplotype_inspection`). Called in-process
-by `fp-control`; `haplotype_inspection` still ships a PyO3 `cdylib` for the
-transitional hybrid pipeline, while `phasing` is pure-Rust with a standalone
-phaser binary + a differential `examples/` harness.
+consensus / similarity / BILC solve (`haplotype_inspection`). Both are called
+in-process by `fp-control`; `phasing` also retains a standalone phaser binary
+and differential `examples/` harnesses.
 
 ---
 
@@ -312,9 +309,10 @@ cargo run -p sdrecall --release -- realign -i ... -r ... -m ... -b ... -o ...  #
   optional VCFs are supplied — the inhouse-common-annotated and
   conventional-merged VCFs. The final path is printed on success.
 
-> **Status:** the orchestrator compiles clean and its unit tests pass, but the
-> wired pipeline has **not yet been validated end-to-end** against the Python
-> pipeline. The full-pipeline HG006 differential is the gating next step (T9).
+> **Status:** the Rust orchestrator has completed production end-to-end runs on
+> t2t/chm13, hg19, and hg38, with retained-output parity checks. The remaining
+> formal migration gates are the HG006 Rust-versus-Python differential and
+> wiring the Python pipeline's NM Poisson cutoff into per-island inspection.
 
 ---
 

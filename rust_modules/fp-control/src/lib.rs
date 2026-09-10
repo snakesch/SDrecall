@@ -3,16 +3,14 @@
 //! Threads `build_phasing_graph` → `phasing` → `haplotype_inspection` into one
 //! in-process Rust call
 //! `(bam, intrinsic_bam, region/params) → (correct_qnames, mismap_qnames)`,
-//! ending the current Rust→Python→Rust round-trip.
+//! replacing the former Rust→Python→Rust round-trip.
 //!
 //! ## What this replaces
 //!
-//! The orchestration in `fp_control/realign_filter_per_cov.py:220-346`, which
-//! today: calls the Rust `build_phasing_graph` (ships a graph + dense matrix +
-//! 7 dicts out to Python), runs Python `phasing_realigned_reads`, then calls the
-//! Rust `inspect_haplotypes_rust` (which re-opens the BAM). The fuse removes the
-//! two PyO3 boundaries and the Python phasing hop — the three stage libraries
-//! become one in-process pipeline passing Rust structs.
+//! The historical orchestration in `fp_control/realign_filter_per_cov.py`
+//! exported graph state to Python for phasing and then crossed back into Rust
+//! for inspection. The fused implementation keeps all three stages in-process
+//! and passes Rust structs directly.
 //!
 //! ## Data flow (study `realign_filter_per_cov.py` for the exact wiring)
 //!

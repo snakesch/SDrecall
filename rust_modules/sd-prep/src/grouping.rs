@@ -22,7 +22,7 @@
 //! [`ConnectedQnodes`] is the order-preserving builder that reproduces this: nodes
 //! are interned in insertion order, so vertex index == insertion rank, feeding
 //! [`crate::graph_core::greedy_vertex_coloring`] in the exact order Python does.
-//! The traversal (STUBBED) drives insertion; this module owns the
+//! The production traversal drives insertion; this module owns the
 //! ordering contract + the color→group collapse so the contract lives in one place.
 
 use crate::graph_core::greedy_vertex_coloring;

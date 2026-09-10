@@ -23,12 +23,31 @@ rust_modules/target-*/
 *.o[0-9]*
 *.e[0-9]*
 logs/
+/test_tmp/
 graphify-out/
 rust_modules/vf
 CLAUDE.md
 progress.md
 .claude/
-docs/
+# Keep large/generated analysis artifacts local, but track the migration plan
+# and task contracts so their status cannot silently drift from the code.
+docs/*
+!docs/analysis/
+docs/analysis/*
+!docs/analysis/.gitignore
+!docs/analysis/RUST_MIGRATION_PLAN.md
+!docs/analysis/RUST_MIGRATION_SUMMARY.md
+!docs/analysis/REVIEW_FINDINGS.md
+!docs/analysis/call_stack_and_correspondence.md
+!docs/analysis/module_bam_lappers.md
+!docs/analysis/module_bilc_solver.md
+!docs/analysis/module_vector_encoding.md
+!docs/analysis/fn_sites/
+docs/analysis/fn_sites/*
+!docs/analysis/fn_sites/SD_MAP_RELATIONSHIP_AUDIT_METHOD.md
+!docs/analysis/tasks/
+docs/analysis/tasks/*
+!docs/analysis/tasks/T*.md
 
 # Large reference-data inputs (BISER/WGAC SD maps, target BEDs): ~1.7 GB, with
 # files exceeding GitHub's 100 MB limit. Downloaded/regenerated, not source.

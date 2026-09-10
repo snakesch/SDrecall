@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Classify FN causes from raw per-read fn-hap-scanner records.
 
-This script is intentionally driven by the raw ``*_alt_reads.tsv`` records:
+This script is intentionally driven by raw records produced from prebuilt
+ALT-only haplotype markers:
 ``FN_site, read_qname, mapping_chrom, mapping_pos, MAPQ, source_BAM,
 kmer_offset, strand``.  It must not consume stale ``cat1_preliminary`` or
-``final_category`` columns from older per-FN summary tables.
+``final_category`` columns from older per-FN summary tables. Do not use output
+from a marker set that includes an FN-reference haplotype under the FN label.
 
 Decision tree implemented here:
   * input_bam == 0 and raw_bam > 0 -> Cat1
@@ -12,6 +14,9 @@ Decision tree implemented here:
   * no evidence in input/raw/PacBio -> Cat1c
   * input_bam > 0 -> Cat2-5 candidate.  If --run-dir is supplied, qnames are
     traced into relevant realigned only_RG BAMs and NFC coverage is checked.
+  * Cat5 additionally requires --haplotype-target-summary to prove that the
+    same ALT haplotype maps across the correct FN target. Low single-base AF
+    without that proof remains pending.
 
 For Cat2-5 candidates, relevant RGs/subgroups are identified from
 ``realign_groups/RG*/RG*_related_homo_regions.bed`` FC labels.  Matching NFC
@@ -564,6 +569,7 @@ def decide_final_category(
     nfc_uncovered: int,
     low_af_threshold: float,
     run_dir_supplied: bool,
+    haplotype_target_verified: bool,
 ) -> tuple[str, str]:
     if evidence_cat != "Cat2-5_candidate_input_ALT":
         return evidence_cat, "final_from_source_BAM_evidence"
@@ -577,7 +583,15 @@ def decide_final_category(
     if realigned_alt_at_fn > 0:
         min_af = float(trace_summary["min_realigned_rg_af"] or "0")
         if min_af <= low_af_threshold:
-            return "Cat5_low_per_RG_AF", "input_qnames_realigned_to_FN_low_AF"
+            if haplotype_target_verified:
+                return (
+                    "Cat5_haplotype_verified_submerged",
+                    "ALT_haplotype_reaches_correct_target_but_exact_AF_is_low",
+                )
+            return (
+                "pending_low_AF_haplotype_recruitment_unverified",
+                "exact_ALT_is_low_but_full_haplotype_correct_target_trace_is_missing",
+            )
         return (
             "pending_nonlow_AF_caller_or_representation",
             "input_qnames_realigned_to_FN_but_AF_not_low",
@@ -625,11 +639,32 @@ def main() -> None:
     parser.add_argument("--run-dir", type=Path)
     parser.add_argument("--ref-fasta", type=Path)
     parser.add_argument("--trace-output", type=Path)
+    parser.add_argument(
+        "--haplotype-target-summary",
+        type=Path,
+        help=(
+            "TSV from trace_fn_truth_haplotypes.py. Cat5 requires "
+            "target_trace_status=full_truth_haplotype_reaches_correct_target."
+        ),
+    )
     parser.add_argument("--low-af-threshold", type=float, default=0.20)
     args = parser.parse_args()
 
     sites = read_sites(args.fn_sites)
     records_by_site = read_alt_records(args.alt_reads)
+    haplotype_target_status: dict[str, str] = {}
+    if args.haplotype_target_summary:
+        with args.haplotype_target_summary.open() as summary_handle:
+            summary_reader = csv.DictReader(summary_handle, delimiter="\t")
+            required = {"FN_site", "target_trace_status"}
+            missing = required.difference(summary_reader.fieldnames or [])
+            if missing:
+                raise ValueError(
+                    f"{args.haplotype_target_summary} missing columns: {sorted(missing)}"
+                )
+            haplotype_target_status = {
+                row["FN_site"]: row["target_trace_status"] for row in summary_reader
+            }
 
     fc_groups_by_site: dict[str, list[FcGroup]] = {site.key: [] for site in sites}
     traces_by_site: dict[str, list[TraceRecord]] = defaultdict(list)
@@ -673,6 +708,7 @@ def main() -> None:
             "realigned_mapq_min",
             "realigned_mapq_median",
             "top_realigned_loci",
+            "haplotype_target_trace_status",
             "final_category",
             "decision_reason",
         ]
@@ -690,6 +726,7 @@ def main() -> None:
             trace_summary = summarize_trace(
                 site.key, traces_by_site.get(site.key, []), mpileup_by_site_rg
             )
+            target_trace_status = haplotype_target_status.get(site.key, "not_supplied")
             final_category, reason = decide_final_category(
                 evidence_cat,
                 trace_summary,
@@ -697,6 +734,7 @@ def main() -> None:
                 nfc_uncovered,
                 args.low_af_threshold,
                 args.run_dir is not None,
+                target_trace_status == "full_truth_haplotype_reaches_correct_target",
             )
             writer.writerow(
                 {
@@ -719,6 +757,7 @@ def main() -> None:
                     "nfc_uncovered_loci": nfc_uncovered,
                     "nfc_status": nfc_text,
                     **trace_summary,
+                    "haplotype_target_trace_status": target_trace_status,
                     "final_category": final_category,
                     "decision_reason": reason,
                 }

@@ -4,7 +4,10 @@ use haplotype_inspection::identify_misaligned_haps::select_regions_with_min_hapl
 /// so the two can be compared line-by-line.
 use std::collections::HashMap;
 
-fn make_intervals(data: &[(i32, &[(&str, i64, i64)])]) -> HashMap<i32, Vec<(String, i64, i64)>> {
+type RawInterval<'a> = (&'a str, i64, i64);
+type HaplotypeIntervals<'a> = (i32, &'a [RawInterval<'a>]);
+
+fn make_intervals(data: &[HaplotypeIntervals<'_>]) -> HashMap<i32, Vec<(String, i64, i64)>> {
     let mut m = HashMap::new();
     for &(hid, ivs) in data {
         m.insert(
@@ -25,7 +28,7 @@ fn print_bed(result: &Option<Vec<(String, i64, i64)>>) {
     }
 }
 
-fn run_test(name: &str, data: &[(i32, &[(&str, i64, i64)])], min_k: usize) {
+fn run_test(name: &str, data: &[HaplotypeIntervals<'_>], min_k: usize) {
     let intervals = make_intervals(data);
     let result = select_regions_with_min_haplotypes(&intervals, min_k);
     println!("### {name} (min={min_k})");
@@ -109,7 +112,7 @@ fn main() {
     );
 
     // Test 9: Complex — 5 haplotypes, 3 chromosomes, min=2
-    let complex_data: &[(i32, &[(&str, i64, i64)])] = &[
+    let complex_data: &[HaplotypeIntervals<'_>] = &[
         (
             1,
             &[("chr1", 100, 500), ("chr2", 1000, 2000), ("chr3", 50, 200)],

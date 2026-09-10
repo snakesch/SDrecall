@@ -12,6 +12,13 @@ use sdrecall_utils::{Result, SdError};
 
 const CLEAN_MIN_MAPQ: u8 = 10;
 
+pub(crate) struct HpTagAssignments<'a> {
+    pub correct_qnames: &'a HashSet<String>,
+    pub mismap_qnames: &'a HashSet<String>,
+    pub lowqual_qnames: &'a HashSet<String>,
+    pub qname_hap: &'a HashMap<String, i32>,
+}
+
 /// Write a new BAM containing only primary mapped reads whose qname is in
 /// `keep_qnames`, excluding Python's duplicate/QC-fail/secondary/supplementary
 /// cases. Each retained read is annotated with its fp-control HP tag.
@@ -71,10 +78,7 @@ pub fn filter_bam_by_qnames(
 /// Other reads get `HP:Z:LOWQUAL`.
 pub fn annotate_hp_tags(
     input_bam: &Path,
-    correct_qnames: &HashSet<String>,
-    mismap_qnames: &HashSet<String>,
-    lowqual_qnames: &HashSet<String>,
-    qname_hap: &HashMap<String, i32>,
+    assignments: &HpTagAssignments<'_>,
     output_bam: &Path,
     chunk_id: usize,
     threads: usize,
@@ -104,10 +108,10 @@ pub fn annotate_hp_tags(
 
         let hp_tag = raw_hp_tag(
             &qname,
-            correct_qnames,
-            mismap_qnames,
-            lowqual_qnames,
-            qname_hap,
+            assignments.correct_qnames,
+            assignments.mismap_qnames,
+            assignments.lowqual_qnames,
+            assignments.qname_hap,
             chunk_id,
         );
         set_hp_tag(&mut record, &hp_tag)?;

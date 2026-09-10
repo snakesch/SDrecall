@@ -8,9 +8,9 @@
 //! intentionally **not** ported here — they are I/O and belong in `sdrecall-io`
 //! per the T0 split (DESIGN §4: "Pure derivation — NO mkdir, NO samtools").
 //!
-//! TODO(T9-integration): move this into `sdrecall-utils::paths` once the
-//! concurrent sd-prep work settles. It lives locally in the `sdrecall` crate for
-//! the scaffold pass so we don't touch a crate another agent depends on.
+//! The type intentionally remains orchestrator-local: no stage crate consumes
+//! the full pipeline layout, so moving it into `sdrecall-utils` would expand the
+//! shared API without a second owner.
 
 use std::path::{Path, PathBuf};
 
@@ -52,8 +52,6 @@ pub struct Paths {
     pub reference_sd_map: PathBuf,
     /// Empty string in Python when no BED is given; `None` here.
     pub target_bed: Option<PathBuf>,
-    pub output_dir: PathBuf,
-    pub repo_dir: PathBuf,
 
     // ── derived identifiers ──────────────────────────────────────────────
     pub assembly: String,
@@ -93,7 +91,6 @@ impl Paths {
         sample_id: Option<&str>,
         target_tag: Option<&str>,
         ref_genome_tag: Option<&str>,
-        repo_dir: &Path,
     ) -> Result<Self> {
         // os.path.abspath of every input (src/const.py:93-98).
         let ref_genome = abspath(ref_genome);
@@ -101,7 +98,6 @@ impl Paths {
         let reference_sd_map = abspath(reference_sd_map);
         let target_bed = target_bed.map(abspath);
         let output_dir = abspath(output_dir);
-        let repo_dir = abspath(repo_dir);
 
         // assembly: ref_genome_tag short-circuit, else cascade detection.
         let assembly = match ref_genome_tag {
@@ -140,8 +136,6 @@ impl Paths {
             input_bam,
             reference_sd_map,
             target_bed,
-            output_dir,
-            repo_dir,
             assembly,
             sample_id,
             target_tag,
@@ -194,18 +188,6 @@ impl Paths {
     //  work_dir-anchored getters (src/const.py:251-363)
     // ─────────────────────────────────────────────────────────────────────
 
-    /// `{sample_id}_realign_meta_table.tsv` (const.py:251-253).
-    pub fn realign_meta_table_path(&self) -> PathBuf {
-        self.work_dir
-            .join(format!("{}_realign_meta_table.tsv", self.sample_id))
-    }
-
-    /// `{basename}_qnode_grouping.graphml` (const.py:336-338).
-    pub fn qnode_grouping_graph(&self) -> PathBuf {
-        self.work_dir
-            .join(format!("{}_qnode_grouping.graphml", self.basename))
-    }
-
     /// `{basename}.{target_tag}.multialign.bed` (const.py:341-343).
     pub fn multi_align_bed_path(&self) -> PathBuf {
         self.work_dir.join(format!(
@@ -214,75 +196,15 @@ impl Paths {
         ))
     }
 
-    /// `raw_SD_binary_map.tsv` (const.py:345-347).
-    pub fn raw_sd_binary_map_path(&self) -> PathBuf {
-        self.work_dir.join("raw_SD_binary_map.tsv")
-    }
-
-    /// `filtered_SD_binary_map.tsv` (const.py:349-351).
-    pub fn filtered_sd_binary_map_path(&self) -> PathBuf {
-        self.work_dir.join("filtered_SD_binary_map.tsv")
-    }
-
-    /// `{basename}_multiplexed_SDs.graphml` (const.py:353-355).
-    pub fn multiplex_graph_path(&self) -> PathBuf {
-        self.work_dir
-            .join(format!("{}_multiplexed_SDs.graphml", self.basename))
-    }
-
-    /// `multiplex_graph.replace(".graphml", ".trim.annoPC.graphml")`
-    /// (const.py:357-359).
-    pub fn annotated_graph_path(&self) -> PathBuf {
-        replace_graphml_suffix(&self.multiplex_graph_path(), ".trim.annoPC.graphml")
-    }
-
-    /// `multiplex_graph.replace(".graphml", ".directed.overlap.{chrom}.graphml")`
-    /// (const.py:361-363).
-    pub fn directed_graph_path(&self, chrom: &str) -> PathBuf {
-        replace_graphml_suffix(
-            &self.multiplex_graph_path(),
-            &format!(".directed.overlap.{chrom}.graphml"),
-        )
-    }
-
-    /// `{basename}target_overlapping_query_SD.bed` (const.py:365-367).
-    ///
-    /// NOTE: the Python has no `.` separator between `basename` and the suffix
-    /// — reproduced exactly.
-    pub fn target_overlapping_query_sd_bed_path(&self) -> PathBuf {
-        self.work_dir
-            .join(format!("{}target_overlapping_query_SD.bed", self.basename))
-    }
-
     /// `total_intrinsic_alignments.bam` (const.py:428-430).
     pub fn total_intrinsic_bam_path(&self) -> PathBuf {
         self.work_dir.join("total_intrinsic_alignments.bam")
-    }
-
-    /// `data/{assembly}/raw_intrin_align/assembly_intrinsic_align.WGAC.{assembly}.reformat.bam`
-    /// under `repo_dir` (const.py:432-440). The Python raises on missing/too-small;
-    /// the existence/size checks are I/O and deferred to T9 integration — this
-    /// getter returns the pure path only.
-    pub fn raw_intrinsic_bam_path(&self) -> PathBuf {
-        self.repo_dir
-            .join("data")
-            .join(&self.assembly)
-            .join("raw_intrin_align")
-            .join(format!(
-                "assembly_intrinsic_align.WGAC.{}.reformat.bam",
-                self.assembly
-            ))
     }
 
     /// `realign_groups/all_target_recall_SD_regions.bed` (const.py:452-454).
     pub fn total_recall_sd_region_bed_path(&self) -> PathBuf {
         self.realign_groups_dir
             .join("all_target_recall_SD_regions.bed")
-    }
-
-    /// `all_RG_related_homo_regions.bed` (const.py:472-474).
-    pub fn total_homo_regions_bed_path(&self) -> PathBuf {
-        self.work_dir.join("all_RG_related_homo_regions.bed")
     }
 
     /// FAI index path `{ref_genome}.fai` (const.py:256-263, path only — the
@@ -371,18 +293,6 @@ impl Paths {
         Ok((r1, r2))
     }
 
-    /// `{RGdir}/{RGn}.bed` (const.py:388-391).
-    pub fn rg_query_bed_path(&self, rg: RgRef<'_>) -> Result<PathBuf> {
-        let label = Self::normalize_rg_label(rg)?;
-        Ok(self.rg_dir(rg)?.join(format!("{label}.bed")))
-    }
-
-    /// `{RGdir}/{RGn}_counterparts.bed` (const.py:393-396).
-    pub fn rg_counterparts_bed_path(&self, rg: RgRef<'_>) -> Result<PathBuf> {
-        let label = Self::normalize_rg_label(rg)?;
-        Ok(self.rg_dir(rg)?.join(format!("{label}_counterparts.bed")))
-    }
-
     /// `{RGdir}/{RGn}_related_homo_regions.bed` (const.py:398-401).
     pub fn all_homo_regions_bed_path(&self, rg: RgRef<'_>) -> Result<PathBuf> {
         let label = Self::normalize_rg_label(rg)?;
@@ -391,43 +301,10 @@ impl Paths {
             .join(format!("{label}_related_homo_regions.bed")))
     }
 
-    /// `{RGdir}/{RGn}_related_homo_regions.raw.fastq` (const.py:403-406).
-    pub fn all_homo_regions_fastq_path(&self, rg: RgRef<'_>) -> Result<PathBuf> {
-        let label = Self::normalize_rg_label(rg)?;
-        Ok(self
-            .rg_dir(rg)?
-            .join(format!("{label}_related_homo_regions.raw.fastq")))
-    }
-
     /// `{RGdir}/{RGn}.masked.fasta` (const.py:408-411).
     pub fn masked_genome_path(&self, rg: RgRef<'_>) -> Result<PathBuf> {
         let label = Self::normalize_rg_label(rg)?;
         Ok(self.rg_dir(rg)?.join(format!("{label}.masked.fasta")))
-    }
-
-    /// `{masked_genome}.fai` (const.py:413-416).
-    pub fn masked_genome_fai_path(&self, rg: RgRef<'_>) -> Result<PathBuf> {
-        Ok(append_suffix(&self.masked_genome_path(rg)?, ".fai"))
-    }
-
-    /// `{RGdir}/{RGn}.masked.contigsize.genome` (const.py:418-421).
-    pub fn masked_genome_contigsize_path(&self, rg: RgRef<'_>) -> Result<PathBuf> {
-        let label = Self::normalize_rg_label(rg)?;
-        Ok(self
-            .rg_dir(rg)?
-            .join(format!("{label}.masked.contigsize.genome")))
-    }
-
-    /// `{RGdir}/{RGn}.masked.mmi` (const.py:423-426).
-    pub fn minimap_index_path(&self, rg: RgRef<'_>) -> Result<PathBuf> {
-        let label = Self::normalize_rg_label(rg)?;
-        Ok(self.rg_dir(rg)?.join(format!("{label}.masked.mmi")))
-    }
-
-    /// `{RGdir}/{RGn}.intrinsic.bam` (const.py:442-445).
-    pub fn intrinsic_bam_path(&self, rg: RgRef<'_>) -> Result<PathBuf> {
-        let label = Self::normalize_rg_label(rg)?;
-        Ok(self.rg_dir(rg)?.join(format!("{label}.intrinsic.bam")))
     }
 
     /// Convert int / numeric-str / `RG\d+`-str → `RG{n}` (const.py:301-330).
@@ -473,14 +350,6 @@ fn append_suffix(p: &Path, suffix: &str) -> PathBuf {
     let mut s = p.as_os_str().to_os_string();
     s.push(suffix);
     PathBuf::from(s)
-}
-
-/// Mirror Python `path.replace(".graphml", new_suffix)`. The multiplex graph
-/// path always ends in `.graphml`, so this swaps that exact tail.
-fn replace_graphml_suffix(p: &Path, new_suffix: &str) -> PathBuf {
-    let s = p.to_string_lossy();
-    let replaced = s.replace(".graphml", new_suffix);
-    PathBuf::from(replaced)
 }
 
 /// `_extract_assembly_version` (const.py:130-164). Substring-match cascade
@@ -599,7 +468,6 @@ mod tests {
             None, // sample_id derived from BAM
             None, // target_tag derived from BED
             None, // assembly detected from sd-map
-            Path::new("/repo/SDrecall"),
         )
         .expect("derive must succeed for the golden config")
     }
@@ -633,7 +501,6 @@ mod tests {
             None,
             None,
             Some("chm13"),
-            Path::new("/repo"),
         )
         .unwrap();
         assert_eq!(p.assembly, "chm13");
@@ -675,37 +542,10 @@ mod tests {
 
         // work_dir-anchored
         assert_eq!(
-            p.realign_meta_table_path().to_str().unwrap(),
-            format!("{wd}/HG002_realign_meta_table.tsv")
-        );
-        assert_eq!(
-            p.qnode_grouping_graph().to_str().unwrap(),
-            format!("{wd}/HG002_hg38_CMRG_SDrecall_qnode_grouping.graphml")
-        );
-        assert_eq!(
             p.multi_align_bed_path().to_str().unwrap(),
             format!("{wd}/HG002_hg38_CMRG_SDrecall.CMRG.multialign.bed")
         );
         assert_eq!(p.to_prep_paths().multi_align_bed, p.multi_align_bed_path());
-        assert_eq!(
-            p.multiplex_graph_path().to_str().unwrap(),
-            format!("{wd}/HG002_hg38_CMRG_SDrecall_multiplexed_SDs.graphml")
-        );
-        // .replace(".graphml", ".trim.annoPC.graphml")
-        assert_eq!(
-            p.annotated_graph_path().to_str().unwrap(),
-            format!("{wd}/HG002_hg38_CMRG_SDrecall_multiplexed_SDs.trim.annoPC.graphml")
-        );
-        // .replace(".graphml", ".directed.overlap.chr1.graphml")
-        assert_eq!(
-            p.directed_graph_path("chr1").to_str().unwrap(),
-            format!("{wd}/HG002_hg38_CMRG_SDrecall_multiplexed_SDs.directed.overlap.chr1.graphml")
-        );
-        // NOTE the missing separator before "target_overlapping" — Python quirk.
-        assert_eq!(
-            p.target_overlapping_query_sd_bed_path().to_str().unwrap(),
-            format!("{wd}/HG002_hg38_CMRG_SDrecalltarget_overlapping_query_SD.bed")
-        );
         assert_eq!(
             p.total_intrinsic_bam_path().to_str().unwrap(),
             format!("{wd}/total_intrinsic_alignments.bam")
@@ -713,15 +553,6 @@ mod tests {
         assert_eq!(
             p.total_recall_sd_region_bed_path().to_str().unwrap(),
             format!("{rg}/all_target_recall_SD_regions.bed")
-        );
-        assert_eq!(
-            p.total_homo_regions_bed_path().to_str().unwrap(),
-            format!("{wd}/all_RG_related_homo_regions.bed")
-        );
-        // raw_intrinsic_bam_path is repo_dir-anchored.
-        assert_eq!(
-            p.raw_intrinsic_bam_path().to_str().unwrap(),
-            "/repo/SDrecall/data/hg38/raw_intrin_align/assembly_intrinsic_align.WGAC.hg38.reformat.bam"
         );
         // ref_genome_fai_path appends ".fai" to the abspath'd ref.
         assert_eq!(
@@ -759,20 +590,6 @@ mod tests {
             format!("{rr}/HG002.sdrecall.only_RG3.r2.fastq")
         );
         assert_eq!(
-            p.rg_query_bed_path(RgRef::Index(3))
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            format!("{rgd}/RG3.bed")
-        );
-        assert_eq!(
-            p.rg_counterparts_bed_path(RgRef::Index(3))
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            format!("{rgd}/RG3_counterparts.bed")
-        );
-        assert_eq!(
             p.all_homo_regions_bed_path(RgRef::Index(3))
                 .unwrap()
                 .to_str()
@@ -780,46 +597,11 @@ mod tests {
             format!("{rgd}/RG3_related_homo_regions.bed")
         );
         assert_eq!(
-            p.all_homo_regions_fastq_path(RgRef::Index(3))
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            format!("{rgd}/RG3_related_homo_regions.raw.fastq")
-        );
-        assert_eq!(
             p.masked_genome_path(RgRef::Index(3))
                 .unwrap()
                 .to_str()
                 .unwrap(),
             format!("{rgd}/RG3.masked.fasta")
-        );
-        assert_eq!(
-            p.masked_genome_fai_path(RgRef::Index(3))
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            format!("{rgd}/RG3.masked.fasta.fai")
-        );
-        assert_eq!(
-            p.masked_genome_contigsize_path(RgRef::Index(3))
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            format!("{rgd}/RG3.masked.contigsize.genome")
-        );
-        assert_eq!(
-            p.minimap_index_path(RgRef::Index(3))
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            format!("{rgd}/RG3.masked.mmi")
-        );
-        assert_eq!(
-            p.intrinsic_bam_path(RgRef::Index(3))
-                .unwrap()
-                .to_str()
-                .unwrap(),
-            format!("{rgd}/RG3.intrinsic.bam")
         );
     }
 

@@ -4709,12 +4709,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_inspection_placeholder() {
-        // Placeholder test - will be expanded during implementation
-        assert!(true);
-    }
-
     // ═══════════════════════════════════════════════════════════════════════
     //  group_by_dict_optimized tests
     // ═══════════════════════════════════════════════════════════════════════

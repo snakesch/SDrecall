@@ -3,7 +3,7 @@
 //! Ports `preparation/pick_multialign_regions.py::pick_multialigned_regions`
 //! (l.7-63) + `inferred_depths.py::calculate_inferred_coverage` (l.67-136).
 //!
-//! ## What is ported vs stubbed
+//! ## Implementation
 //!
 //! - [`depth_sweep`] — the per-base coverage kernel: given a set of read intervals
 //!   (already filtered), produce per-position `(chrom, pos, depth)` rows EXACTLY
@@ -17,13 +17,8 @@
 //!   UNIT-TESTED.
 //! - [`DepthPass`] — the 4 pass variants (Raw / HighMq / Xa / Xs), each a
 //!   `(min_mapq, tag predicate)` tuple. ONE enum drives the read predicate.
-//! - **`inferred_coverage` (BAM read) — STUBBED** (`TODO(T8)`): the
-//!   `bam.fetch(region)` + `filter_and_process_read` per-read filter
-//!   (inferred_depths.py l.10-29, l.91-110). The read predicate is fully specified
-//!   here but the rust-htslib `IndexedReader::fetch` loop is left as a TODO so the
-//!   driver wiring is explicit and testable later. The per-read filter semantics
-//!   (the `AS-XS<=5` XS rule, the flag filters) are documented on
-//!   [`read_passes`].
+//! - [`inferred_coverage`] — indexed BAM fetch plus the production per-read
+//!   predicate for each pass, followed by the shared depth sweep.
 
 use ahash::AHashMap;
 
@@ -155,8 +150,8 @@ pub fn multialign_filter_mask(
 ///
 /// `flags` is the SAM flag bitfield; `mapq` the mapping quality; the four
 /// `Option<i64>` are the read's `XA`(presence-only, modeled as `has_xa`), `AS`,
-/// `XS` tag values. Pure (no htslib) so it is unit-tested directly; the BAM loop
-/// (STUBBED) feeds it.
+/// `XS` tag values. Pure (no htslib) so it is unit-tested directly; the indexed
+/// BAM loop in [`inferred_coverage`] feeds it.
 pub fn read_passes(
     pass: DepthPass,
     flags: u16,

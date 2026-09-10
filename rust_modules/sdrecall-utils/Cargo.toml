@@ -7,8 +7,8 @@ license = "MIT"
 authors = ["Xingtian Yang <yangyxt@hku.hk>"]
 repository = "https://github.com/snakesch/SDrecall"
 
-# Pure-Rust foundation library. Default crate-type (rlib) so every stage crate
-# and binary can link it. NO cdylib, NO PyO3 — this never crosses the FFI seam.
+# Foundation library using the default rlib crate type so every stage and binary
+# can link it directly.
 [lib]
 name = "sdrecall_utils"
 path = "src/lib.rs"

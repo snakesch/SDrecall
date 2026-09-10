@@ -564,44 +564,6 @@ pub fn build_bam_index(bam_path: &Path, f: &NoisyFilter, threads: u8) -> Result<
     })
 }
 
-/// Merge several BAMs into one sorted, indexed output.
-///
-/// STUB — `TODO(T9)`. No current consumer needs this until the orchestrator (T9),
-/// and the SQ-line reconciliation is genuinely non-trivial in rust-htslib, so per
-/// the "do not rat-hole" guidance it is left stubbed with the exact semantics
-/// documented below rather than half-built.
-///
-/// ## SQ-reconcile semantics to port at T9 (from `shell_utils.sh::modify_bam_sq_lines`)
-///
-/// The Python path rebuilds the merged header before merging: it takes input
-/// `bam_list[0]`'s header, **strips every `@SQ` and `@PG` line**, then appends
-/// fresh `@SQ` lines generated from the reference FASTA index — one
-/// `@SQ\tSN:<name>\tLN:<len>` per `.fai` line, **in `.fai` order** (running
-/// `samtools faidx` first if the index is stale). `samtools merge -h <header>`
-/// then emits records under this reference-ordered SQ dictionary.
-///
-/// The hard part in rust-htslib: the reference `.fai` SQ order generally differs
-/// from (and is a superset of) each input BAM's SQ order, so **every record's
-/// `tid` and `mtid` must be remapped from the input's SQ index to the new SQ
-/// index, matched by contig NAME** (records whose contig is absent from the
-/// reference are a hard error — they would mis-map). rust-htslib has no
-/// header-SQ-replace + tid-translate primitive, so this means: build the target
-/// `Header` from the `.fai`, construct a `name → new_tid` map, then for each input
-/// stream copy each `Record`, rewrite `tid`/`mtid` via the map (and re-validate
-/// `pos`), write to one `Writer`, finally coordinate-sort (k-way merge over the
-/// already-sorted inputs) and `bam::index::build`. `_ref_fasta` supplies the
-/// `.fai`; `_threads` forwards to the BGZF pools.
-pub fn merge_bams(_inputs: &[&Path], _out: &Path, _ref_fasta: &Path, _threads: u8) -> Result<()> {
-    // TODO(T9): port modify_bam_sq_lines — replace header @SQ/@PG with the
-    // reference .fai SQ lines (in .fai order) and remap every record tid/mtid by
-    // contig name into the new SQ index, then k-way coordinate-sort + index.
-    Err(SdError::Htslib(
-        "merge_bams not yet implemented: SQ-line reconcile (modify_bam_sq_lines) deferred to T9; \
-         no current consumer (DESIGN §6)"
-            .to_string(),
-    ))
-}
-
 /// Remap a BAM aligned to a per-RG **masked** genome (contigs named `{chrom}:{start}`,
 /// local coordinates) back to **original-genome** coordinates — the in-process port
 /// of `shell_utils.sh::modify_bam_sq_lines` + `modify_masked_genome_coords`
@@ -1095,12 +1057,6 @@ mod tests {
         // only 1 qname ≤ 2 → InsufficientPairs
         let err = build_bam_index(tmp.path(), &filt(), 1).unwrap_err();
         assert!(matches!(err, SdError::InsufficientPairs(_)), "got {err:?}");
-    }
-
-    #[test]
-    fn merge_bams_is_stubbed() {
-        let err = merge_bams(&[], Path::new("/dev/null"), Path::new("/dev/null"), 1).unwrap_err();
-        assert!(matches!(err, SdError::Htslib(_)), "got {err:?}");
     }
 
     // ── remap_masked_bam_to_genomic (masked {chrom}:{start} → genomic) ─────────

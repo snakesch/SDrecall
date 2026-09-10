@@ -637,11 +637,13 @@ mod tests {
     use super::*;
     use ndarray::array;
 
-    fn empty_reads() -> (
+    type ReadEvidence = (
         Vec<Vec<String>>,
         HashMap<String, Vec<i16>>,
         HashMap<String, Vec<f32>>,
-    ) {
+    );
+
+    fn empty_reads() -> ReadEvidence {
         (Vec::new(), HashMap::new(), HashMap::new())
     }
 

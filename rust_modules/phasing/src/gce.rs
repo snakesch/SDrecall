@@ -585,15 +585,15 @@ fn partition_on_mask(
     }
 
     let mut comp_size = vec![0u32; n];
-    for node in 0..n {
-        if active[node] {
+    for (node, &is_active) in active.iter().enumerate() {
+        if is_active {
             comp_size[finder.find(node)] += 1;
         }
     }
     let mut comp_index = vec![usize::MAX; n];
     let mut comps: Vec<Vec<usize>> = Vec::new();
-    for node in 0..n {
-        if !active[node] {
+    for (node, &is_active) in active.iter().enumerate() {
+        if !is_active {
             continue;
         }
         let root = finder.find(node);
@@ -1095,8 +1095,7 @@ pub fn gce_algorithm_csr(
         refine_partition(&weight_csr, &cliques, cutoff, REFINE_SWEEP_CEILING);
     if !refine_stats.converged {
         log::warn!(
-            "GCE refinement was still moving nodes after {} sweeps; using final sweep state",
-            REFINE_SWEEP_CEILING
+            "GCE refinement was still moving nodes after {REFINE_SWEEP_CEILING} sweeps; using final sweep state"
         );
     }
 
@@ -1148,8 +1147,7 @@ pub(crate) fn gce_algorithm_csr_subset_with_context(
     );
     if !refine_stats.converged {
         log::warn!(
-            "GCE refinement was still moving nodes after {} sweeps; using final sweep state",
-            REFINE_SWEEP_CEILING
+            "GCE refinement was still moving nodes after {REFINE_SWEEP_CEILING} sweeps; using final sweep state"
         );
     }
 

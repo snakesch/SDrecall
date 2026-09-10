@@ -1,11 +1,9 @@
 //! Subprocess wrappers for external bioinformatics tools.
 //!
 //! These are the deliberately-external leaf subprocesses per the plan's
-//! external-tools policy (design §6): alignment algorithms (minimap2) and
-//! variant-calling algorithms (bcftools call) stay out-of-process. BAM
-//! merge/markdup also runs via samtools subprocess for the integration pass
-//! (the in-process rust-htslib merge_bams needs SQ-line reconciliation,
-//! deferred).
+//! external-tools policy (design §6): alignment (minimap2), variant calling
+//! (bcftools), and selected BAM operations (samtools) remain checked leaf
+//! subprocesses with no Python runtime.
 //!
 //! Each wrapper is a hard-error-on-nonzero-exit function following the
 //! `vcf-ops/src/norm.rs` pattern.
@@ -112,35 +110,15 @@ pub fn bcftools_view_regions(
     run_bash(&script, "bcftools view -R")
 }
 
-/// Concatenate VCF files (order-preserving) via `bcftools concat`.
-pub fn bcftools_concat(inputs: &[&Path], output_vcf: &Path, threads: usize) -> Result<()> {
-    if inputs.is_empty() {
-        return Err(SdError::Compute("bcftools_concat: no input VCFs".into()));
-    }
-    let t = threads.to_string();
-    remove_vcf_indexes(output_vcf)?;
-    let inp_list: String = inputs.iter().map(|p| sq(p)).collect::<Vec<_>>().join(" ");
-    let script = format!(
-        "set -o pipefail; \
-         bcftools concat --threads {t} -a -Oz -o {out} {inp} && \
-         bcftools index -f {out}",
-        t = t,
-        out = sq(output_vcf),
-        inp = inp_list,
-    );
-    run_bash(&script, "bcftools concat")
-}
-
 // ─────────────────────────── samtools ────────────────────────────────────
 
 const SAMTOOLS_MERGE_CHUNK_SIZE: usize = 256;
 
 /// Merge multiple BAMs into one coordinate-sorted, indexed BAM.
 ///
-/// Uses `samtools merge` subprocess (the in-process `sdrecall_io::merge_bams`
-/// needs SQ-line reconciliation, deferred). Inputs are passed via `samtools
-/// merge -b` list files and chunked to avoid OS argv limits and file-descriptor
-/// pressure. Single-input case copies directly.
+/// Uses the deliberate production `samtools merge` implementation. Inputs are
+/// passed via `samtools merge -b` list files and chunked to avoid OS argv limits
+/// and file-descriptor pressure. Single-input case copies directly.
 pub fn samtools_merge(inputs: &[&Path], output_bam: &Path, threads: usize) -> Result<()> {
     if inputs.is_empty() {
         return Err(SdError::Compute("samtools_merge: no input BAMs".into()));
@@ -255,13 +233,6 @@ pub fn bcftools_sort_index(input_vcf: &Path, output_vcf: &Path, _threads: usize)
         inp = sq(input_vcf),
     );
     run_bash(&script, "bcftools sort+tabix")
-}
-
-/// Build a fresh VCF index after deleting both possible stale sidecars.
-pub fn bcftools_index_vcf(vcf: &Path, _threads: usize) -> Result<()> {
-    remove_vcf_indexes(vcf)?;
-    let script = format!("bcftools index -f {vcf}", vcf = sq(vcf));
-    run_bash(&script, "bcftools index")
 }
 
 // ─────────────────────────── internals ───────────────────────────────────

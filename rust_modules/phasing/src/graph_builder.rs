@@ -238,7 +238,7 @@ pub fn build_phasing_graph_legacy(
         let rp = read_pair_map
             .readpair_dict
             .get(&qname_idx)
-            .ok_or_else(|| format!("Missing ReadPair for qname_idx {}", qname_idx))?;
+            .ok_or_else(|| format!("Missing ReadPair for qname_idx {qname_idx}"))?;
         let id1 = get_read_id(&rp.read1)?;
         let id2 = match &rp.read2 {
             Some(r2) => Some(get_read_id(r2)?),
@@ -268,10 +268,7 @@ pub fn build_phasing_graph_legacy(
     // ========== STEP 3: Initialize Sparse Weight Store and Tracking ==========
     // Initialize sparse weights with known size, preserving the old diagonal 1.0 behavior.
     result.initialize_weight_store(num_nodes);
-    info!(
-        "[build_phasing_graph] Initialized sparse {}x{} weight store",
-        num_nodes, num_nodes
-    );
+    info!("[build_phasing_graph] Initialized sparse {num_nodes}x{num_nodes} weight store");
 
     // Create a set to track which node pairs we've already checked
     let mut checked_pairs: HashSet<(usize, usize)> = HashSet::new();
@@ -314,8 +311,7 @@ pub fn build_phasing_graph_legacy(
                 Some(pair) => pair, // HashMap get() returns Option<&ReadPair> (not owned)
                 None => {
                     warn!(
-                        "[build_phasing_graph] Could not find read pair for qname_idx: {}",
-                        other_qname_idx
+                        "[build_phasing_graph] Could not find read pair for qname_idx: {other_qname_idx}"
                     );
                     continue;
                 }
@@ -427,16 +423,14 @@ pub fn build_phasing_graph_legacy(
             // Equivalent to Python's any_false_numba(qname_bools) check
             let _final_weight = if any_false(&share_hap_results) {
                 // Any incompatible region means overall incompatibility
-                debug!("[build_phasing_graph] Share_hap_results are {:?}, Found two pairs {} and {} are in different haplotypes\n", 
-                      share_hap_results, qname, other_qname);
+                debug!("[build_phasing_graph] Share_hap_results are {share_hap_results:?}, Found two pairs {qname} and {other_qname} are in different haplotypes\n");
                 result.set_weight(qname_idx, other_qname_idx, -1.0)?;
                 None
             } else {
                 // All regions compatible or unknown
                 let weight = pair_weight.unwrap_or(0.0).max(1e-4); // Minimum weight for compatible pairs
                 debug!(
-                    "[build_phasing_graph] Between {} and {}, the pair weight is {}\n",
-                    qname, other_qname, weight
+                    "[build_phasing_graph] Between {qname} and {other_qname}, the pair weight is {weight}\n"
                 );
 
                 // Store weight using qname_idx directly.
@@ -486,7 +480,7 @@ fn get_read_chromosome(
     // Convert tid to chromosome name using BAM header
     let chrom_bytes = header.tid2name(tid as u32);
     let chrom = std::str::from_utf8(chrom_bytes)
-        .map_err(|e| format!("Invalid chromosome name encoding: {}", e))?;
+        .map_err(|e| format!("Invalid chromosome name encoding: {e}"))?;
 
     Ok(chrom.to_string())
 }
@@ -588,8 +582,7 @@ fn get_overlap_intervals<'a>(
                 });
 
                 debug!(
-                    "[get_overlap_intervals] Found overlap interval {}-{} between reads",
-                    overlap_start, overlap_end
+                    "[get_overlap_intervals] Found overlap interval {overlap_start}-{overlap_end} between reads"
                 );
             }
         }
@@ -657,6 +650,14 @@ fn find_uncovered_regions(
     result
 }
 
+/// Check if any element in the array is false (-1 in this case)
+///
+/// Equivalent to Python's any_false_numba function
+/// Returns true if any element equals -1, false otherwise
+fn any_false(arr: &[i32]) -> bool {
+    arr.iter().any(|&x| x < 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::find_uncovered_regions;
@@ -705,12 +706,4 @@ mod tests {
             vec![[0, 100]]
         );
     }
-}
-
-/// Check if any element in the array is false (-1 in this case)
-///
-/// Equivalent to Python's any_false_numba function
-/// Returns true if any element equals -1, false otherwise
-fn any_false(arr: &[i32]) -> bool {
-    arr.iter().any(|&x| x < 0)
 }

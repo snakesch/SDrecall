@@ -10,8 +10,8 @@
 //!    `mismatch_rate`, `is_sd = true` (Python l.102-106).
 //! 2. A per-chromosome **directed PO graph**: for every pair of SD intervals that
 //!    physically overlap on the same chrom, a PO edge **large → small**, weight
-//!    `1/max(span/size_a, span/size_b)`, `is_overlap = true` (Python l.52-76, via an
-//!    `IntervalTree`; here a `rust_lapper::Lapper`).
+//!    `1/max(span/size_a, span/size_b)`, `is_overlap = true` (Python l.52-76, via
+//!    an `IntervalTree`; here an insertion-order overlap sweep).
 //! 3. The per-chr PO graphs are merged (union of nodes + edges) and the SD edges
 //!    are overlaid onto them: an SD pair that already has a PO edge in the SAME
 //!    direction KEEPS that edge's PO weight + `is_overlap` flag and is *also* marked
@@ -36,7 +36,6 @@
 //! `to_undirected()` before `label_components`).
 
 use petgraph::graph::{DiGraph, NodeIndex};
-use rust_lapper::{Interval, Lapper};
 use rustc_hash::FxHashMap;
 use sdrecall_utils::Strand;
 
@@ -356,16 +355,13 @@ fn node_rank(n: &NodeKey) -> (&str, i64, i64, u8) {
 }
 
 /// Build PO edges for one chromosome and fold them into `sd`. Ports
-/// `compose_PO_graph_per_chr` (graph_build.py l.35-81) using a `Lapper` in place
-/// of the Python `IntervalTree`.
+/// `compose_PO_graph_per_chr` (graph_build.py l.35-81) using an incremental
+/// overlap sweep in place of the Python `IntervalTree`.
 ///
-/// The tree is grown incrementally exactly as Python does (an interval is only
-/// added when it lies on `chrom`), so each interval only overlaps intervals seen
-/// *earlier* in iteration — preserving the Python tie-break / direction semantics.
-/// Because `Lapper` is a static structure (built once from a Vec), we replicate
-/// the incremental behavior by collecting the on-chrom intervals first, then for
-/// the i-th interval querying only intervals `< i` in insertion order. The
-/// insertion order is the SD-pair-row order, matching Python's `iterrows()`.
+/// Intervals are processed in Python row order and added only when they lie on
+/// `chrom`, so each probe sees only intervals inserted earlier. This preserves
+/// Python's tie-break and edge-direction semantics. The direct scan is linear per
+/// probe; per-chromosome SD counts are modest and incremental visibility matters.
 fn compose_po_per_chr(
     chrom: &str,
     sd_pairs: &[SdPairRow],
@@ -377,15 +373,6 @@ fn compose_po_per_chr(
     // on `chrom`. We accumulate (insertion_order, NodeKey) for on-chrom intervals
     // and, for every probe interval (whether on-chrom or not), query the
     // already-inserted on-chrom intervals for overlap.
-    //
-    // `inserted`: the on-chrom intervals added to the "tree" so far, with a
-    // Lapper rebuilt lazily. For modest per-chrom counts a fresh small Lapper per
-    // probe is fine; to stay O(n log n) we instead keep a growing Vec and do the
-    // overlap query against it via a Lapper rebuilt only when needed. Simpler and
-    // still correct: keep a Vec and binary-search by building the Lapper once at
-    // the end is NOT possible (incremental visibility matters). So we keep the
-    // growing Vec and query it directly with a linear scan guarded by start/end —
-    // per-chrom SD counts are small (tens–hundreds), so this is not a hotspot.
     let mut inserted: Vec<NodeKey> = Vec::new();
 
     let mut probe = |iv: &NodeKey, sd: &mut SdGraph, inserted: &mut Vec<NodeKey>| {
@@ -422,7 +409,7 @@ fn compose_po_per_chr(
                 }
             }
         }
-        // Insert iv into the tree iff it lies on `chrom`.
+        // Make this interval visible to later probes iff it lies on `chrom`.
         if iv.chrom == chrom {
             inserted.push(iv.clone());
         }
@@ -438,24 +425,6 @@ fn compose_po_per_chr(
         probe(&row.a, sd, &mut inserted);
         probe(&row.b, sd, &mut inserted);
     }
-}
-
-/// Build a `Lapper<u32, NodeKey>` from a set of on-chrom intervals. Kept as a
-/// thin helper so the per-chr PO build can switch to the static-index path for
-/// large chromosomes (currently the incremental linear probe is used; see
-/// `compose_po_per_chr`). Exposed (pub(crate)) so a future optimization or test
-/// can build the same index the design specifies.
-#[allow(dead_code)]
-pub(crate) fn build_chr_lapper(intervals: &[NodeKey]) -> Lapper<u32, NodeKey> {
-    let ivs: Vec<Interval<u32, NodeKey>> = intervals
-        .iter()
-        .map(|k| Interval {
-            start: k.start.max(0) as u32,
-            stop: k.end.max(0) as u32,
-            val: k.clone(),
-        })
-        .collect();
-    Lapper::new(ivs)
 }
 
 #[cfg(test)]

@@ -236,34 +236,35 @@ fn median_phred(quals: &[u8]) -> f32 {
     }
 }
 
-fn is_read_noisy(
-    read: &Record,
+#[derive(Clone, Copy)]
+struct ReadNoiseFilter {
     mapq_filter: u8,
     basequal_median_filter: u8,
     filter_noisy: bool,
-) -> bool {
+}
+
+fn is_read_noisy(read: &Record, filter: ReadNoiseFilter) -> bool {
+    let ReadNoiseFilter {
+        mapq_filter,
+        basequal_median_filter,
+        filter_noisy,
+    } = filter;
     let qname = String::from_utf8_lossy(read.qname());
 
     // Only evaluate primary alignments for noise - secondary or supplementary alignments are skipped
     if read.is_secondary() || read.is_supplementary() {
-        debug!("[is_read_noisy] skip_secondary_supplementary - {} skipped (secondary/supplementary alignment); not considered noisy", qname);
+        debug!("[is_read_noisy] skip_secondary_supplementary - {qname} skipped (secondary/supplementary alignment); not considered noisy");
         return false;
     }
 
     // Common fast checks for both paired and unpaired
     if read.is_unmapped() {
-        debug!(
-            "[is_read_noisy] unmapped_check - {} flagged noisy: unmapped read",
-            qname
-        );
+        debug!("[is_read_noisy] unmapped_check - {qname} flagged noisy: unmapped read");
         return true;
     }
 
     if read.is_quality_check_failed() {
-        debug!(
-            "[is_read_noisy] qc_fail_check - {} flagged noisy: QC fail flag set",
-            qname
-        );
+        debug!("[is_read_noisy] qc_fail_check - {qname} flagged noisy: QC fail flag set");
         return true;
     }
 
@@ -278,10 +279,7 @@ fn is_read_noisy(
     }
 
     if read.seq_len() == 0 {
-        debug!(
-            "[is_read_noisy] seq_len_check - {} flagged noisy: missing query_sequence",
-            qname
-        );
+        debug!("[is_read_noisy] seq_len_check - {qname} flagged noisy: missing query_sequence");
         return true;
     }
 
@@ -289,23 +287,19 @@ fn is_read_noisy(
     let aln_len = read.reference_end() - read.reference_start();
     if aln_len < 75 {
         debug!(
-            "[is_read_noisy] aln_len_check - {} flagged noisy: alignment span {} < 75",
-            qname, aln_len
+            "[is_read_noisy] aln_len_check - {qname} flagged noisy: alignment span {aln_len} < 75"
         );
         return true;
     }
 
     // Ensure mate on same reference for proper pairing in this pipeline
     if read.tid() != read.mtid() {
-        debug!("[is_read_noisy] mate_tid_check - {} flagged noisy: different reference chromosomes for mate pair", qname);
+        debug!("[is_read_noisy] mate_tid_check - {qname} flagged noisy: different reference chromosomes for mate pair");
         return true;
     }
 
     if !read.is_proper_pair() {
-        debug!(
-            "[is_read_noisy] proper_pair_check - warning:{} is not a proper pair",
-            qname
-        );
+        debug!("[is_read_noisy] proper_pair_check - warning:{qname} is not a proper pair");
     }
 
     // Base quality and soft-clip based checks (controlled by filter_noisy)
@@ -316,7 +310,7 @@ fn is_read_noisy(
         let median_qual = median_phred(read.qual());
 
         if median_qual <= basequal_median_filter as f32 {
-            debug!("[is_read_noisy] median_qual_check - {} flagged noisy: median baseQ {} <= threshold {}", qname, median_qual, basequal_median_filter);
+            debug!("[is_read_noisy] median_qual_check - {qname} flagged noisy: median baseQ {median_qual} <= threshold {basequal_median_filter}");
             return true;
         }
 
@@ -326,7 +320,7 @@ fn is_read_noisy(
             .filter(|&&q| q < basequal_median_filter)
             .count();
         if low_qual_count >= 75 {
-            debug!("[is_read_noisy] low_qual_count_check - {} flagged noisy: #bases with Q<{} is {} >= 75", qname, basequal_median_filter, low_qual_count);
+            debug!("[is_read_noisy] low_qual_count_check - {qname} flagged noisy: #bases with Q<{basequal_median_filter} is {low_qual_count} >= 75");
             return true;
         }
 
@@ -338,7 +332,7 @@ fn is_read_noisy(
             .sum();
 
         if soft_clip_bases >= 75 {
-            debug!("[is_read_noisy] soft_clip_check - {} flagged noisy: total soft-clip length {} >= 75\n", qname, soft_clip_bases);
+            debug!("[is_read_noisy] soft_clip_check - {qname} flagged noisy: total soft-clip length {soft_clip_bases} >= 75\n");
             return true;
         }
     }
@@ -569,6 +563,11 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
 
     let mut result = ReadPairMap::new();
     let mut qname_idx_counter = 0usize;
+    let noise_filter = ReadNoiseFilter {
+        mapq_filter,
+        basequal_median_filter,
+        filter_noisy,
+    };
 
     // Pre-allocate chromosome interval trees
     let chrom_count = header.target_count() as usize;
@@ -604,11 +603,9 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
                     &mut result,
                     &header,
                     qname,
-                    &mut reads,
+                    &reads,
                     &mut qname_idx_counter,
-                    mapq_filter,
-                    basequal_median_filter,
-                    filter_noisy,
+                    noise_filter,
                 )
                 .map_err(|error| error.to_string())
             },
@@ -659,11 +656,9 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
                     &mut result,
                     &header,
                     prev_qname,
-                    &mut current_reads,
+                    &current_reads,
                     &mut qname_idx_counter,
-                    mapq_filter,
-                    basequal_median_filter,
-                    filter_noisy,
+                    noise_filter,
                 )?; // ? operator: propagates any error from process_qname_group
             }
 
@@ -686,11 +681,9 @@ pub fn migrate_bam_to_sorted_intervals_grouped(
             &mut result,
             &header,
             qname,
-            &mut current_reads,
+            &current_reads,
             &mut qname_idx_counter,
-            mapq_filter,
-            basequal_median_filter,
-            filter_noisy,
+            noise_filter,
         )?; // ? operator: propagates any error from process_qname_group
     }
 
@@ -714,22 +707,15 @@ fn process_qname_group(
     result: &mut ReadPairMap,
     header: &bam::HeaderView,
     qname: String,
-    reads: &mut Vec<Record>,
+    reads: &[Record],
     qname_idx_counter: &mut usize,
-    mapq_filter: u8,
-    basequal_median_filter: u8,
-    filter_noisy: bool,
+    noise_filter: ReadNoiseFilter,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Check if any read in the group is noisy
-    let is_noisy = reads
-        .iter()
-        .any(|read| is_read_noisy(read, mapq_filter, basequal_median_filter, filter_noisy));
+    let is_noisy = reads.iter().any(|read| is_read_noisy(read, noise_filter));
 
     if is_noisy {
-        debug!(
-            "[process_qname_group] This qname {} is noisy. Skip it.\n",
-            qname
-        );
+        debug!("[process_qname_group] This qname {qname} is noisy. Skip it.\n");
         result.noisy_qnames.insert(qname.clone(), ());
         return Ok(());
     }
@@ -789,7 +775,7 @@ fn add_read_interval(
     if let Some(interval_tree) = interval_trees.get_mut(chrom) {
         interval_tree.add_interval(start, end, qname_idx)
     } else {
-        Err(format!("Chromosome {} not found in interval trees", chrom))
+        Err(format!("Chromosome {chrom} not found in interval trees"))
     }
 }
 
@@ -803,8 +789,7 @@ pub fn build_allele_depth_map(
     base_qual_filter: u8,
 ) -> Result<AlleleDepthMap, Box<dyn std::error::Error>> {
     info!(
-        "[build_allele_depth_map] Starting with BAM: {}, MAPQ>={}, BaseQ>={}",
-        bam_file, mapq_filter, base_qual_filter
+        "[build_allele_depth_map] Starting with BAM: {bam_file}, MAPQ>={mapq_filter}, BaseQ>={base_qual_filter}"
     );
 
     // Stream mpileup stdout directly into query stdin, and write query stdout to the .ad file
@@ -833,22 +818,18 @@ pub fn build_allele_depth_map(
     let mpileup_stderr_buf: Arc<Mutex<VecDeque<String>>> =
         Arc::new(Mutex::new(VecDeque::with_capacity(500)));
     let mpileup_stderr_buf_reader = Arc::clone(&mpileup_stderr_buf);
-    let mpileup_stderr_jh = if let Some(stderr) = mpileup_child.stderr.take() {
-        Some(thread::spawn(move || {
+    let mpileup_stderr_jh = mpileup_child.stderr.take().map(|stderr| {
+        thread::spawn(move || {
             let reader = BufReader::new(stderr);
-            for line_res in reader.lines() {
-                if let Ok(line) = line_res {
-                    let mut buf = mpileup_stderr_buf_reader.lock().unwrap();
-                    if buf.len() == buf.capacity() {
-                        buf.pop_front();
-                    }
-                    buf.push_back(line);
+            for line in reader.lines().map_while(Result::ok) {
+                let mut buf = mpileup_stderr_buf_reader.lock().unwrap();
+                if buf.len() == buf.capacity() {
+                    buf.pop_front();
                 }
+                buf.push_back(line);
             }
-        }))
-    } else {
-        None
-    };
+        })
+    });
 
     let mpileup_stdout = mpileup_child
         .stdout
@@ -867,22 +848,18 @@ pub fn build_allele_depth_map(
     let query_stderr_buf: Arc<Mutex<VecDeque<String>>> =
         Arc::new(Mutex::new(VecDeque::with_capacity(500)));
     let query_stderr_buf_reader = Arc::clone(&query_stderr_buf);
-    let query_stderr_jh = if let Some(stderr) = query_child.stderr.take() {
-        Some(thread::spawn(move || {
+    let query_stderr_jh = query_child.stderr.take().map(|stderr| {
+        thread::spawn(move || {
             let reader = BufReader::new(stderr);
-            for line_res in reader.lines() {
-                if let Ok(line) = line_res {
-                    let mut buf = query_stderr_buf_reader.lock().unwrap();
-                    if buf.len() == buf.capacity() {
-                        buf.pop_front();
-                    }
-                    buf.push_back(line);
+            for line in reader.lines().map_while(Result::ok) {
+                let mut buf = query_stderr_buf_reader.lock().unwrap();
+                if buf.len() == buf.capacity() {
+                    buf.pop_front();
                 }
+                buf.push_back(line);
             }
-        }))
-    } else {
-        None
-    };
+        })
+    });
 
     // Stream-parse bcftools query output directly into allele_depth_map
     let query_stdout = query_child
@@ -974,7 +951,7 @@ pub fn build_allele_depth_map(
         }
 
         allele_depth_map.insert(chrom, pos, position_data);
-        debug!("[build_allele_depth_map] Inserted position data for {} at position {} with ref {} and alt {} where the ADs are {:?}", chrom, pos, ref_allele, alt_alleles, position_data);
+        debug!("[build_allele_depth_map] Inserted position data for {chrom} at position {pos} with ref {ref_allele} and alt {alt_alleles} where the ADs are {position_data:?}");
     }
     info!(
         "[build_allele_depth_map] Processed {} lines, created map with {} chromosomes",
@@ -997,11 +974,11 @@ pub fn build_allele_depth_map(
         for line in buf.iter() {
             let lower = line.to_lowercase();
             if lower.contains("error") {
-                error!("{}", line);
+                error!("{line}");
             } else if lower.contains("warn") {
-                warn!("{}", line);
+                warn!("{line}");
             } else {
-                info!("{}", line);
+                info!("{line}");
             }
         }
     }
@@ -1009,11 +986,11 @@ pub fn build_allele_depth_map(
         for line in buf.iter() {
             let lower = line.to_lowercase();
             if lower.contains("error") {
-                error!("{}", line);
+                error!("{line}");
             } else if lower.contains("warn") {
-                warn!("{}", line);
+                warn!("{line}");
             } else {
-                info!("{}", line);
+                info!("{line}");
             }
         }
     }

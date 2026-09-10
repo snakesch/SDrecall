@@ -4,11 +4,6 @@
 //! subprocess CLI-to-CLI on the hot path) behind the `run` / `prepare` /
 //! `realign` subcommands, mirroring the Python `SDrecall` executable.
 
-// The full Paths surface and some tool wrappers are defined ahead of their
-// wiring for the HG006 differential pass; suppress dead-code warnings until
-// integration consumes them.
-#![allow(dead_code)]
-
 mod bam_filter;
 mod cli;
 mod island;
@@ -18,7 +13,6 @@ mod rg_discovery;
 mod tools;
 mod vcf_hp;
 
-use std::path::Path;
 use std::process::ExitCode;
 use std::time::Instant;
 
@@ -78,15 +72,6 @@ fn dispatch(cli: Cli) -> Result<Option<std::path::PathBuf>, String> {
 }
 
 fn derive_paths(common: &cli::CommonArgs) -> Result<Paths, String> {
-    let repo_dir = std::env::var("SDRECALL_REPO_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| {
-            std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(Path::to_path_buf))
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-        });
-
     Paths::derive(
         &common.ref_genome,
         &common.input_bam,
@@ -96,7 +81,6 @@ fn derive_paths(common: &cli::CommonArgs) -> Result<Paths, String> {
         common.sample_id.as_deref(),
         Some(&common.target_tag),
         Some(&common.ref_genome_tag),
-        &repo_dir,
     )
     .map_err(|e| e.to_string())
 }

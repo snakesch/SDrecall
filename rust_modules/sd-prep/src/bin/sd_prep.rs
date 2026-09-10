@@ -1,16 +1,14 @@
-//! `sd-prep` CLI — exposes the IMPLEMENTED Phase-1 graph units (the deliverable).
+//! `sd-prep` CLI — focused Phase-1 graph and masking diagnostics.
 //!
-//! The full Phase-1 driver (depth → SD pairs → graph → traversal → grouping →
-//! masked genomes) is staged; the traversal + I/O parts are STUBBED (see the lib
-//! module docs). This CLI wires the parts that ARE done so they can be run /
-//! differentially checked against the Python outputs:
+//! The full Phase-1 driver is called in-process by the production `sdrecall`
+//! orchestrator. This thin CLI keeps independently useful graph and masking
+//! diagnostics for focused differential checks:
 //!
 //!   sd-prep graph --sd-map filtered_SD_binary_map.tsv
 //!     → builds the multiplex graph, prints node/edge/SD-edge counts + the
 //!       all-edge component partition sizes (vs `gt.label_components`).
 //!
-//! The `traverse` / `prepare` subcommands are intentionally absent until the
-//! traversal route-walk + minimap2 FFI land (TODO(T8)).
+//! Full preparation remains available through `sdrecall prepare`.
 
 use clap::{Parser, Subcommand};
 use sd_prep::graph_build::{build_multiplex_graph, NodeKey, SdPairRow};
@@ -20,7 +18,10 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 #[derive(Parser)]
-#[command(name = "sd-prep", about = "SDrecall Phase-1 graph units (T8, partial)")]
+#[command(
+    name = "sd-prep",
+    about = "SDrecall Phase-1 graph and masking diagnostics"
+)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,

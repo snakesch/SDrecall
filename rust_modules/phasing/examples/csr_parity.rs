@@ -76,11 +76,13 @@ fn build_refactored_csr_graph(size: usize) -> Csr {
     Csr::from_entries(size, entries)
 }
 
-fn empty_read_evidence() -> (
+type ReadEvidence = (
     Vec<Vec<String>>,
     HashMap<String, Vec<i16>>,
     HashMap<String, Vec<f32>>,
-) {
+);
+
+fn empty_read_evidence() -> ReadEvidence {
     (Vec::new(), HashMap::new(), HashMap::new())
 }
 

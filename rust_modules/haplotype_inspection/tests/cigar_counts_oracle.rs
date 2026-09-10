@@ -96,9 +96,7 @@ fn ref_position_indel_blocks(ops: &[Cigar]) -> i32 {
                 }
             }
             Cigar::Del(n) => {
-                for _ in 0..*n {
-                    is_indel.push(true);
-                }
+                is_indel.resize(is_indel.len() + *n as usize, true);
                 pending_ins = false;
             }
             Cigar::Ins(_) => {

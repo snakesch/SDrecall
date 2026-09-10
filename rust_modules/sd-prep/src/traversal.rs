@@ -31,6 +31,7 @@ use crate::graph_core::{component_labels, dijkstra_route};
 use crate::homoseq::{HomoseqRegion, RouteStep};
 use crate::minimap::{align_similarity, Preset, SIMILARITY_THRESHOLD};
 use bio::alphabets::dna::revcomp;
+use bio::data_structures::interval_tree::IntervalTree;
 use petgraph::graph::NodeIndex;
 use petgraph::visit::EdgeRef;
 use rustc_hash::FxHashMap;
@@ -432,6 +433,171 @@ pub struct TraversalResult {
     pub connected: crate::grouping::ConnectedQnodes<NodeKey>,
 }
 
+/// One edge on the exact production Dijkstra route used while deciding whether
+/// two query FCs should be adjacent in the sparse `ConnectedQnodes` graph.
+#[derive(Clone, Debug)]
+pub struct QnodeRouteAuditEdge {
+    pub from: NodeKey,
+    pub to: NodeKey,
+    pub is_sd: bool,
+    pub is_overlap: bool,
+    pub weight: f64,
+}
+
+/// Read-only explanation of the production traversal decision for one directed
+/// query-FC pair (`source → target`).
+///
+/// The production coloring graph is undirected, but traversal is performed once
+/// per source query node. Auditing both directions is therefore required: either
+/// directed traversal can create the final undirected conflict edge.
+#[derive(Clone, Debug)]
+pub struct QnodeRouteAudit {
+    pub source: NodeKey,
+    pub target: NodeKey,
+    pub source_present: bool,
+    pub target_present: bool,
+    pub same_component: Option<bool>,
+    pub route_cost: Option<f64>,
+    pub route_edges: Vec<QnodeRouteAuditEdge>,
+    pub last_edge_is_overlap: Option<bool>,
+    pub adjacent_overlap_pairs: usize,
+    pub sd_product: Option<f64>,
+    pub candidate_window: Option<(String, i64, i64, sdrecall_utils::Strand)>,
+    pub similarity: Option<f64>,
+    pub target_is_query_node: bool,
+    pub creates_connected_qnode_edge: bool,
+    pub decision: &'static str,
+}
+
+/// Reproduce the exact `traverse_qnode` decision for one directed FC pair on an
+/// already-pruned production multiplex graph.
+///
+/// This diagnostic deliberately calls the same Dijkstra, route-coordinate
+/// projection, and minimap2 similarity functions as production. It does not
+/// modify the graph or the pipeline outputs.
+pub fn audit_qnode_route_in_pruned_graph(
+    source: &NodeKey,
+    target: &NodeKey,
+    target_is_query_node: bool,
+    g: &SdGraph,
+    ref_fa: &Path,
+    frag: &FragParams,
+) -> Result<QnodeRouteAudit> {
+    let source_v = g.index.get(source).copied();
+    let target_v = g.index.get(target).copied();
+    let mut audit = QnodeRouteAudit {
+        source: source.clone(),
+        target: target.clone(),
+        source_present: source_v.is_some(),
+        target_present: target_v.is_some(),
+        same_component: None,
+        route_cost: None,
+        route_edges: Vec::new(),
+        last_edge_is_overlap: None,
+        adjacent_overlap_pairs: 0,
+        sd_product: None,
+        candidate_window: None,
+        similarity: None,
+        target_is_query_node,
+        creates_connected_qnode_edge: false,
+        decision: "not_evaluated",
+    };
+
+    let Some(source_v) = source_v else {
+        audit.decision = "source_absent_after_pruning";
+        return Ok(audit);
+    };
+    let Some(target_v) = target_v else {
+        audit.decision = "target_absent_after_pruning";
+        return Ok(audit);
+    };
+
+    let comp_labels = component_labels(g, |_| true);
+    let same_component = comp_labels[source_v.index()] == comp_labels[target_v.index()];
+    audit.same_component = Some(same_component);
+    if !same_component {
+        audit.decision = "different_multiplex_components";
+        return Ok(audit);
+    }
+
+    let Some((route_cost, edges)) = dijkstra_route(g, source_v, target_v) else {
+        audit.decision = "no_dijkstra_route";
+        return Ok(audit);
+    };
+    audit.route_cost = Some(route_cost);
+    let verts = route_vertices(g, source_v, &edges);
+    for (idx, &edge_idx) in edges.iter().enumerate() {
+        let attr = g.g[edge_idx];
+        audit.route_edges.push(QnodeRouteAuditEdge {
+            from: g.g[verts[idx]].clone(),
+            to: g.g[verts[idx + 1]].clone(),
+            is_sd: attr.is_sd,
+            is_overlap: attr.is_overlap,
+            weight: attr.weight(),
+        });
+    }
+
+    let Some(&last_edge) = edges.last() else {
+        audit.decision = "empty_route";
+        return Ok(audit);
+    };
+    audit.last_edge_is_overlap = Some(g.g[last_edge].is_overlap);
+    audit.adjacent_overlap_pairs = edges
+        .windows(2)
+        .filter(|window| g.g[window[0]].is_overlap && g.g[window[1]].is_overlap)
+        .count();
+    let sd_product: f64 = edges
+        .iter()
+        .map(|&edge| g.g[edge])
+        .filter(|attr| attr.is_sd)
+        .map(|attr| 1.0 - attr.weight())
+        .product();
+    audit.sd_product = Some(sd_product);
+
+    if g.g[last_edge].is_overlap {
+        audit.decision = "rejected_last_edge_is_physical_overlap";
+        return Ok(audit);
+    }
+    if audit.adjacent_overlap_pairs > 1 {
+        audit.decision = "rejected_too_many_adjacent_physical_overlap_pairs";
+        return Ok(audit);
+    }
+    if sd_product <= 0.8 {
+        audit.decision = "rejected_sd_route_product_at_or_below_0.8";
+        return Ok(audit);
+    }
+
+    let Some(cnode) = inspect_cnode_along_route(g, &verts, &edges, frag) else {
+        audit.decision = "rejected_route_window_collapsed";
+        return Ok(audit);
+    };
+    audit.candidate_window = Some(cnode.fix_coord());
+
+    let mut reader =
+        bio::io::fasta::IndexedReader::from_file(&ref_fa).map_err(|source| SdError::Io {
+            path: ref_fa.display().to_string(),
+            source: std::io::Error::other(source.to_string()),
+        })?;
+    let similarity = compare_homologous_sequences(source, &cnode, &mut reader)?;
+    audit.similarity = Some(similarity);
+    if similarity <= 0.9 {
+        audit.decision = "rejected_minimap_similarity_at_or_below_0.9";
+        return Ok(audit);
+    }
+    if !target_is_query_node {
+        audit.decision = "similar_counterpart_but_target_is_not_query_node";
+        return Ok(audit);
+    }
+
+    audit.creates_connected_qnode_edge = true;
+    audit.decision = if similarity >= SIMILARITY_THRESHOLD {
+        "accepted_counterpart_and_connected_qnode_edge"
+    } else {
+        "connected_qnode_edge_only_similarity_between_0.9_and_0.95"
+    };
+    Ok(audit)
+}
+
 /// Traverse one qnode's component to find its homology counterparts — port of
 /// `traverse_network_to_get_homology_counterparts` + `summarize_shortest_paths_per_subgraph`
 /// (graph_traversal.py l.209-362).
@@ -661,7 +827,7 @@ pub fn extract_sd_paralog_pairs(
         results.push(res?);
     }
     let sorted_keys: Vec<NodeKey> = sorted_qnode_vs.iter().map(|&v| g.g[v].clone()).collect();
-    let (sd_paralog_pairs, connected) = assemble_results(&sorted_keys, results);
+    let (sd_paralog_pairs, connected) = assemble_results(&sorted_keys, results, avg_frag);
 
     log::info!(
         "Traversal: {} qnodes → {} with counterparts; connected-qnodes graph has {} nodes",
@@ -693,6 +859,7 @@ pub fn extract_sd_paralog_pairs(
 fn assemble_results(
     sorted_qnode_keys: &[NodeKey],
     results: Vec<(Vec<HomoseqRegion>, Vec<NodeKey>)>,
+    avg_frag: f64,
 ) -> (
     FxHashMap<NodeKey, Vec<HomoseqRegion>>,
     crate::grouping::ConnectedQnodes<NodeKey>,
@@ -705,17 +872,60 @@ fn assemble_results(
         connected.node(k.clone());
     }
 
+    // Index every FC once, then query accepted NFC intervals against it below.
+    // The tree reports physical half-open overlaps without changing the FC
+    // insertion order that controls greedy coloring.
+    let mut fc_intervals: FxHashMap<&str, IntervalTree<i64, usize>> = FxHashMap::default();
+    for (fc_idx, fc) in sorted_qnode_keys.iter().enumerate() {
+        if fc.end > fc.start {
+            fc_intervals
+                .entry(fc.chrom.as_str())
+                .or_default()
+                .insert(fc.start..fc.end, fc_idx);
+        }
+    }
+
     let mut sd_paralog_pairs: FxHashMap<NodeKey, Vec<HomoseqRegion>> = FxHashMap::default();
-    for (qkey, (counterparts, counter_qnodes)) in sorted_qnode_keys.iter().zip(results) {
+    for (owner_idx, (qkey, (counterparts, counter_qnodes))) in
+        sorted_qnode_keys.iter().zip(results).enumerate()
+    {
         if !counterparts.is_empty() {
-            sd_paralog_pairs.insert(qkey.clone(), counterparts);
+            let qi = connected.node(qkey.clone());
+
+            // An accepted NFC owned by FC A can physically overlap a different
+            // FC B without being exactly identical to B. Those FCs must receive
+            // different colors when the overlap is larger than one average
+            // fragment, otherwise their combined extraction target can retain
+            // precisely the mapping ambiguity that coloring is meant to avoid.
+            for counterpart in &counterparts {
+                let (chrom, start, end, _) = counterpart.fix_coord();
+                if end <= start {
+                    continue;
+                }
+                let Some(tree) = fc_intervals.get(chrom.as_str()) else {
+                    continue;
+                };
+                for hit in tree.find(start..end) {
+                    let other_idx = *hit.data();
+                    if other_idx == owner_idx {
+                        continue;
+                    }
+                    let interval = hit.interval();
+                    let overlap = end.min(interval.end) - start.max(interval.start);
+                    if (overlap as f64) > avg_frag {
+                        let ci = connected.node(sorted_qnode_keys[other_idx].clone());
+                        connected.edge(qi, ci);
+                    }
+                }
+            }
+
             // Wire qnode↔counter-qnode edges ONLY for a qnode with >= 1 counterpart
             // (FIX #9). Insertion order: counter-qnodes appended in result order.
-            let qi = connected.node(qkey.clone());
             for ck in &counter_qnodes {
                 let ci = connected.node(ck.clone());
                 connected.edge(qi, ci);
             }
+            sd_paralog_pairs.insert(qkey.clone(), counterparts);
         }
     }
     (sd_paralog_pairs, connected)
@@ -1082,7 +1292,7 @@ mod tests {
             (Vec::new(), Vec::new()),       // q2
         ];
 
-        let (pairs, connected) = assemble_results(&sorted, results);
+        let (pairs, connected) = assemble_results(&sorted, results, 500.0);
 
         // Only q0 lands in the paralog pairs (q1's empty counterpart set is skipped).
         assert!(pairs.contains_key(&q0));
@@ -1098,5 +1308,67 @@ mod tests {
             1,
             "only q0 (with a counterpart) wires an edge; q1 is gated out"
         );
+    }
+
+    #[test]
+    fn assemble_adds_conflict_for_nfc_overlapping_another_fc() {
+        let owner = nk_full("chr1", 0, 1000, Strand::Forward);
+        let other = nk_full("chr1", 1200, 2200, Strand::Forward);
+        let sorted = vec![owner.clone(), other.clone()];
+        // The accepted NFC [1100, 1900) overlaps `other` by 700 bp, above the
+        // 500-bp fragment threshold, even though it is not identical to `other`.
+        let counterpart = HomoseqRegion::new(
+            nk_full("chr1", 1100, 1900, Strand::Forward),
+            NodeIndex::new(2),
+        );
+        let results = vec![(vec![counterpart], Vec::new()), (Vec::new(), Vec::new())];
+
+        let (_, connected) = assemble_results(&sorted, results, 500.0);
+
+        assert_eq!(connected.edge_count(), 1);
+        assert_eq!(
+            connected.color_groups_keys(),
+            vec![vec![owner], vec![other]],
+            "the owner and physically conflicting FC must receive different colors"
+        );
+    }
+
+    #[test]
+    fn assemble_requires_overlap_strictly_above_fragment_threshold() {
+        let owner = nk_full("chr1", 0, 1000, Strand::Forward);
+        let equal = nk_full("chr1", 1500, 2500, Strand::Forward);
+        let below = nk_full("chr1", 1600, 2600, Strand::Forward);
+        let sorted = vec![owner, equal, below];
+        // NFC [1000, 2000): overlap with `equal` is exactly 500 bp and with
+        // `below` is 400 bp, so neither satisfies overlap > 500.
+        let counterpart = HomoseqRegion::new(
+            nk_full("chr1", 1000, 2000, Strand::Forward),
+            NodeIndex::new(3),
+        );
+        let results = vec![
+            (vec![counterpart], Vec::new()),
+            (Vec::new(), Vec::new()),
+            (Vec::new(), Vec::new()),
+        ];
+
+        let (_, connected) = assemble_results(&sorted, results, 500.0);
+
+        assert_eq!(connected.edge_count(), 0);
+        assert_eq!(connected.color_groups(), vec![vec![0, 1, 2]]);
+    }
+
+    #[test]
+    fn assemble_does_not_add_owner_self_conflict() {
+        let owner = nk_full("chr1", 0, 1000, Strand::Forward);
+        let counterpart = HomoseqRegion::new(owner.clone(), NodeIndex::new(0));
+
+        let (_, connected) = assemble_results(
+            std::slice::from_ref(&owner),
+            vec![(vec![counterpart], Vec::new())],
+            500.0,
+        );
+
+        assert_eq!(connected.edge_count(), 0);
+        assert_eq!(connected.color_groups_keys(), vec![vec![owner]]);
     }
 }

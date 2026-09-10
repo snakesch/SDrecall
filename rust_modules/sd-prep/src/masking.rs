@@ -3,7 +3,7 @@
 //! Ports `preparation/genome.py::Genome.mask` (l.42-152). The masked FASTA md5 is
 //! a pass criterion, so the coordinate-bearing logic must be exact.
 //!
-//! ## Port status
+//! ## Implementation
 //!
 //! - [`apply_end_mask`] — the per-contig N-end mask: replace the first and last
 //!   1000 bp with `N`, keeping `[1000:-1000]` of the slice (genome.py l.80-87).
@@ -13,12 +13,9 @@
 //!   `max_gap` bp are concatenated with an **exact** N-bridge of length
 //!   `next_start - (cur_start + len(cur_seq))` (genome.py l.89-152), preserving the
 //!   `start + local_pos` coordinate mapping. Ported + UNIT-TESTED.
-//! - **`mask_genome` (FASTA read/write) — STUBBED** (`TODO(T8)`): the
-//!   `Fasta[chrom][start:stop]` slice + `SeqIO.write` + md5-gated update
-//!   (genome.py l.51-61, l.154-167) via `bio::io::fasta::IndexedReader::fetch` +
-//!   `bio::io::fasta::Writer` (the `bio` dep IS wired into the build and compiles;
-//!   only this orchestration glue is deferred). The contig-merge + end-mask logic
-//!   (the only coordinate-bearing parts) are ported + tested.
+//! - [`mask_genome`] — indexed FASTA fetch, end masking, N-bridge merge,
+//!   60-column FASTA output, and md5-gated replacement. Implemented and tested
+//!   against the Python output.
 
 /// One masked contig: its chromosome, genomic start (the `{chrom}:{start}` FASTA
 /// id), and sequence bytes. `start + local_position` maps a base back to the

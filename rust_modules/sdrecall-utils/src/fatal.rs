@@ -10,7 +10,7 @@
 //! 2. Captures a full `std::backtrace::Backtrace` and logs it (visible when the
 //!    log level is set to `trace` or higher — use `RUST_LOG=trace` for post-mortem).
 //! 3. Calls `std::process::abort()` — NOT panic. This:
-//!    - Does not unwind (so PyO3 cannot catch it and swallow it as a Python exception).
+//!    - Does not unwind or permit a caller to recover from corrupted state.
 //!    - Produces a core dump (if `ulimit -c` allows) for gdb-level post-mortem.
 //!    - Guarantees the process stops *immediately*.
 //!
@@ -23,7 +23,7 @@
 
 /// Hard-stop the process on a structural invariant violation.
 ///
-/// Logs the violation + backtrace, then aborts (no unwind, no PyO3 catch).
+/// Logs the violation + backtrace, then aborts without unwinding.
 /// Use for conditions that are logically impossible given the code's invariants.
 ///
 /// # Example

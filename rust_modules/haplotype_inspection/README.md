@@ -2,7 +2,9 @@
 
 Rust implementation of SDrecall's haplotype inspection pipeline (Phase 2c FP control). Replaces Python NCLS-based haplotype inspection with Rust using `rust-lapper`, `rust-htslib`, and `highs`.
 
-**Status:** Code complete (54 functions, 182 unit tests — 181 active + 1 ignored bench, 5 example harnesses in `examples/`).
+**Status:** Production Rust library (187 passing unit tests, one ignored timing
+test, nine separate CIGAR-oracle tests, and five validation harnesses in
+`examples/`).
 
 ## Building
 
@@ -12,20 +14,17 @@ export LIBCLANG_PATH=$CONDA_PREFIX/lib
 export OPENSSL_NO_VENDOR=1
 export PKG_CONFIG_PATH=$CONDA_PREFIX/lib/pkgconfig:$PKG_CONFIG_PATH
 
-maturin build --release
-pip install target/wheels/haplotype_inspection-*.whl
+cd rust_modules
+CXX=/usr/bin/c++ cargo build --release -p haplotype_inspection
 ```
 
 ## Usage
 
-```python
-from haplotype_inspection import inspect_haplotypes_rust
+The production entry point is
+`identify_misaligned_haps::inspect_haplotypes`, called in-process by the
+`fp-control` crate. The former Python extension API and its dual-path Python
+benchmark scripts were removed on 2026-07-17; differential validation is kept
+in Rust tests and `examples/` harnesses.
 
-correct_qnames, mismap_qnames = inspect_haplotypes_rust(
-    bam_path, intrinsic_bam_path, hap_qname_info, qname_hap_info,
-    qname_to_node, total_lowqual_qnames, compare_haplotype_meta_tab,
-    mean_read_length, recall_mq_cutoff, basequal_median_cutoff,
-)
-```
-
-For the data-flow diagram + Python interface contract see [T1 — validate haplotype-inspection](../../docs/analysis/tasks/T1_validate_haplotype_inspection.md), and the validated submodule deep-dives in [docs/analysis/](../../docs/analysis/); the function inventory + struct layout live in the source.
+For the data-flow diagram and validation history see
+[T1 — validate haplotype-inspection](../../docs/analysis/tasks/T1_validate_haplotype_inspection.md).

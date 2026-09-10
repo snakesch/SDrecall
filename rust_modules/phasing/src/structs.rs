@@ -32,6 +32,12 @@ pub struct SortedVecIntervals {
     is_finalized: bool,
 }
 
+impl Default for SortedVecIntervals {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SortedVecIntervals {
     pub fn new() -> Self {
         Self {
@@ -59,8 +65,7 @@ impl SortedVecIntervals {
             Ok(())
         } else {
             Err(format!(
-                "Cannot add more than 2 intervals for qname_idx {}",
-                qname_idx
+                "Cannot add more than 2 intervals for qname_idx {qname_idx}"
             ))
         }
     }
@@ -100,10 +105,8 @@ impl SortedVecIntervals {
         let mut all_intervals = Vec::with_capacity(total_intervals);
 
         for intervals_array in self.interval_map.values() {
-            for interval_opt in intervals_array {
-                if let Some(interval) = interval_opt {
-                    all_intervals.push(*interval);
-                }
+            for interval in intervals_array.iter().flatten() {
+                all_intervals.push(*interval);
             }
         }
 
@@ -226,6 +229,12 @@ pub struct ReadPairMap {
     pub noisy_qnames: AHashMap<String, ()>, // Use HashMap as HashSet with () values
 }
 
+impl Default for ReadPairMap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReadPairMap {
     pub fn new() -> Self {
         Self {
@@ -286,6 +295,12 @@ pub struct AlleleDepthMap {
     chromosomes: AHashMap<String, FxHashMap<u32, PositionAlleleDepth>>,
 }
 
+impl Default for AlleleDepthMap {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AlleleDepthMap {
     pub fn new() -> Self {
         Self {
@@ -296,7 +311,7 @@ impl AlleleDepthMap {
     pub fn insert(&mut self, chrom: &str, pos: u32, data: PositionAlleleDepth) {
         self.chromosomes
             .entry(chrom.to_string())
-            .or_insert_with(FxHashMap::default)
+            .or_default()
             .insert(pos, data);
     }
 
@@ -448,6 +463,12 @@ pub struct PhasingGraphResult {
 
     /// Per-node read IDs: (read1_id, read2_id or None), aligned to qname_idx = NodeIndex.index()
     pub node_read_ids: Vec<(String, Option<String>)>,
+}
+
+impl Default for PhasingGraphResult {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PhasingGraphResult {

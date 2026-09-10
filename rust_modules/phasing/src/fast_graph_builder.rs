@@ -4,17 +4,6 @@
 //! replacing repeated record decoding, interval scans, and the global checked-pair
 //! hash set with immutable per-record views and an offline interval sweep.
 
-#![allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_possible_wrap,
-    clippy::cast_precision_loss,
-    clippy::cast_sign_loss,
-    clippy::doc_markdown,
-    clippy::items_after_statements,
-    clippy::too_many_arguments,
-    clippy::too_many_lines
-)]
-
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::sync::Arc;
@@ -202,6 +191,8 @@ fn is_low_confidence_difference(
     (fraction <= 0.02 || (item_support == 1 && total_support >= 10)) && approximate_confidence < 13
 }
 
+// Keep the parity-critical scoring inputs explicit in this hot path.
+#[allow(clippy::too_many_arguments)]
 fn compute_score(
     left_state: &[i16],
     right_state: &[i16],
@@ -272,6 +263,8 @@ fn compute_score(
     score
 }
 
+// The comparison kernel shares the same explicit scoring context.
+#[allow(clippy::too_many_arguments)]
 fn compare_views(
     left: &SegmentView,
     right: &SegmentView,
@@ -520,6 +513,8 @@ struct ChunkOutput {
     blocked: usize,
 }
 
+// Pair classification is a tight loop over immutable run-level context.
+#[allow(clippy::too_many_arguments)]
 fn classify_pair(
     entity_views: &[EntityView],
     entity_id: u32,

@@ -1,0 +1,13 @@
+# Keep ad hoc analysis documents local. Migration contracts are source
+# documentation and are explicitly tracked.
+*.md
+*.txt
+!RUST_MIGRATION_PLAN.md
+!RUST_MIGRATION_SUMMARY.md
+!REVIEW_FINDINGS.md
+!call_stack_and_correspondence.md
+!module_bam_lappers.md
+!module_bilc_solver.md
+!module_vector_encoding.md
+!fn_sites/SD_MAP_RELATIONSHIP_AUDIT_METHOD.md
+!tasks/T*.md

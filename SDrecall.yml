@@ -34,12 +34,11 @@ dependencies:
   - gffutils
   - intervaltree
   - pyfaidx
+  - vcfpy
   - bioconda::tsv-utils
   - bioconda::biobambam
   - conda-forge::git-lfs
   - git-filter-repo
-  - maturin
   - rust
   - clangdev
   - cmake
-  - patchelf

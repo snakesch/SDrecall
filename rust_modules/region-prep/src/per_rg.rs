@@ -43,14 +43,14 @@
 //!   The strand test `interval_strand == main_interval_strand` is thus almost
 //!   always FALSE → the **opposite-strand (reverse-complement) projection branch
 //!   runs for virtually every real NFC row**. [`prepare_subgroup`] therefore
-//!   feeds the FC interval as [`Strand::Unknown`], NOT the FC row's real strand.
+//!   feeds the FC interval as `Strand::Unknown`, NOT the FC row's real strand.
 //!   (Discovered via the HG002 RG0 differential — 21/576 subgroups diverged by an
 //!   asymmetric-clamp offset until this was matched.)
 
 use ahash::AHashMap;
 use rayon::prelude::*;
 use sdrecall_io::{intersect, read_bed, slop, write_bed};
-use sdrecall_utils::{GenomicInterval, Result, SdError, Strand};
+use sdrecall_utils::{GenomicInterval, Result, SdError};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};

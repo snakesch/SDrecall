@@ -374,7 +374,7 @@ mod tests {
             rec("chr2", 500, 600, 10, 9.0, 0, 2),
             rec("chr2", 500, 600, 20, 7.0, 0, 1),
         ];
-        let (sel, drop, status) = lp_solve_remained_haplotypes(&records);
+        let (_sel, drop, status) = lp_solve_remained_haplotypes(&records);
         assert_eq!(status, BilcStatus::Optimal);
         // In region B, at most 1 drop → hap 10 (coeff=9) gets dropped
         assert!(drop.contains(&10));

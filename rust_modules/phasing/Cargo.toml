@@ -3,12 +3,6 @@ name = "phasing"
 version = "0.1.0"
 edition = "2021"
 
-[lib]
-name = "phasing"
-path = "src/lib.rs"
-crate-type = ["rlib"]
-doctest = false
-
 [[bin]]
 name = "phasing"
 path = "src/main.rs"
@@ -24,8 +18,6 @@ petgraph = "0.6"
 
 # Numerics
 ndarray = { version = "0.15", features = ["blas"] }
-half = { version = "2.6", features = ["num-traits", "bytemuck", "serde"] }
-statrs = "0.16"
 
 # I/O & temp files
 tempfile = "3.8"

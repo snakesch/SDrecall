@@ -18,7 +18,7 @@ sdrecall-io = { path = "../sdrecall-io" }
 
 # Stage crates.
 sd-prep = { path = "../sd-prep" }
-rust_read_extraction = { path = "../read_extraction", default-features = false }
+rust_read_extraction = { path = "../read_extraction" }
 region-prep = { path = "../region-prep" }
 fp-control = { path = "../fp-control" }
 vcf-ops = { path = "../vcf-ops" }

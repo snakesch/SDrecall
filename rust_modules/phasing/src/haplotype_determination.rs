@@ -47,7 +47,7 @@ pub fn extract_query_seq(
     // Use BamRecordExtensions for efficient reference position mapping
     let ref_positions: Vec<i64> = record
         .reference_positions_full()
-        .map(|pos_opt| pos_opt.map(|p| p as i64).unwrap_or(-1))
+        .map(|pos_opt| pos_opt.unwrap_or(-1))
         .collect();
 
     // Convert to our format: A=0, T=1, C=2, G=3, N=4
@@ -121,10 +121,8 @@ pub fn slice_seq_to_interval(
             if let (Some(pr), Some(nr)) = (prev_ref, next_ref) {
                 let prev_in = pr >= interval_start && pr < interval_end;
                 let next_in = nr >= interval_start && nr < interval_end;
-                if prev_in && next_in {
-                    if i < query_seq.len() {
-                        result.push(query_seq[i]);
-                    }
+                if prev_in && next_in && i < query_seq.len() {
+                    result.push(query_seq[i]);
                 }
             }
         }
@@ -141,7 +139,7 @@ pub fn compare_sequences(seq1: &[u8], seq2: &[u8]) -> bool {
         return false;
     }
 
-    for (_i, (&base1, &base2)) in seq1.iter().zip(seq2.iter()).enumerate() {
+    for (&base1, &base2) in seq1.iter().zip(seq2.iter()) {
         if base1 != base2 {
             // Allow N (4) to match anything
             if base1 != 4 && base2 != 4 {
@@ -555,8 +553,7 @@ fn is_sequencing_error(
 ) -> bool {
     let qname = std::str::from_utf8(record.qname()).unwrap_or("unknown");
     debug!(
-        "[is_sequencing_error] is_sequencing_error: Checking read {} at position {}",
-        qname, genomic_pos
+        "[is_sequencing_error] is_sequencing_error: Checking read {qname} at position {genomic_pos}"
     );
 
     // **COORDINATE LOOKUP**: Use CIGAR directly for position mapping
@@ -589,8 +586,7 @@ fn is_sequencing_error(
 
             let error_prob = error_vector[read_offset];
             debug!(
-                "[is_sequencing_error] Error probability at position {}: {:.6}",
-                genomic_pos, error_prob
+                "[is_sequencing_error] Error probability at position {genomic_pos}: {error_prob:.6}"
             );
 
             // Convert error probability back to approximate phred score for threshold check
@@ -602,31 +598,25 @@ fn is_sequencing_error(
             };
 
             debug!(
-                "[is_sequencing_error] Approximate quality score: Q{} (from error_prob={:.6})",
-                approx_qual, error_prob
+                "[is_sequencing_error] Approximate quality score: Q{approx_qual} (from error_prob={error_prob:.6})"
             );
 
             // If base quality >= 20, not a sequencing error
             if approx_qual >= 20 {
                 debug!(
-                    "[is_sequencing_error] High quality (Q{} >= 20) -> NOT a sequencing error",
-                    approx_qual
+                    "[is_sequencing_error] High quality (Q{approx_qual} >= 20) -> NOT a sequencing error"
                 );
                 return false;
             }
 
             debug!(
-                "[is_sequencing_error] Low quality (Q{} < 20) -> checking allele depth...",
-                approx_qual
+                "[is_sequencing_error] Low quality (Q{approx_qual} < 20) -> checking allele depth..."
             );
 
             // Get allele depth information for this position
             // Use the chromosome name passed from the parent function (already resolved correctly)
-            debug!(
-                "[is_sequencing_error] Using chromosome: '{}' for position {}",
-                chrom, genomic_pos
-            );
-            if let Some(pos_data) = allele_depth_map.get(&chrom, genomic_pos as u32) {
+            debug!("[is_sequencing_error] Using chromosome: '{chrom}' for position {genomic_pos}");
+            if let Some(pos_data) = allele_depth_map.get(chrom, genomic_pos as u32) {
                 let target_base = query_seq[qi];
                 // query_seq is raw ASCII (record.seq().as_bytes()), so encode it to the
                 // A=0,T=1,C=2,G=3,N=4 allele index — via the SAME base_to_index that
@@ -648,20 +638,15 @@ fn is_sequencing_error(
                 }
 
                 let af = ad as f32 / dp as f32;
-                debug!(
-                    "[is_sequencing_error] Allele frequency: {:.4} ({}/{})",
-                    af, ad, dp
-                );
+                debug!("[is_sequencing_error] Allele frequency: {af:.4} ({ad}/{dp})");
 
                 // Python criteria: (af <= 0.02 or (ad == 1 and dp >= 10)) and base_qual < 13
                 let af_criteria = af <= 0.02 || (ad == 1 && dp >= 10);
                 let qual_criteria = approx_qual < 13;
 
-                debug!("[is_sequencing_error] Criteria check: AF_criteria={} (af={:.4} <= 0.02 OR (ad={} == 1 AND dp={} >= 10))", 
-                       af_criteria, af, ad, dp);
+                debug!("[is_sequencing_error] Criteria check: AF_criteria={af_criteria} (af={af:.4} <= 0.02 OR (ad={ad} == 1 AND dp={dp} >= 10))");
                 debug!(
-                    "[is_sequencing_error] Criteria check: QUAL_criteria={} (Q{} < 13)",
-                    qual_criteria, approx_qual
+                    "[is_sequencing_error] Criteria check: QUAL_criteria={qual_criteria} (Q{approx_qual} < 13)"
                 );
 
                 let is_error = af_criteria && qual_criteria;
@@ -676,21 +661,32 @@ fn is_sequencing_error(
                 // (NOT a sequencing error → the mismatch is treated as a real variant).
                 // The old `return true` diverged, over-tolerating mismatches and merging
                 // reads Python keeps on separate haplotypes.
-                debug!("[is_sequencing_error] No allele depth data for {}:{} -> treat as REAL variant (Python dp==0 -> False)", chrom, genomic_pos);
+                debug!("[is_sequencing_error] No allele depth data for {chrom}:{genomic_pos} -> treat as REAL variant (Python dp==0 -> False)");
                 return false;
             }
         }
         Ok(None) => {
             // Position is outside the read alignment (before start or after end)
-            warn!("[is_sequencing_error] Position {} outside read alignment -> NOT a sequencing error", genomic_pos);
+            warn!("[is_sequencing_error] Position {genomic_pos} outside read alignment -> NOT a sequencing error");
         }
         Err(e) => {
             // Error in read_pos function call
-            error!("[is_sequencing_error] read_pos failed for position {}: {} -> NOT a sequencing error", genomic_pos, e);
+            error!("[is_sequencing_error] read_pos failed for position {genomic_pos}: {e} -> NOT a sequencing error");
         }
     }
 
     false
+}
+
+struct ReadErrorEvidence<'a> {
+    record: &'a Record,
+    error_vector: &'a [f32],
+}
+
+struct MismatchToleranceContext<'a> {
+    interval_start: i64,
+    allele_depth_map: &'a AlleleDepthMap,
+    chrom: &'a str,
 }
 
 /// **ALGORITHM DESIGN: Two-Stage Mismatch Analysis Sidesteps bcftools Indel Issues**
@@ -715,7 +711,6 @@ fn is_sequencing_error(
 ///
 /// **Result:** The bcftools indel representation issues discussed above are
 /// largely irrelevant to this specific algorithm design!
-
 /// Check if mismatches between two reads can be tolerated as sequencing errors
 ///
 /// **UPDATED APPROACH**: Uses haplotype vectors to identify mismatch types
@@ -724,16 +719,10 @@ fn is_sequencing_error(
 /// # Arguments
 /// * `hap_vec1` - Sliced haplotype vector for read 1 (interval only)
 /// * `hap_vec2` - Sliced haplotype vector for read 2 (interval only)
-/// * `seq1` - Query sequence for read 1 (full read, needed for allele lookup)
-/// * `ref_pos1` - Reference positions for read 1 (full read)
-/// * `seq2` - Query sequence for read 2 (full read, needed for allele lookup)  
-/// * `ref_pos2` - Reference positions for read 2 (full read)
-/// * `record1` - BAM record for read 1
-/// * `error_vec1` - Pre-computed error vector for read 1
-/// * `record2` - BAM record for read 2  
-/// * `error_vec2` - Pre-computed error vector for read 2
+/// * `read1` - BAM record and pre-computed error vector for read 1
+/// * `read2` - BAM record and pre-computed error vector for read 2
 /// * `mismatch_positions` - Genomic positions where haplotype vectors differ
-/// * `allele_depth_map` - Allele depth information for sequencing error detection
+/// * `context` - Interval, chromosome, and allele-depth data for error detection
 ///
 /// # Returns
 /// (is_tolerable, tolerated_count) where is_tolerable indicates if all mismatches
@@ -741,19 +730,24 @@ fn is_sequencing_error(
 fn tolerate_mismatches_from_hap_vectors(
     hap_vec1: &[i16],
     hap_vec2: &[i16],
-    _seq1: &[u8],
-    _ref_pos1: &[i64],
-    _seq2: &[u8],
-    _ref_pos2: &[i64],
-    record1: &Record,
-    error_vec1: &[f32],
-    record2: &Record,
-    error_vec2: &[f32],
+    read1: ReadErrorEvidence<'_>,
+    read2: ReadErrorEvidence<'_>,
     mismatch_positions: &[i64],
-    interval_start: i64,
-    allele_depth_map: &AlleleDepthMap,
-    chrom: &str,
+    context: MismatchToleranceContext<'_>,
 ) -> (bool, usize) {
+    let ReadErrorEvidence {
+        record: record1,
+        error_vector: error_vec1,
+    } = read1;
+    let ReadErrorEvidence {
+        record: record2,
+        error_vector: error_vec2,
+    } = read2;
+    let MismatchToleranceContext {
+        interval_start,
+        allele_depth_map,
+        chrom,
+    } = context;
     let qname1 = std::str::from_utf8(record1.qname()).unwrap_or("unknown");
     let qname2 = std::str::from_utf8(record2.qname()).unwrap_or("unknown");
     // Append sam flag of the read to the qname to make a unique read id
@@ -766,10 +760,7 @@ fn tolerate_mismatches_from_hap_vectors(
         read1_id,
         read2_id
     );
-    debug!(
-        "[tolerate_mismatches_from_hap_vectors] Mismatch positions: {:?}",
-        mismatch_positions
-    );
+    debug!("[tolerate_mismatches_from_hap_vectors] Mismatch positions: {mismatch_positions:?}");
 
     let mut tolerable_count = 0;
 
@@ -803,9 +794,8 @@ fn tolerate_mismatches_from_hap_vectors(
         let is_snv2 = is_snv_value(hap2);
 
         if is_indel1 || is_indel2 {
-            debug!("[tolerate_mismatches_from_hap_vectors] Position {} has indel mismatch (hap1={}, hap2={}) - NOT TOLERABLE", 
-                   genomic_pos, hap1, hap2);
-            debug!("[tolerate_mismatches_from_hap_vectors] tolerate_mismatches: FAILED at indel position {} - returning (false, 0)", genomic_pos);
+            debug!("[tolerate_mismatches_from_hap_vectors] Position {genomic_pos} has indel mismatch (hap1={hap1}, hap2={hap2}) - NOT TOLERABLE");
+            debug!("[tolerate_mismatches_from_hap_vectors] tolerate_mismatches: FAILED at indel position {genomic_pos} - returning (false, 0)");
             return (false, 0);
         }
 
@@ -813,17 +803,16 @@ fn tolerate_mismatches_from_hap_vectors(
         let error1 = is_sequencing_error(record1, error_vec1, genomic_pos, allele_depth_map, chrom);
         let error2 = is_sequencing_error(record2, error_vec2, genomic_pos, allele_depth_map, chrom);
 
-        debug!("[tolerate_mismatches_from_hap_vectors] Position {}: read1({}) error={}, read2({}) error={}", 
-               genomic_pos, read1_id, error1, read2_id, error2);
+        debug!("[tolerate_mismatches_from_hap_vectors] Position {genomic_pos}: read1({read1_id}) error={error1}, read2({read2_id}) error={error2}");
 
         // If either read has a sequencing error at this position, we can tolerate it
         if (error1 && is_snv1) || (error2 && is_snv2) {
             tolerable_count += 1;
-            debug!("[tolerate_mismatches_from_hap_vectors] Position {} TOLERABLE (sequencing error detected)", genomic_pos);
+            debug!("[tolerate_mismatches_from_hap_vectors] Position {genomic_pos} TOLERABLE (sequencing error detected)");
         } else {
             // This mismatch cannot be explained by sequencing error
-            debug!("[tolerate_mismatches_from_hap_vectors] Position {} NOT TOLERABLE (likely real variant)", genomic_pos);
-            debug!("[tolerate_mismatches_from_hap_vectors] tolerate_mismatches: FAILED at position {} - returning (false, 0)", genomic_pos);
+            debug!("[tolerate_mismatches_from_hap_vectors] Position {genomic_pos} NOT TOLERABLE (likely real variant)");
+            debug!("[tolerate_mismatches_from_hap_vectors] tolerate_mismatches: FAILED at position {genomic_pos} - returning (false, 0)");
             return (false, 0);
         }
     }
@@ -831,10 +820,7 @@ fn tolerate_mismatches_from_hap_vectors(
     // All mismatches can be explained by sequencing errors
     debug!("[tolerate_mismatches_from_hap_vectors] tolerate_mismatches: SUCCESS - all {} mismatches tolerable (sequencing errors)", 
            mismatch_positions.len());
-    debug!(
-        "[tolerate_mismatches_from_hap_vectors] Total tolerated mismatches: {}",
-        tolerable_count
-    );
+    debug!("[tolerate_mismatches_from_hap_vectors] Total tolerated mismatches: {tolerable_count}");
     (true, tolerable_count)
 }
 
@@ -918,8 +904,7 @@ fn has_indel_mismatches_from_hap_vectors(
         let is_indel2 = is_indel_value(hap2);
 
         if is_indel1 || is_indel2 {
-            debug!("[has_indel_mismatches_from_hap_vectors] Found indel mismatch at position {}: hap1={}, hap2={}", 
-                   genomic_pos, hap1, hap2);
+            debug!("[has_indel_mismatches_from_hap_vectors] Found indel mismatch at position {genomic_pos}: hap1={hap1}, hap2={hap2}");
             return true;
         }
     }
@@ -931,7 +916,7 @@ fn has_indel_mismatches_from_hap_vectors(
 /// Main function that orchestrates the haplotype comparison workflow
 ///
 /// **OPTIMIZED ALGORITHM FLOW:**
-/// ```
+/// ```text
 /// 1. Extract query sequences from BAM records
 /// 2. Slice sequences to genomic interval  
 /// 3. Compute haplotype vectors (needed for weight calculation in both paths)
@@ -947,6 +932,9 @@ fn has_indel_mismatches_from_hap_vectors(
 /// - Haplotype vectors computed once upfront (needed for weight in both paths)
 /// - Error vectors computed only for mismatch analysis (when sequences differ)
 /// - Efficient caching for both vector types to avoid redundant computation
+// This parity-critical entry point keeps the explicit pipeline inputs visible so
+// callers cannot accidentally mix the main and intrinsic allele-depth maps.
+#[allow(clippy::too_many_arguments)]
 pub fn determine_same_haplotype(
     read1: &Record,
     read2: &Record,
@@ -973,8 +961,7 @@ pub fn determine_same_haplotype(
     let read2_id = format!("{}_{}", qname2, read2.flags());
 
     debug!(
-        "[determine_same_haplotype] Comparing reads {} and {} at {}:{}-{}",
-        read1_id, read2_id, chrom, start, end
+        "[determine_same_haplotype] Comparing reads {read1_id} and {read2_id} at {chrom}:{start}-{end}"
     );
 
     // Step 1: Extract query sequences and reference positions
@@ -1017,8 +1004,7 @@ pub fn determine_same_haplotype(
         // This saves expensive CIGAR parsing + quality score conversion.
 
         debug!(
-            "[determine_same_haplotype] Sequences IDENTICAL between reads {} and {}",
-            read1_id, read2_id
+            "[determine_same_haplotype] Sequences IDENTICAL between reads {read1_id} and {read2_id}"
         );
         debug!(
             "[determine_same_haplotype] Interval: {}:{}-{} (length={})",
@@ -1027,7 +1013,7 @@ pub fn determine_same_haplotype(
             end,
             end - start
         );
-        debug!("[determine_same_haplotype] Within this interval, the query seq for {} is {:?}, the query seq for {} is {:?}", read1_id, interval_seq1, read2_id, interval_seq2);
+        debug!("[determine_same_haplotype] Within this interval, the query seq for {read1_id} is {interval_seq1:?}, the query seq for {read2_id} is {interval_seq2:?}");
 
         // Sequences are identical - likely same haplotype
         //
@@ -1056,8 +1042,7 @@ pub fn determine_same_haplotype(
         let normalized_weight = weight / (config.mean_read_length * 10.0);
 
         debug!(
-            "[determine_same_haplotype] Final weight: {:.6} (normalized from {:.2})",
-            normalized_weight, weight
+            "[determine_same_haplotype] Final weight: {normalized_weight:.6} (normalized from {weight:.2})"
         );
 
         // No need for error vectors when sequences are identical
@@ -1068,8 +1053,7 @@ pub fn determine_same_haplotype(
         read_ref_pos_dict.insert(qname2.to_string(), (start, end));
 
         debug!(
-            "[determine_same_haplotype] SAME HAPLOTYPE (identical) - weight: {:.6}",
-            normalized_weight
+            "[determine_same_haplotype] SAME HAPLOTYPE (identical) - weight: {normalized_weight:.6}"
         );
 
         Ok((HaplotypeResult::Same, Some(normalized_weight)))
@@ -1114,22 +1098,20 @@ pub fn determine_same_haplotype(
             &ref_pos1,
             &seq2,
             &ref_pos2,
-            read1,
-            read2,
-        )?;
+        );
 
         // If no mismatches found (shouldn't happen since sequences differ), treat as unknown
         if mismatch_positions.is_empty() && discrepant_shared_snv_pos.is_empty() {
-            info!("[determine_same_haplotype] No mismatches found despite sequence differences -> Different Haplotypes for conservative estimation, interval_seq1={:?}, interval_seq2={:?}, interval_hap1={:?}, interval_hap2={:?}. The different hap genomic positions are: {:?}. The shared mismatch positions with different ALT alleles are: {:?}", interval_seq1, interval_seq2, interval_hap1, interval_hap2, mismatch_positions, discrepant_shared_snv_pos);
+            info!("[determine_same_haplotype] No mismatches found despite sequence differences -> Different Haplotypes for conservative estimation, interval_seq1={interval_seq1:?}, interval_seq2={interval_seq2:?}, interval_hap1={interval_hap1:?}, interval_hap2={interval_hap2:?}. The different hap genomic positions are: {mismatch_positions:?}. The shared mismatch positions with different ALT alleles are: {discrepant_shared_snv_pos:?}");
             return Ok((HaplotypeResult::Different, None));
         }
 
         if !discrepant_shared_snv_pos.is_empty() {
-            debug!("[determine_same_haplotype] Found discrepant shared SNV positions: {:?}, the interval is {}:{}-{}, the two reads compared are {} and {}. Within this overlap interval, their hap vectors are {:?} and {:?}, their query seq are {:?} and {:?}", discrepant_shared_snv_pos, chrom, start, end, read1_id, read2_id, interval_hap1, interval_hap2, interval_seq1, interval_seq2);
+            debug!("[determine_same_haplotype] Found discrepant shared SNV positions: {discrepant_shared_snv_pos:?}, the interval is {chrom}:{start}-{end}, the two reads compared are {read1_id} and {read2_id}. Within this overlap interval, their hap vectors are {interval_hap1:?} and {interval_hap2:?}, their query seq are {interval_seq1:?} and {interval_seq2:?}");
         }
 
         // Merge discrepant_shared_snv_pos into mismatch_positions for downstream analysis
-        debug!("[determine_same_haplotype] The different hap genomic positions are: {:?}. The shared mismatch positions with different ALT alleles are: {:?}", mismatch_positions, discrepant_shared_snv_pos);
+        debug!("[determine_same_haplotype] The different hap genomic positions are: {mismatch_positions:?}. The shared mismatch positions with different ALT alleles are: {discrepant_shared_snv_pos:?}");
         mismatch_positions.extend(discrepant_shared_snv_pos);
 
         if mismatch_positions.len() >= 3 {
@@ -1150,8 +1132,7 @@ pub fn determine_same_haplotype(
         let error_vec2 = get_error_vector(read2, read_error_vectors)?;
 
         debug!(
-            "[determine_same_haplotype] Sequence mismatch detected between reads {} and {}",
-            read1_id, read2_id
+            "[determine_same_haplotype] Sequence mismatch detected between reads {read1_id} and {read2_id}"
         );
         debug!(
             "[determine_same_haplotype] Interval: {}:{}-{} (length={})",
@@ -1171,21 +1152,23 @@ pub fn determine_same_haplotype(
         let (tolerable, tolerated_count) = tolerate_mismatches_from_hap_vectors(
             &interval_hap1,
             &interval_hap2,
-            &seq1,
-            &ref_pos1,
-            &seq2,
-            &ref_pos2,
-            read1,
-            &error_vec1,
-            read2,
-            &error_vec2,
+            ReadErrorEvidence {
+                record: read1,
+                error_vector: &error_vec1,
+            },
+            ReadErrorEvidence {
+                record: read2,
+                error_vector: &error_vec2,
+            },
             &mismatch_positions,
-            start,
-            allele_depth_map,
-            chrom,
+            MismatchToleranceContext {
+                interval_start: start,
+                allele_depth_map,
+                chrom,
+            },
         );
 
-        debug!("[determine_same_haplotype] Mismatch tolerance result: tolerable={}, tolerated_count={}", tolerable, tolerated_count);
+        debug!("[determine_same_haplotype] Mismatch tolerance result: tolerable={tolerable}, tolerated_count={tolerated_count}");
 
         if tolerable {
             // All mismatches are sequencing errors - treat as same haplotype with penalty
@@ -1211,16 +1194,14 @@ pub fn determine_same_haplotype(
             let weight = (base_weight - tolerated_count as f32 * 20.0).max(0.0);
 
             debug!(
-                "[determine_same_haplotype] Penalty applied: base={:.2} - {} x 20.0 -> {:.2}",
-                base_weight, tolerated_count, weight
+                "[determine_same_haplotype] Penalty applied: base={base_weight:.2} - {tolerated_count} x 20.0 -> {weight:.2}"
             );
 
             // Normalize weight
             let normalized_weight = weight / (config.mean_read_length * 10.0);
 
             debug!(
-                "[determine_same_haplotype] Final weight: {:.6} (normalized from {:.2})",
-                normalized_weight, weight
+                "[determine_same_haplotype] Final weight: {normalized_weight:.6} (normalized from {weight:.2})"
             );
 
             // Update data structures - error vectors already computed above
@@ -1229,8 +1210,7 @@ pub fn determine_same_haplotype(
             read_ref_pos_dict.insert(qname2.to_string(), (start, end));
 
             debug!(
-                "[determine_same_haplotype] SAME HAPLOTYPE (with penalty) - weight: {:.6}",
-                normalized_weight
+                "[determine_same_haplotype] SAME HAPLOTYPE (with penalty) - weight: {normalized_weight:.6}"
             );
 
             Ok((HaplotypeResult::Same, Some(normalized_weight)))
@@ -1317,8 +1297,7 @@ fn compute_edge_weight_base(
     weight += config.mean_read_length * 3.0 * indel_num as f32;
 
     debug!(
-        "[compute_edge_weight_base] overlap_span={}, shared_snv={}, psv_snv={}, indel_num={} -> raw weight={:.2}",
-        overlap_span, shared_snv_count, psv_snv_count, indel_num, weight
+        "[compute_edge_weight_base] overlap_span={overlap_span}, shared_snv={shared_snv_count}, psv_snv={psv_snv_count}, indel_num={indel_num} -> raw weight={weight:.2}"
     );
 
     weight
@@ -1420,16 +1399,8 @@ pub fn stat_shared_snv_matches(
     ref_pos1: &[i64],
     seq2: &[u8],
     ref_pos2: &[i64],
-    record1: &Record,
-    record2: &Record,
-) -> Result<(Vec<i64>, Vec<i64>), Box<dyn std::error::Error>> {
-    let qname1 = std::str::from_utf8(record1.qname())?;
-    let qname2 = std::str::from_utf8(record2.qname())?;
-
-    debug!(
-        "[stat_shared_snv_matches] Analyzing shared SNVs between reads {} and {}",
-        qname1, qname2
-    );
+) -> (Vec<i64>, Vec<i64>) {
+    debug!("[stat_shared_snv_matches] Analyzing shared SNVs between reads");
 
     // Find indices where both vectors have SNVs, including compound SNV+insertion values.
     let mut all_shared_snv_positions = Vec::new();
@@ -1448,7 +1419,7 @@ pub fn stat_shared_snv_matches(
     );
 
     if all_shared_snv_positions.is_empty() {
-        return Ok((Vec::new(), Vec::new()));
+        return (Vec::new(), Vec::new());
     }
 
     let mut matching_shared_snv_positions = Vec::new();
@@ -1464,8 +1435,7 @@ pub fn stat_shared_snv_matches(
             (Some(b1), Some(b2)) => (b1, b2),
             _ => {
                 debug!(
-                    "[stat_shared_snv_matches] Cannot extract bases at position {} - skipping",
-                    genomic_pos
+                    "[stat_shared_snv_matches] Cannot extract bases at position {genomic_pos} - skipping"
                 );
                 continue;
             }
@@ -1475,29 +1445,26 @@ pub fn stat_shared_snv_matches(
         if alt_base1 != 4 && alt_base1 == alt_base2 {
             matching_shared_snv_positions.push(*genomic_pos);
             debug!(
-                "[stat_shared_snv_matches] Both reads have same alt base {} at position {}",
-                alt_base1, genomic_pos
+                "[stat_shared_snv_matches] Both reads have same alt base {alt_base1} at position {genomic_pos}"
             );
         } else if alt_base1 != 4 && alt_base2 != 4 && alt_base1 != alt_base2 {
             discrepant_shared_snv_positions.push(*genomic_pos);
             debug!(
-                "[stat_shared_snv_matches] Alt bases differ at position {}: {} vs {}",
-                genomic_pos, alt_base1, alt_base2
+                "[stat_shared_snv_matches] Alt bases differ at position {genomic_pos}: {alt_base1} vs {alt_base2}"
             );
         } else {
             debug!(
-                "[stat_shared_snv_matches] One or both alt bases are N at position {}: {} vs {}",
-                genomic_pos, alt_base1, alt_base2
+                "[stat_shared_snv_matches] One or both alt bases are N at position {genomic_pos}: {alt_base1} vs {alt_base2}"
             );
         }
     }
 
     debug!("[stat_shared_snv_matches] Final result: {} matching positions, {} discrepant positions out of {} total shared SNV positions", 
            matching_shared_snv_positions.len(), discrepant_shared_snv_positions.len(), all_shared_snv_positions.len());
-    Ok((
+    (
         matching_shared_snv_positions,
         discrepant_shared_snv_positions,
-    ))
+    )
 }
 
 /// Helper function to extract base at a specific genomic position from a read
@@ -1507,10 +1474,8 @@ pub fn stat_shared_snv_matches(
 fn get_base_at_position(query_seq: &[u8], ref_positions: &[i64], genomic_pos: i64) -> Option<u8> {
     // Find query index for this genomic position
     for (query_idx, &ref_pos) in ref_positions.iter().enumerate() {
-        if ref_pos == genomic_pos {
-            if query_idx < query_seq.len() {
-                return Some(query_seq[query_idx]);
-            }
+        if ref_pos == genomic_pos && query_idx < query_seq.len() {
+            return Some(query_seq[query_idx]);
         }
     }
     None
@@ -1846,11 +1811,13 @@ mod weight_tests {
         r
     }
 
-    fn empty_maps() -> (
+    type EmptyCaches = (
         AHashMap<String, Vec<i16>>,
         AHashMap<String, Vec<f32>>,
         AHashMap<String, (i64, i64)>,
-    ) {
+    );
+
+    fn empty_maps() -> EmptyCaches {
         (AHashMap::new(), AHashMap::new(), AHashMap::new())
     }
 

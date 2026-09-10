@@ -22,11 +22,6 @@ sdrecall-utils = { path = "../sdrecall-utils" }
 sdrecall-io = { path = "../sdrecall-io" }
 # Graph engine: components (UnionFind), Dijkstra-with-route, the SD+PO DiGraph.
 petgraph = "0.8.3"
-# Per-chromosome physical-overlap interval index (cache-friendly, Send+Sync).
-rust-lapper = "1.2"
-# BED set-ops parity helpers (already a transitive dep via sdrecall-io; pinned here
-# so this crate's direct uses resolve to the same version).
-bedrs = "0.2.26"
 rust-htslib = { workspace = true }
 # rust-bio FASTA random access (faidx) for masking + region-sequence extraction.
 bio = "2"
@@ -52,7 +47,6 @@ clap = { version = "4.6", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3.8"
-env_logger = "0.11"
 
 [lints]
 workspace = true

@@ -866,17 +866,14 @@ fn read_fastq_dedup_by_name(path: &Path) -> Result<(Vec<String>, HashMap<String,
         let plus = required_fastq_line(&mut lines, path, "plus")?;
         let qual = required_fastq_line(&mut lines, path, "quality")?;
         let name = fastq_name(&header)?;
-        if !records.contains_key(&name) {
-            order.push(name.clone());
-            records.insert(
-                name,
-                FastqRecord {
-                    header,
-                    seq,
-                    plus,
-                    qual,
-                },
-            );
+        if let std::collections::hash_map::Entry::Vacant(entry) = records.entry(name.clone()) {
+            order.push(name);
+            entry.insert(FastqRecord {
+                header,
+                seq,
+                plus,
+                qual,
+            });
         }
     }
 
@@ -978,7 +975,7 @@ fn merge_and_markdup_raw_bams(
     crate::tools::samtools_markdup_pipeline(&pooled, &deduped, threads)?;
 
     write_checkpoint(&marker, &outputs, &deps)?;
-    log::info!("[merge] markdup done → {:?}", deduped);
+    log::info!("[merge] markdup done → {deduped:?}");
     Ok(())
 }
 
@@ -1485,16 +1482,16 @@ fn fp_control_per_island(
                 // whole batch. The outcome is recorded and the failure policy is
                 // applied after the join.
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    process_one_island(
-                        island,
-                        &ref_genome_str,
-                        &paths.sample_id,
-                        mq_cutoff as u8,
-                        tpj,
+                    let context = IslandProcessContext {
+                        ref_genome: &ref_genome_str,
+                        sample_id: &paths.sample_id,
+                        mq_cutoff: mq_cutoff as u8,
+                        threads: tpj,
                         pairing_engine,
-                        resources.clone(),
-                        graph_pools.clone(),
-                    )
+                        resources: resources.clone(),
+                        graph_pools: graph_pools.clone(),
+                    };
+                    process_one_island(island, &context)
                 }));
 
                 match result {
@@ -1632,28 +1629,32 @@ fn write_failed_island_manifest(paths: &Paths, failures: &[(String, String)]) ->
     Ok(manifest)
 }
 
-fn process_one_island(
-    island: &IslandPaths,
-    ref_genome: &str,
-    sample_id: &str,
+struct IslandProcessContext<'a> {
+    ref_genome: &'a str,
+    sample_id: &'a str,
     mq_cutoff: u8,
     threads: usize,
     pairing_engine: fp_control::PairingEngine,
     resources: PhaseResources,
     graph_pools: fp_control::GraphThreadPoolCache,
+}
+
+fn process_one_island(
+    island: &IslandPaths,
+    context: &IslandProcessContext<'_>,
 ) -> Result<Option<(PathBuf, PathBuf)>> {
     let total_start = Instant::now();
     let bam_str = island.raw_bam.to_string_lossy().to_string();
     let intrin_str = island.intrinsic_bam.to_string_lossy().to_string();
 
     let params = fp_control::FpControlParams {
-        reference_genome: ref_genome.to_string(),
-        mapq_cutoff: mq_cutoff,
+        reference_genome: context.ref_genome.to_string(),
+        mapq_cutoff: context.mq_cutoff,
         basequal_median_cutoff: 15,
-        threads: clamp_threads_u8(threads),
-        pairing_engine,
-        resources: Some(resources.clone()),
-        graph_pools: Some(graph_pools),
+        threads: clamp_threads_u8(context.threads),
+        pairing_engine: context.pairing_engine,
+        resources: Some(context.resources.clone()),
+        graph_pools: Some(context.graph_pools.clone()),
         ..Default::default()
     };
 
@@ -1679,15 +1680,18 @@ fn process_one_island(
     // Replace the island raw BAM with HP-tagged primary alignments for parity
     // with Python's visualization path, then derive the clean BAM from it.
     let annotate_start = Instant::now();
+    let hp_assignments = crate::bam_filter::HpTagAssignments {
+        correct_qnames: &correct_set,
+        mismap_qnames: &mismap_set,
+        lowqual_qnames: &lowqual_set,
+        qname_hap: &qname_hap,
+    };
     crate::bam_filter::annotate_hp_tags(
         &island.raw_bam,
-        &correct_set,
-        &mismap_set,
-        &lowqual_set,
-        &qname_hap,
+        &hp_assignments,
         &island.raw_bam,
         island.id,
-        threads,
+        context.threads,
     )?;
     let annotate_time = annotate_start.elapsed();
 
@@ -1701,7 +1705,7 @@ fn process_one_island(
         &qname_hap,
         &clean_bam,
         island.id,
-        threads,
+        context.threads,
     )?;
     let filter_time = filter_start.elapsed();
     if clean_alignments == 0 {
@@ -1715,20 +1719,20 @@ fn process_one_island(
     // Variant-call on the clean BAM. HPSUP annotation happens once, at the very
     // end of post-processing, so these island VCFs stay atomization-safe.
     let clean_vcf = clean_bam.with_extension("vcf.gz");
-    let calling_lease = resources.acquire_cpu(CpuPhase::Calling);
+    let calling_lease = context.resources.acquire_cpu(CpuPhase::Calling);
     let calling_threads = calling_lease.threads();
     log::warn!(
         "[fp_control_resource_lease_metrics] island={} phase=calling threads={} remaining_islands={}",
         island.id,
         calling_threads,
-        resources.remaining_islands()
+        context.resources.remaining_islands()
     );
     let call_start = Instant::now();
     crate::tools::bcftools_call(
         &clean_bam,
-        Path::new(ref_genome),
+        Path::new(context.ref_genome),
         &clean_vcf,
-        sample_id,
+        context.sample_id,
         calling_threads,
     )?;
     let call_time = call_start.elapsed();
@@ -2194,10 +2198,6 @@ fn file_nonempty(path: &Path) -> bool {
 
 fn bam_index_exists(bam: &Path) -> bool {
     append_path_suffix(bam, ".bai").is_file() || bam.with_extension("bai").is_file()
-}
-
-fn vcf_index_exists(vcf: &Path) -> bool {
-    append_path_suffix(vcf, ".csi").is_file() || append_path_suffix(vcf, ".tbi").is_file()
 }
 
 fn vcf_fresh_index_exists(vcf: &Path) -> bool {

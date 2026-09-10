@@ -2,8 +2,7 @@
 //! `filtered_SD_binary_map.tsv` and compare structural counts against the Python
 //! `*_multiplexed_SDs.graphml` ground truth.
 //!
-//! Pass criteria (the structural part of the T8 differential — the RG groupings
-//! depend additionally on the still-STUBBED traversal):
+//! Pass criteria for the structural part of the T8 differential:
 //!   - node_count   == Python multiplex graph `<node>` count
 //!   - sd_edge_count == filtered SD map row count == Python `segmental_duplication` count
 //!   - total_edge_count == Python multiplex graph `<edge>` count

@@ -134,7 +134,7 @@ fn quality_to_string(qual: &[u8], qname: &str) -> anyhow::Result<String> {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  Pure-Rust API (no PyO3 dependency)
+//  Public library API
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 /// Extract paired reads from a BAM file that overlap the given BED regions,
@@ -502,43 +502,5 @@ mod tests {
             sorted_pair_qnames(&pairs),
             vec![b"read-a".to_vec(), b"read-b".to_vec(), b"read-c".to_vec()]
         );
-    }
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-//  PyO3 bindings (only with `python` feature)
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-#[cfg(feature = "python")]
-mod python_bindings {
-    use pyo3::exceptions::PyRuntimeError;
-    use pyo3::prelude::*;
-
-    #[pyfunction]
-    #[pyo3(signature = (input_bam, region_bed, output_freads, output_rreads, multi_aligned=false, threads=1, _tmp_dir="/tmp"))]
-    fn bam_to_fastq_biobambam(
-        input_bam: &str,
-        region_bed: &str,
-        output_freads: &str,
-        output_rreads: &str,
-        multi_aligned: bool,
-        threads: usize,
-        _tmp_dir: &str,
-    ) -> PyResult<(String, String)> {
-        crate::bam_to_fastq(
-            input_bam,
-            region_bed,
-            output_freads,
-            output_rreads,
-            multi_aligned,
-            threads,
-        )
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))
-    }
-
-    #[pymodule]
-    fn rust_read_extraction(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
-        m.add_function(wrap_pyfunction!(bam_to_fastq_biobambam, m)?)?;
-        Ok(())
     }
 }

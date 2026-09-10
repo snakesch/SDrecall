@@ -1,10 +1,10 @@
 //! clap CLI — mirrors the Python `SDrecall` argparse (the `SDrecall` executable,
 //! `main()` + `_add_*_args` at `SDrecall:302-423`).
 //!
-//! Three subcommands: `run` (full pipeline), `prepare` (preparation only),
-//! `realign` (realignment + recall only). Argument names, short flags, defaults
-//! and the per-subcommand argument groups match the Python 1:1 so existing
-//! invocations keep working against the Rust binary.
+//! Three subcommands: `run` (full pipeline), `prepare` (preparation only), and
+//! `realign` (realignment + recall only). Core paths and thresholds retain the
+//! familiar Python flags; Rust-specific island resource controls replace the
+//! former Python/Numba tuning options.
 
 use std::path::PathBuf;
 
@@ -233,9 +233,8 @@ impl CommonArgs {
     /// Validate the inputs that the Python `main()` checks up-front
     /// (`SDrecall:346-348`): the reference genome must end in `.fasta`.
     ///
-    /// File-existence checks are I/O and deferred to T9 integration (the stage
-    /// crates fail with typed errors when a file is missing); the scaffold
-    /// validates only the cheap, pure preconditions.
+    /// Stage entry points perform the file-existence and format-specific I/O
+    /// checks; this method validates the cheap shared precondition.
     pub fn validate(&self) -> Result<(), String> {
         let ref_str = self.ref_genome.to_string_lossy();
         if !ref_str.ends_with(".fasta") {

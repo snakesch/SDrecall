@@ -40,42 +40,36 @@ mamba env create -f ./SDrecall.yml --channel-priority flexible
 mamba activate SDrecall
 ```
 
-#### Step 3: Install the Rust read-extraction module
+#### Step 3: Build the Rust pipeline
 
-The Python pipeline uses a Rust module for fast read extraction. After
-activating the SDrecall environment, install it:
-
-```bash
-# Install the prebuilt wheel from PyPI (recommended)
-pip install rust-read-extraction
-```
-
-Alternatively, build from source (requires Rust toolchain already included in conda env):
+After activating the SDrecall environment, build the production Rust binary:
 
 ```bash
-# Build read extraction module
-maturin develop --manifest-path rust_modules/read_extraction/Cargo.toml
+CXX=/usr/bin/c++ cargo build \
+  --release \
+  --manifest-path rust_modules/Cargo.toml \
+  -p sdrecall
 ```
 
-> Graph-based phasing — previously the separate `build_phasing_graph` PyO3
-> module — has been folded into the in-process Rust workspace (the `phasing`
-> crate); see the [Rust workspace](#rust-workspace-in-progress-full-rust-migration)
-> section below.
+The read-extraction, phasing, and haplotype-inspection stages are linked as
+ordinary Rust libraries. The obsolete PyO3/Maturin extension layer was removed
+on 2026-07-17.
 
 #### Step 4: Verify installation (optional)
 
 ```bash
-# Test that SDrecall runs
-./SDrecall --help
+# Test that the Rust pipeline runs
+rust_modules/target/release/sdrecall --help
 
 # Optional: Add to PATH for convenience
-export PATH="$(pwd):$PATH"
+export PATH="$(pwd)/rust_modules/target/release:$PATH"
+sdrecall --help
 ```
 
 #### Notes
 
-- **rust-read-extraction**: Fast BAM to FASTQ conversion with region filtering (optional, falls back to shell commands if not installed)
-- Graph-based phasing has moved into the in-process Rust workspace (the `phasing` crate); it is no longer a separately installed PyO3 wheel.
+- Read extraction, graph phasing, and haplotype inspection run in-process in the Rust binary; no Python extension wheel is required.
+- `minimap2`, `samtools`, and `bcftools` remain supported external tools for alignment, BAM operations, and variant calling.
 - The BILC stage now weights paralogous sequence variants (PSVs) more heavily when scoring haplotypes, which significantly improves misalignment filtering.
 
 ### Using docker/singularity
@@ -122,17 +116,17 @@ The main outputs include:
 ### Advanced Features
 
 - **Mapping quality filtering**: Adjust thresholds with `--mq_cutoff` (default: 41)
-- **Depth filtering**: Control with `--high_quality_depth` (default: 10, used for pickup multialigned regions, specifies maximal depth of high MAPQ reads to be considered as insufficient coverage for downstream variant calling) and `--minimum_depth` (default: 3, used for pick up the region suffering multialignments, this specifies the minimal required depth regardless of MAPQs)
-- **Confidence levels**: Set statistical confidence with `--conf_level` (default: 0.999, used for common variant estimation)
+- **Depth filtering**: Control with `--high_quality_depth` (default: 10, used for pickup multialigned regions, specifies maximal depth of high MAPQ reads to be considered as insufficient coverage for downstream variant calling) and `--minimum_depth` (default: 5, used for pick up the region suffering multialignments, this specifies the minimal required depth regardless of MAPQs)
+- **Confidence levels**: Set statistical confidence with `--cohort_conf_level` (default: 0.999, used for common variant estimation)
 - **Variant filtering**: Filter with `--inhouse_common_cutoff` (default: 0.01) when using cohort data
-- **Performance tuning**: Adjust `--threads` for overall parallelism and `--numba_threads` for computational acceleration
+- **Performance tuning**: Adjust `--threads` for overall parallelism and `--island_threads` for the inner per-island budget
 
 ### Complete Pipeline
 ### With Supplementary VCF and Cohort Annotation (Recommended way to run SDrecall)
 
 ```bash
 # Run with conventional caller integration and cohort annotation
-SDrecall run \
+sdrecall run \
   -i input.bam \
   -r /path/to/reference.fa \
   -m /path/to/sd_map.bed \
@@ -152,7 +146,7 @@ SDrecall run \
 
 ```bash
 # Run the complete SDrecall pipeline
-SDrecall run \
+sdrecall run \
   -i input.bam \
   -r /path/to/reference.fa \
   -m /path/to/sd_map.bed \
@@ -160,14 +154,14 @@ SDrecall run \
   -b /path/to/target.bed \
   -t 16 \
   -s <sample_id> \
-  --target_tag <label_of_target_region> \
+  --target_tag <label_of_target_region>
 ```
 
 ### Preparation Only
 
 ```bash
 # Run only the preparation phase (identifies SD regions, creates masked references)
-SDrecall prepare \
+sdrecall prepare \
   -i input.bam \
   -r /path/to/reference.fa \
   -m /path/to/sd_map.bed \
@@ -177,14 +171,14 @@ SDrecall prepare \
   -s <sample_id> \
   --target_tag <label_of_target_region> \
   --high_quality_depth 10 \
-  --minimum_depth 3
+  --minimum_depth 5
 ```
 
 ### Realignment and Recall Only
 
 ```bash
 # Run only realignment and recall (requires preparation output)
-SDrecall realign \
+sdrecall realign \
   -i input.bam \
   -r /path/to/reference.fa \
   -m /path/to/sd_map.bed \
@@ -193,10 +187,10 @@ SDrecall realign \
   -s <sample_id> \
   -t 16 \
   --target_tag <label_of_target_region> \
-  --numba_threads 4
+  --island_threads 2
 ```
 
-### Common Arguments Use SDrecall --help and SDrecall run/prepare/realign --help to see the full argument list
+### Common Arguments Use `sdrecall --help` and `sdrecall run/prepare/realign --help` to see the full argument list
 
 ```
 -i, --input_bam        Input BAM file path (must be indexed)
@@ -228,10 +222,12 @@ This example is targeting Challenging Medical Relevant Genes from Genome In A Bo
 ## Code development and feature requests
 SDrecall is now ready for production. We welcome all kinds of suggestions and collaborations.
 
-### Rust workspace (in-progress full-Rust migration)
-The performance-critical stages — and, increasingly, the whole pipeline — are
-being ported to a self-contained Rust binary (`sdrecall`) organized as a Cargo
-workspace of `lib + bin` crates under [`rust_modules/`](rust_modules/). For the
+### Rust workspace
+The production implementation is a self-contained Rust orchestrator
+(`sdrecall`) organized as a Cargo workspace of stage libraries and binaries
+under [`rust_modules/`](rust_modules/). End-to-end runs have completed on
+t2t/chm13, hg19, and hg38; the remaining migration work is formal HG006
+cross-validation, NM-cutoff wiring, and measured performance cleanup. For the
 workspace architecture, the in-process orchestration model, and a copy-pasteable
 command + input/output contract for **every module**, see
 [`rust_modules/README.md`](rust_modules/README.md). Migration status and
@@ -240,4 +236,3 @@ per-task validation evidence live in
 
 ## Contact and correspondence
 Xingtian Yang (yangyxt@hku.hk), Louis She (snakesch@connect.hku.hk)
-

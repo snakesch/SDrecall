@@ -8,9 +8,10 @@
 //!
 //! Code-complete: the graph core (the deliverable), the interval logic, the
 //! route-walk traversal + minimap2 FFI, the masked-genome + intrinsic I/O, and the
-//! end-to-end `driver`. Validated on HG002 (4 RG groupings matching Python, all 4
-//! masked FASTAs md5-identical, paralog-pair set 96% concordant). Per-module status
-//! is documented at the top of each module.
+//! end-to-end `driver`. Focused HG002 validation reached 679/690 (98.4%)
+//! paralog-pair parity with the residuals root-caused and accepted; later
+//! t2t/hg19/hg38 production runs provide the end-to-end contract. Per-module
+//! status is documented at the top of each module.
 //!
 //! ## Units (one versatile unit per job)
 //!
@@ -19,11 +20,11 @@
 //!   (predecessor-recording weighted Dijkstra) and `greedy_vertex_coloring`
 //!   (gt.sequential_vertex_coloring index-order parity). UNIT-TESTED.
 //! - [`graph_build`] — `NodeKey`/`EdgeAttr`/`SdGraph` + `build_multiplex_graph`
-//!   (per-chr PO via Lapper + SD overlay + dedup). UNIT-TESTED.
+//!   (per-chr PO via incremental overlap sweep + SD overlay + dedup). UNIT-TESTED.
 //! - [`sd_pairs`] — `Pair` + the ONE `umbrella_to_remove` sweep (raw & granular).
 //!   UNIT-TESTED.
-//! - [`multialign`] — the ONE per-base depth sweep kernel + 4-way AND filter.
-//!   UNIT-TESTED (sweep + filter); BAM read STUBBED.
+//! - [`multialign`] — indexed BAM coverage passes, the shared per-base depth
+//!   sweep kernel, and the 4-way AND filter. UNIT-TESTED.
 //! - [`homoseq`] — `HomoseqRegion` route-carrying coordinate object +
 //!   `qnode_relative_region` back-projection. UNIT-TESTED.
 //! - [`grouping`] — `optimal_node_grouping` fast path (color → RG clusters).

@@ -102,7 +102,11 @@ fn main() {
     let n_ilp_exact = results.iter().filter(|r| r.ilp_match).count();
     let n_alt_optima = results
         .iter()
-        .filter(|r| !r.ilp_match && r.rust_n_drop == r.python_n_drop)
+        .filter(|r| {
+            !r.ilp_match
+                && r.rust_n_drop == r.python_n_drop
+                && (r.rust_obj - r.python_obj).abs() < 1e-6
+        })
         .count();
     let n_diff_count = results
         .iter()
@@ -110,15 +114,10 @@ fn main() {
         .count();
     let n_full_match = results.iter().filter(|r| r.full_match).count();
     let n_full_mismatch = n_total - n_full_match;
-    let n_same_obj = results
-        .iter()
-        .filter(|r| !r.ilp_match && (r.rust_obj - r.python_obj).abs() < 1e-6)
-        .count();
-
     println!("\n=== BILC Solver Cross-Validation Report ===");
     println!("Files tested: {n_total}");
     println!("ILP-exact match: {n_ilp_exact} / {n_total}");
-    println!("ILP alternative optima (same #drops, same obj): {n_same_obj} / {n_total}");
+    println!("ILP alternative optima (same #drops, same obj): {n_alt_optima} / {n_total}");
     println!("ILP different #drops: {n_diff_count} / {n_total}");
     println!("Full (ILP+augmentation) match: {n_full_match} / {n_total}");
     println!("Full mismatches: {n_full_mismatch}");
@@ -183,7 +182,7 @@ fn main() {
             let obj_match = (r.rust_obj - r.python_obj).abs() < 1e-6;
             writeln!(
                 f,
-                "{}\t{}\t{}\t{}\t{}\t{}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{}\t{}\t{}",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{:.6}\t{:.6}\t{}\t{}\t{}\t{:?}\t{:?}\t{}",
                 r.file_id,
                 r.n_haps,
                 r.n_regions,
@@ -195,8 +194,8 @@ fn main() {
                 r.ilp_match,
                 obj_match,
                 r.full_match,
-                format!("{:?}", r.rust_only),
-                format!("{:?}", r.python_only),
+                r.rust_only,
+                r.python_only,
                 r.n_post_ilp_adds,
             )
             .unwrap();
@@ -325,7 +324,7 @@ fn validate_one(tsv_path: &str) -> Result<ValidationResult, String> {
         .sum();
 
     // Run Rust solver
-    let (rust_select, rust_drop, _status, rust_obj) =
+    let (_rust_select, rust_drop, _status, rust_obj) =
         lp_solve_remained_haplotypes_with_obj(&records);
 
     let ilp_match = rust_drop == python_ilp_drop;

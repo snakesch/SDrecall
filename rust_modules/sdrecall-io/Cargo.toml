@@ -2,14 +2,13 @@
 name = "sdrecall-io"
 version = "0.1.0"
 edition = "2021"
-description = "In-process file I/O for the SDrecall Rust pipeline (BAM/BED/VCF/GraphML/TSV) — no shelling to samtools/bcftools/bedtools (SDrecall T0)"
+description = "BAM/BED/VCF/GraphML/TSV I/O for the SDrecall Rust pipeline"
 license = "MIT"
 authors = ["Xingtian Yang <yangyxt@hku.hk>"]
 repository = "https://github.com/snakesch/SDrecall"
 
-# Pure-Rust I/O foundation library. Default crate-type (rlib) so every stage
-# crate, bin, example and test links it. NO cdylib, NO PyO3 — this crate never
-# crosses the FFI seam; the in-process orchestrator calls it directly.
+# I/O foundation library using the default rlib crate type so every stage,
+# binary, example, and test links it directly.
 [lib]
 name = "sdrecall_io"
 path = "src/lib.rs"
@@ -40,9 +39,6 @@ csv = "1.3"
 # the differential test tolerates Monte-Carlo variance (DESIGN §6).
 rand = "0.8"
 tempfile = "3.8"
-
-[dev-dependencies]
-env_logger = "0.11"
 
 [lints]
 workspace = true

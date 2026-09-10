@@ -284,13 +284,13 @@ fn graph_edges(graph: &structs::PhasingGraphResult) -> Vec<(i32, i32)> {
         .collect()
 }
 
-fn graph_read_evidence(
-    graph: &structs::PhasingGraphResult,
-) -> (
+type GraphReadEvidence = (
     Vec<Vec<String>>,
     HashMap<String, Vec<i16>>,
     HashMap<String, Vec<f32>>,
-) {
+);
+
+fn graph_read_evidence(graph: &structs::PhasingGraphResult) -> GraphReadEvidence {
     let node_read_ids: Vec<Vec<String>> = graph
         .node_read_ids
         .iter()
